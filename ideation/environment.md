@@ -55,6 +55,10 @@ the process inside the container. Leftover processes are killed before grading
 - A timed-out `exec` keeps running inside the container until the pre-grade `kill -9 -1`.
 - The first `docker pull` can hang silently in sandboxed shells → pre-pull images once per run.
 - `download()` copies symlinks as symlinks, so a link the agent planted can point at a host path when read later.
-- DockerError (→ infra_error) only when the container is verifiably gone; anything the agent can cause stays a normal command failure (prevents gaming failures into excluded trials). Remaining hole: if the agent itself kills the container, that still reads as infra.
+- DockerError (→ infra_error) only when the container is verifiably gone; anything the agent can cause stays a normal command failure (prevents gaming failures into excluded trials). Remaining hole: if the agent itself kills the container, that still reads as infra (planned fix in Phase 3, below).
+
+**Planned for Phase 3** (decided 2026-10-29, `agents-and-runner.md`):
+- Drop `--rm` from `docker run` so a container that dies during the agent's turn can be `docker inspect`ed: vanished / Docker unreachable / `OOMKilled` → `infra_error`; exited otherwise → `graded`, failed. `stop()` still removes the container; expired containers are found by label for a future `harness cleanup`.
+- `lifetime_s` = trial timeout + margin instead of the fixed 7200 s default.
 
 Dropped: `LocalEnvironment` (2026-10-29) — Docker starts in ~1s, and a fake local world behaves differently from real containers (e.g. has python where alpine doesn't, needs `/workspace` path mapping) and is extra code to explain.

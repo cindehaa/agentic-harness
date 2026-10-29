@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 3 design: agent adapter + trial runner (`BashOperations` + `PythonTasks` adapters and oracle tests green).
-**Next:** Phase 3: build the trial runner.
+**Now:** Phase 4 schema design discussion (Phase 3 decisions recorded in `agents-and-runner.md`).
+**Next:** Phase 3 build: agent registry, `MiniSweAgent` adapter, trial runner, `harness run` (Claude drafts, Cindy reviews line by line).
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
@@ -18,7 +18,7 @@ flowchart TB
     read["Read benchmark scripts + DockerEnvironment"]
   end
 
-  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md, security.md, fidelity-vs-integrity.md)"]
+  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md, security.md, fidelity-vs-integrity.md, agents-and-runner.md)"]
     direction LR
     d_own["Harness owns containers; agents get Environment handle"]
     d_db["Only harness writes DB"]
@@ -55,15 +55,25 @@ flowchart TB
     tasks["harness tasks"]
   end
 
-  subgraph P3["Phase 3: agent + trial runner"]
+  subgraph P3["Phase 3: agent + trial runner (agents-and-runner.md)"]
     direction TB
+    subgraph P3D["Decided 2026-10-29"]
+      direction LR
+      d3_reg["Agent registry AGENTS; --agent = name or path (basename); --model overrides .env; record agent, model, submodule SHA per run"]
+      d3_host["mini runs on host via Python API; env wrapper forwards execute to env.exec; API key never in container"]
+      d3_multi["Multi-turn built now: 2nd send() continues mini's history"]
+      d3_reply["Reply = agent's own submission only; mini exit status kept in records"]
+      d3_lim["Limits: deadline in command wrapper + mini cost/step + model-call timeout; 10 min, $1, 50 steps, 60 s/command; lifetime = timeout + margin"]
+      d3_dead["Container death in agent turn: docker inspect decides infra_error vs graded-failed; drop --rm"]
+      d3_files["Until DB: runs/run_id/trial_id/attempt-n/ (outcome, transcript, trajectory)"]
+    end
     agentsess["AgentSession stub (send)"]
-    agentabc["Agent adapters (details TBD)"]
-    q_agent["OPEN: --agent path → adapter + config, record agent/model/submodule SHAs"]
-    mini["MiniSweAgent adapter"]
+    agentabc["Agent registry + adapters"]
+    mini["MiniSweAgent adapter (host, env wrapper, multi-turn)"]
+    norm["DockerEnvironment: drop --rm, lifetime from trial limit"]
     subgraph TR["Trial runner"]
       direction LR
-      startenv["start env"] --> agentph["agent"] --> grade["grade"] --> record["record"]
+      startenv["start env"] --> agentph["agent"] --> died["container died?"] --> killleft["kill leftovers"] --> grade["grade"] --> record["write outcome / transcript / trace"] --> stopenv["stop env (always)"]
     end
     fb["Fallbacks: retry start env, timeout→grade, regrade"]
     runsync["harness run (sync)"]
@@ -167,7 +177,16 @@ flowchart TB
   d_grerr -.-> results
   d_integ -.-> traj
   d_integ -.-> files
-  q_agent -.-> runsync
+  d3_reg -.-> agentabc
+  d3_reg -.-> runsync
+  d3_host -.-> mini
+  d3_multi -.-> mini
+  d3_reply -.-> mini
+  d3_lim -.-> TR
+  d3_dead -.-> died
+  d3_dead -.-> norm
+  d3_files -.-> record
+  dockenv --> norm
   q_status -.-> status
   q_setup -.-> enqueue
   d_logs -.-> files
@@ -189,9 +208,10 @@ flowchart TB
 
   class repo,base,notes,cmd,ex,read done
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr,d_integ done
+  class d3_reg,d3_host,d3_multi,d3_reply,d3_lim,d3_dead,d3_files done
   class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
-  class q_agent,q_status,q_setup open
+  class q_status,q_setup open
   class reg,bashad,pyad,oracle done
-  class agentabc,startenv,agentph,grade,record next
-  class tasks,hcleanup,mini,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync next
+  class tasks,hcleanup,fb,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

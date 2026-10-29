@@ -43,18 +43,25 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 
 ## Phase 3 — Agent adapter + trial runner (end of Part 1 core)
 
+Decided 2026-10-29; details and alternatives in `agents-and-runner.md`. Ownership changed: Claude drafts everything, you review line by line.
+
 | Piece | Owner |
 |---|---|
-| `AgentSession.send(message) -> Message` + agent adapters (details TBD) | You |
-| `MiniSweAgent` adapter (drives the container from the host) | Claude, you review closely |
-| Trial runner: phases, per-phase timeout, artifacts dir per attempt | You |
+| Agent registry `AGENTS = {"mini-swe-agent": MiniSweAgent}`; `--agent` = name or path (basename used); `--model` overrides `MSWEA_MODEL_NAME` from `.env` | Claude |
+| `MiniSweAgent` adapter: mini's `DefaultAgent` + `get_model` on the host; env wrapper forwards `execute` to `env.exec`, raises `Submitted`, reports the container's OS; API key never enters the container | Claude, you review closely |
+| Multi-turn: a second `send()` appends the user message to mini's history and continues | Claude |
+| Reply = `Message("agent", (Text(submission),))`; mini's exit status (`Submitted` / `LimitsExceeded` / `TimeLimit`) kept in the trial's records | Claude |
+| Limits: deadline checked in the command wrapper (raises `TimeLimit`), mini's cost/step limits, model-call timeout. Defaults: 10 min/trial, $1, 50 steps, 60 s/command; container `lifetime_s` = trial timeout + margin | Claude |
+| Container death during the agent turn, decided from `docker inspect` (rule 6 in `agents-and-runner.md`); drop `--rm` from `docker run` (`stop()` still removes) | Claude |
+| Trial runner: start container → `run_agent` (wrapped session) → container died? → kill leftovers → `grade` (`GraderError` → `grader_error`) → write outcome/transcript/trace → stop container (always) | Claude, you review closely |
+| Per-attempt files until the DB: `runs/<run_id>/<trial_id>/attempt-<n>/` with `outcome.json`, `transcript.json`, `trajectory.json`; record agent name, model, agent submodule SHA per run | Claude |
 | `harness run` synchronous — runs trials in-process, prints results | Claude |
 
 **Done when:** `harness run --agent agents/mini-swe-agent --benchmark bash-operations --task_ids bash-001` passes in Docker.
 
-- **Note:** link the container's `lifetime_s` (its self-destruct `sleep`) to the trial's limits; today it is a fixed 7200 s.
-- **OPEN:** how `--agent agents/mini-swe-agent` (a path) resolves to an agent adapter + agent config (model, `forward_env`); and recording the agent, model and submodule SHAs per run for reproducibility.
-**Explain-back:** Walk through one trial line by line. What happens on agent timeout? Where does the trajectory end up?
+- **DECIDED (2026-10-29):** container `lifetime_s` is linked to the trial limit (timeout + margin), no longer a fixed 7200 s.
+- **DECIDED (2026-10-29):** `--agent agents/mini-swe-agent` resolves via the `AGENTS` registry by basename; model from `--model` or `.env`; agent name, model and submodule SHA recorded per run.
+**Explain-back:** Walk through one trial line by line. What happens on agent timeout? Where does the trajectory end up? Why does mini run on the host? When is a dead container the agent's fault?
 
 ## Phase 4 — Persistence + status/results
 
