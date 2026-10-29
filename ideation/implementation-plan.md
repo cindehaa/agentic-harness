@@ -69,7 +69,7 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 **Done when:** a completed run can be inspected entirely from the DB + files after the process exits.
 
 - **OPEN:** `harness status --run_id X` shows one run, and bare `harness status` lists active runs (the brief says "viewing active runs").
-- **OPEN (from the outcome model):** whether `grader_error` counts as 0 or is excluded from accuracy. Leaning: exclude grader_error from accuracy and report it prominently — a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare.
+- **DECIDED (2026-10-29):** `grader_error` is excluded from accuracy and reported prominently (count + list), because a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare. Accuracy = mean over `graded` trials only; `grader_error`, `infra_error`, `unsupported` each reported separately.
 - **DECIDED (2026-10-29):** `error` is renamed `infra_error`; statuses are `graded`, `grader_error`, `infra_error`, `unsupported`.
 **Explain-back:** Why an attempts table? What's in the DB vs on disk, and why? How is accuracy computed when some trials errored?
 

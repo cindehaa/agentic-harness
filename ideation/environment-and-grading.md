@@ -84,9 +84,9 @@ Full model: `task-input.md` → "Outcome model". Statuses are exactly:
 | What happened | Status | Notes |
 |---|---|---|
 | Container died, image pull failed (harness/infra failure) | `infra_error` | Excluded from accuracy; retried per retry policy. Renamed from `error` (DECIDED 2026-10-29). |
-| Agent ran, then the grader crashed or its output was unparseable | `grader_error` | Usually the agent broke the world. Grader stderr saved as an artifact; flagged in results so real grader bugs stay visible. **OPEN:** counts as 0 (proposal) or excluded. Leaning: exclude grader_error from accuracy and report it prominently — a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare. |
+| Agent ran, then the grader crashed or its output was unparseable | `grader_error` | Excluded from accuracy; reported prominently in results (count + list), grader stderr saved as an artifact. **DECIDED (2026-10-29):** excluded, not 0, because a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare. |
 | Agent can't handle the task's content | `unsupported` | Excluded from accuracy; reported separately |
-| Grader ran and returned a `Score` | `graded` | Normal. The score is converted to a number for accuracy (Inspect-style default, overridable per benchmark) |
+| Grader ran and returned a `Score` | `graded` | Normal. The score is converted to a number for accuracy (Inspect-style default, overridable per benchmark). Accuracy = mean over `graded` trials only |
 
 This supersedes the earlier `passed` / `failed` (+ reason `grader_error`) /
 `error` model.

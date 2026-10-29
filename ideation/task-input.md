@@ -223,16 +223,17 @@ A trial ends with one `Outcome`. Its status is exactly one of:
 | Status | When | Accuracy | Retried |
 |---|---|---|---|
 | `graded` | Normal: the grader ran and returned a `Score` | counts (its score) | no |
-| `grader_error` | The agent ran, then the grader crashed or its output was unparseable (usually the agent broke the world) | **OPEN** (see below) | no |
+| `grader_error` | The agent ran, then the grader crashed or its output was unparseable | excluded; reported prominently (count + list) | no |
 | `infra_error` | Harness/infra failure (container died, image pull failed) | excluded | yes, per retry policy |
 | `unsupported` | The agent can't handle the task's content (e.g. a `File` it can't read, multi-turn without resume) | excluded; reported separately | no |
 
 - `grader_error` trials are **flagged in the results** (grader stderr saved as
   an artifact), so humans can spot real grader bugs among them.
 - A non-JSON-serializable `Score.value` also gives `grader_error`.
-- **OPEN (pending decision): how `grader_error` counts.** Proposal: as 0
-  (it's usually the agent's fault); alternative: excluded, like `infra_error`.
-  Leaning: exclude grader_error from accuracy and report it prominently — a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare.
+- **DECIDED (2026-10-29): `grader_error` is excluded from accuracy** (like
+  `infra_error`) and reported prominently in results (count + list), because
+  a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare. Rejected: counting it as 0
+  (assumed the agent usually broke the world).
 - **DECIDED (2026-10-29): `error` is renamed `infra_error`** for clarity (it is
   never the agent's fault). The statuses are `graded`, `grader_error`,
   `infra_error`, `unsupported`.
@@ -240,9 +241,9 @@ A trial ends with one `Outcome`. Its status is exactly one of:
 **Score → number for aggregation.** Inspect-style default conversion:
 `True`/`"C"` → 1.0, `"P"` → 0.5, `False`/`"I"`/`"N"` → 0.0, int/float as-is.
 Overridable per benchmark (e.g. a `Benchmark.score_to_float(score)` method,
-added in Phase 4). **Accuracy** = mean of that number over `graded` +
-`grader_error` trials (`grader_error` as 0.0), if the proposal above holds;
-over `graded` trials only if `grader_error` ends up excluded.
+added in Phase 4). **Accuracy** = mean of that number over `graded` trials
+only; `grader_error`, `infra_error` and `unsupported` are excluded and each
+reported separately.
 
 This replaces the earlier `passed` / `failed` / `error` model (grader crash →
 `failed` with reason `grader_error`; before that, grader crash → `error`).

@@ -27,7 +27,7 @@ flowchart TB
     d_pre["Pre-grade: kill agent procs, late copy, restore tests, install deps"]
     d_out["Outcome: graded / grader_error / infra_error / unsupported, infra_error = infra, retried (renamed from error 2026-10-29)"]
     d_score["Score → number: Inspect-style default, per-benchmark override"]
-    q_out["OPEN: grader_error counts as 0 or excluded? (leaning: exclude, report prominently)"]
+    d_grerr["grader_error excluded from accuracy, reported prominently (count + list); accuracy = mean over graded only (2026-10-29)"]
     d_logs["Exec output streamed to host artifacts"]
     d_deps["Grader deps installed at grade time"]
     d_turns["Turn model (benchmark-driven turns)"]
@@ -163,7 +163,7 @@ flowchart TB
   d_out -.-> fb
   d_out -.-> retry
   d_score -.-> results
-  q_out -.-> results
+  d_grerr -.-> results
   q_agent -.-> runsync
   q_status -.-> status
   q_setup -.-> enqueue
@@ -185,9 +185,9 @@ flowchart TB
   classDef open fill:#ececec,stroke:#999,color:#555,stroke-dasharray:4 3
 
   class repo,base,notes,cmd,ex,read done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr done
   class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
-  class q_out,q_agent,q_status,q_setup open
+  class q_agent,q_status,q_setup open
   class reg wip
   class bashad wip
   class pyad,oracle next
