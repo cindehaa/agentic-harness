@@ -4,10 +4,12 @@ Two small starter benchmarks ship with this repo. The others are popular upstrea
 benchmarks vendored **unmodified** (git submodules pinned to the upstream default-branch commit
 as of 2026-10-29) so they are on hand to run later. No harness adapters exist for them yet.
 
-After cloning this repo, fetch the submodules with:
+These submodules are **opt-in** (`update = none` in `.gitmodules`), so `make init` only fetches
+`agents/mini-swe-agent`. Fetch the extra benchmarks on demand:
 
 ```bash
-git submodule update --init --recursive
+make init-extra-benchmarks                                # all four (~1.2GB checked out, mostly tau2-bench)
+make init-extra-benchmarks BENCH=benchmarks/tau2-bench   # just one
 ```
 
 | Benchmark | Path | Upstream | Pinned commit | Input shape | How to get data / run upstream | Notes |

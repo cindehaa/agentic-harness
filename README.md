@@ -12,6 +12,8 @@ make install    # Install dependencies
 source .venv/bin/activate
 ```
 
+Optional: `make init-extra-benchmarks` fetches the extra upstream benchmarks (see [benchmarks/README.md](benchmarks/README.md)).
+
 ### Configuring mini-swe-agent
 
 Run the setup wizard to configure your default model and API key:
