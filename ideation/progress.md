@@ -1,10 +1,10 @@
 # Progress
 
-**Last updated:** 2026-10-28
+**Last updated:** 2026-10-29
 **Now:** Phase 0: verifying both examples run, reading benchmark scripts and mini-swe-agent's DockerEnvironment.
 **Next:** Phase 1: core types (`Task`, `GradeResult`), `Benchmark` ABC + registry, `Environment` ABC + `LocalEnvironment`.
 
-Legend: 🟩 done · 🟨 in progress · 🟥 next up · ⬜ not started
+Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
 ```mermaid
 flowchart TB
@@ -16,6 +16,17 @@ flowchart TB
     cmd["CLAUDE.md working rules"]
     ex["Run bash + python examples"]
     read["Read benchmark scripts + DockerEnvironment"]
+  end
+
+  subgraph DEC["Decided (see environment-and-grading.md)"]
+    direction LR
+    d_own["Harness owns containers; agents get Environment handle"]
+    d_db["Only harness writes DB"]
+    d_sleep["Container keep-alive: sleep timeout+margin"]
+    d_same["Grade in same trial container"]
+    d_pre["Pre-grade: kill agent procs, late copy, restore tests, install deps"]
+    d_out["Grader crash → failed (grader_error); container death → error"]
+    d_logs["Exec output streamed to host artifacts"]
   end
 
   subgraph P1["Phase 1: core types + benchmark adapters"]
@@ -34,7 +45,7 @@ flowchart TB
   subgraph P2["Phase 2: Docker environment"]
     direction TB
     dockenv["DockerEnvironment"]
-    mount["Workspace mount + grade location"]
+    mount["Workspace mount"]
     cleanup["Guaranteed cleanup"]
   end
 
@@ -129,6 +140,14 @@ flowchart TB
   oracle --> nullor
   validate --> skill
   P7 --> P8
+  d_own -.-> envabc
+  d_own -.-> agentabc
+  d_sleep -.-> dockenv
+  d_db -.-> record
+  d_same -.-> grade
+  d_pre -.-> grade
+  d_out -.-> fb
+  d_logs -.-> files
 
   classDef done fill:#d3f0d3,stroke:#1e5e1e,color:#1e5e1e
   classDef wip fill:#fff1b8,stroke:#6b5300,color:#6b5300
@@ -136,6 +155,7 @@ flowchart TB
   classDef todo fill:#ececec,stroke:#999,color:#555
 
   class repo,base,notes,cmd done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs done
   class ex,read wip
   class types,benchabc,reg,envabc,localenv next
   class bashad,pyad,oracle,tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,readme,diagram,demo todo

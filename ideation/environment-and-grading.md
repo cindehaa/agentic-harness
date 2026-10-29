@@ -1,0 +1,116 @@
+# Decision: the harness owns containers; grading runs in the trial container
+
+## 1. The harness owns every container
+
+**Decision:** the harness alone starts, `exec`s into, and stops containers.
+Agents never start containers. They receive an `Environment` handle
+(`exec`, copy in/out) and send their commands through it. Only the harness
+writes to the DB. Neither the agent nor anything inside the container does.
+
+- Each trial container starts with `sleep <trial timeout + margin>` as its
+  main process. A container lives only while its main process runs, so this
+  keeps it alive for `docker exec`. It also acts as a self-destruct timer:
+  if the harness crashes without cleaning up, the container still exits
+  shortly after the trial would have timed out.
+- This keeps us from overfitting to mini-swe-agent. Its `DockerEnvironment`
+  (in the submodule) starts its own container. Our `MiniSweAgent` adapter
+  instead hands it an object that forwards commands to our `env.exec()`, and
+  Claude Code gets the same handle.
+
+**Why:** one place controls the container lifecycle, timeouts, and cleanup.
+Results can't be forged from inside the sandbox: the harness runs the
+grader, reads its output, and writes the row.
+
+## 2. Grading runs in the same trial container, after the agent
+
+**Decision:** setup → agent → grade all run in one trial container. There is
+no per-adapter choice of where grading runs.
+
+### Options considered
+
+All three are one trial job. The question was only how many containers that
+job uses.
+
+| | 1. Same container ✅ | 2. Grade on host | 3. Fresh grader container |
+|---|---|---|---|
+| Works on images without the grader's tools (alpine has no python) | ✅ with grade-time install (below) | ✅ | ✅ |
+| Agent can tamper with grader | mitigated by copying grader files in late | no | no |
+| Runs agent-written code on the host | no | **yes** (python-tasks' pytest imports `solution.py`) | no |
+| Can check live state ("is nginx running?") | **yes** | no | no |
+| Same rule for every benchmark | yes | yes | only for file-based grading |
+| Extra cost | none | none | ~1 s container start |
+
+### Prior art
+
+| Harness | Where grading runs |
+|---|---|
+| Harbor / Terminal-Bench | Same container; tests are copied in after the agent finishes |
+| METR (Vivaria) | Same environment (`TaskFamily.score()`) |
+| Inspect AI | Same sandbox (solver, then scorer) |
+| SWE-bench | Fresh container. The exception: the agent's output is a small patch, so it travels easily |
+
+### Why same container won
+
+- It is the most general option. It is the only one that supports benchmarks
+  that check live state, so it fits "run any agentic benchmark".
+- Adapters don't choose where grading runs, so adding a benchmark has one
+  less decision.
+- It matches what most agentic harnesses do.
+
+A separate grader container stays available as future hardening and as an
+onsite talking point.
+
+## 3. Pre-grade step (in order)
+
+1. **Kill leftover agent processes:** `kill -9 -1` inside the container. This
+   kills everything except PID 1 (the `sleep`), so nothing the agent left
+   running can interfere with grading.
+2. **Copy the benchmark's grader files in late.** They enter the container
+   only now, so the agent never saw them and couldn't edit them.
+3. **Restore protected test files** from `dataset.json`. python-tasks'
+   `grade.py` runs whatever `test_solution.py` is in the workspace, and the
+   agent could have replaced it, for example with `assert True`.
+4. **Install grader dependencies**, e.g. `apk add python3` on alpine.
+5. **Run the grader.**
+
+Steps 2–4 are implemented by each adapter's `grade()`. The harness provides
+the ordering and the late-copy mechanism.
+
+## 4. Outcome rules
+
+| What happened | Status | Notes |
+|---|---|---|
+| Container died / infra failure | `error` | Infra's fault; retried per retry policy |
+| Grader ran but crashed or produced unparseable output | `failed`, reason `grader_error` | stderr saved as an artifact; flagged separately in the results summary |
+| Grader ran and reported fail | `failed` | Normal failure |
+| Grader ran and reported pass | `passed` | |
+
+This **supersedes** the earlier fallback row "grader crash → error". If the
+agent broke the environment badly enough that the grader can't run, that
+counts against the agent. The `grader_error` flag keeps these cases visible,
+so a genuinely buggy grader can't hide inside the failure count.
+
+## 5. Logs never live only in the container
+
+Every `exec`'s output streams through the harness and is written to the
+attempt's artifact directory on the host
+(`runs/<run_id>/<trial_id>/attempt-<n>/`) as it happens. If the container
+dies mid-trial, everything up to that point is already saved.
+
+## 6. Out of scope
+
+- **Hash-verifying protected files** (checking that tests and grader weren't
+  modified). Late copying plus restoring tests covers the realistic risk.
+  Hash verification is a talking point.
+
+## ⚠️ Open question
+
+**When to install grader dependencies:**
+
+- **At grade time (recommended):** e.g. `apk add python3` in the pre-grade
+  step. This preserves the agent's environment exactly as the benchmark
+  specified (no python on alpine during the agent run). It costs a few
+  seconds per trial and needs network access at grade time.
+- **Bake into a derived image once per run:** build `alpine + python3` before
+  the trials start. This is faster per trial, but the agent sees the extra
+  dependencies, which changes the benchmark's environment.
