@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: `BashOperations` + `PythonTasks` adapters + oracle tests.
-**Next:** Phase 1: `harness tasks`.
+**Now:** Phase 1: `BashOperations` adapter.
+**Next:** Phase 1: `PythonTasks` adapter + oracle tests.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
@@ -18,7 +18,7 @@ flowchart TB
     read["Read benchmark scripts + DockerEnvironment"]
   end
 
-  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md)"]
+  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md, security.md)"]
     direction LR
     d_own["Harness owns containers; agents get Environment handle"]
     d_db["Only harness writes DB"]
@@ -29,14 +29,17 @@ flowchart TB
     d_logs["Exec output streamed to host artifacts"]
     d_deps["Grader deps installed at grade time"]
     d_turns["Turn model (benchmark-driven turns)"]
-    d_iface["Benchmark API locked: tasks / build_world / run_agent / grade"]
+    d_iface["Benchmark API locked: tasks / setup / run_agent / grade"]
+    d_bake["Setup baked into images (D)"]
+    d_metr["METR-style hidden grader assets"]
+    d_cred["Credentials: allowlist + redaction"]
     d_env["Environment API locked: start/stop/exec/write_file/read_file/upload/download"]
   end
 
   subgraph P1["Phase 1: core types + Docker environment + benchmark adapters"]
     direction TB
     types["types.py: Task / Content / Message / Transcript / Score"]
-    benchabc["Benchmark ABC"]
+    benchabc["Benchmark ABC (tasks/setup/run_agent/grade)"]
     reg["Benchmark registry"]
     envabc["Environment ABC"]
     dockenv["DockerEnvironment"]
@@ -156,6 +159,11 @@ flowchart TB
   d_deps -.-> grade
   d_turns -.-> TR
   d_iface -.-> benchabc
+  d_bake -.-> bashad
+  d_bake -.-> pyad
+  d_metr -.-> grade
+  d_cred -.-> agentabc
+  d_cred -.-> record
   d_env -.-> envabc
 
   classDef done fill:#d3f0d3,stroke:#1e5e1e,color:#1e5e1e
@@ -164,9 +172,10 @@ flowchart TB
   classDef todo fill:#ececec,stroke:#999,color:#555
 
   class repo,base,notes,cmd,ex,read done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred done
   class types,envabc,benchabc,agentsess,dockenv done
   class reg wip
-  class bashad,pyad,oracle next
+  class bashad wip
+  class pyad,oracle next
   class tasks,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

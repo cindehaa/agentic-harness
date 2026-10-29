@@ -19,9 +19,11 @@ class Benchmark(ABC, Generic[TaskT]):
     def tasks(self) -> list[TaskT]:
         """Every task in the benchmark."""
 
-    @abstractmethod
-    def build_world(self, task: TaskT, env: Environment) -> None:
-        """Prepare the started environment for this task (files, setup commands)."""
+    def setup(self, tasks: list[TaskT]) -> None:
+        """Optional, once per run before any trial: build images, download data, whatever the benchmark needs.
+
+        tasks() already names each task's image (e.g. "harness-bash-operations:bash-003"); setup() makes sure it exists.
+        """
 
     @abstractmethod
     def run_agent(self, task: TaskT, agent: AgentSession, env: Environment) -> None:

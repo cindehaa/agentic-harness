@@ -68,7 +68,8 @@ adapters** behind a blocking `send()`. Unlike AgentBeats or A2A, they are
 
 ### The loop, state by state
 
-1. **Build the world.** `setup()` prepares the container, files, DBs.
+1. **Start the world.** The runner starts the task's image; per-task world
+   setup (files, DBs) is already baked into it (see "World setup" below).
 2. **Opening.** The benchmark sends its first message(s).
 3. **Agent's turn.** The agent acts on the world as much as it likes, within
    limits. The harness logs every action.
@@ -139,7 +140,7 @@ screen, so these adapters need a parity check.
 ```python
 class Benchmark(ABC, Generic[TaskT]):
     def tasks(self) -> list[TaskT]: ...
-    def build_world(self, task: TaskT, env: Environment) -> None: ...
+    def setup(self, tasks: list[TaskT]) -> None: ...  # optional, once per run (build images, download data)
     def run_agent(self, task: TaskT, agent: AgentSession, env: Environment) -> None: ...  # one or more turns
     def grade(self, task: TaskT, env: Environment, transcript: Transcript) -> Score: ...
 ```
@@ -170,6 +171,21 @@ until the simulated user stops.
   Later: browser, tools (MCP), and a simulated-user channel. A mismatch between
   what the benchmark needs and what the agent can use makes the trial
   `unsupported`.
+
+### World setup: baked into the image (D, 2026-10-29)
+
+Per-trial world setup lives in the task's image, so a trial only starts it.
+`Task.image` names it; the optional `setup(tasks)` builds missing images once
+per run (default no-op; most benchmarks already ship images). Example
+multi-stage Dockerfile: stage 1 `python:3.11-slim` runs the benchmark's own
+`setup.py` into `/out`; stage 2 `FROM alpine:latest` +
+`COPY --from=setup /out /workspace`, so the agent's world never gains python.
+**Adapters reuse the benchmark's own setup and grader scripts** (fidelity).
+
+Rejected: two hooks (`world_image` + `build_world`); `WorldSpec` (over-engineered —
+most benchmarks already provide an image); reimplementing setup in the
+adapter; setup on the host + upload; install python, run setup, uninstall;
+a setup sidecar container.
 
 ### Terminology
 
@@ -208,7 +224,8 @@ We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
 - **A separate `prepare_grading()`.** Folded into `grade()`.
 - **The names `run_episode` ("episode" is RL jargon), `interact` and `run`.** `run_agent` matches the
   trial phases and avoids clashing with Run.
-- **Earlier names:** `list_tasks` → `tasks`, `setup` → `build_world`,
+- **Earlier names:** `list_tasks` → `tasks`, per-trial `setup` → `build_world`
+  → removed (baked into images; `setup(tasks)` is now the once-per-run hook),
   `Part` → `Content`, `TrialOutcome` → `Outcome`.
 
 ## Rejected

@@ -13,7 +13,7 @@ benchmarks and agents only get a handle.
 | Caller | Methods |
 |---|---|
 | Trial runner | `start` / `stop` (via `with env:`) |
-| Benchmark (`build_world`, `grade`) | `write_file`, `read_file`, `upload`, `download`, `exec` |
+| Benchmark (`run_agent`, `grade`) | `write_file`, `read_file`, `upload`, `download`, `exec` |
 | Agent adapter | `exec` |
 
 ## Decisions

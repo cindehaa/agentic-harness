@@ -62,4 +62,4 @@ class Task:
 
     benchmark: str  # e.g. "bash-operations"; makes a Task self-describing in logs and the DB
     id: str  # e.g. "bash-001"
-    image: str  # Docker image for the world; the runner starts it before build_world()
+    image: str  # Docker image for the world (prebuilt by the benchmark, or built in Benchmark.setup())
