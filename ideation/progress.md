@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: `BashOperations` adapter.
-**Next:** Phase 1: `PythonTasks` adapter + oracle tests.
+**Now:** Phase 1: `PythonTasks` adapter + oracle tests (`BashOperations` adapter green).
+**Next:** Phase 3: trial runner.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
@@ -188,8 +188,8 @@ flowchart TB
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr done
   class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
   class q_agent,q_status,q_setup open
-  class reg wip
-  class bashad wip
-  class pyad,oracle next
-  class tasks,hcleanup,agentabc,mini,startenv,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class reg,bashad done
+  class pyad,oracle wip
+  class startenv,agentph,grade,record next
+  class tasks,hcleanup,agentabc,mini,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

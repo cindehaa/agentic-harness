@@ -12,6 +12,7 @@ from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, Exec
 START_TIMEOUT = 600.0  # seconds; generous because the first run may pull the image
 DOCKER_TIMEOUT = 120.0  # seconds; default for every other docker call, so a stuck daemon can't hang a worker
 CP_TIMEOUT = 600.0  # seconds; copies can be large
+BUILD_TIMEOUT = 1800.0  # seconds; builds may pull base images and run setup scripts
 MAX_OUTPUT = 1_000_000  # bytes kept per stream of one exec; the rest is read and thrown away
 LABEL = "agentic-harness=1"  # on every container we start, so leftovers are easy to find
 
@@ -126,6 +127,11 @@ class DockerEnvironment(Environment):
     def _alive(self) -> bool:
         result = _docker("inspect", "-f", "{{.State.Running}}", self._id(), check=False)
         return result.returncode == 0 and result.stdout.strip() == b"true"
+
+
+def build_image(dockerfile: str, context: Path, tag: str) -> None:
+    """Build `tag` from Dockerfile text (sent on stdin) with `context` as the build folder."""
+    _docker("build", "-t", tag, "-f", "-", str(context), input=dockerfile.encode(), timeout=BUILD_TIMEOUT)
 
 
 def _docker(

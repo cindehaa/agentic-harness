@@ -10,6 +10,10 @@ from agentic_harness.types import Score, Task, Transcript
 TaskT = TypeVar("TaskT", bound=Task)  # each adapter's own Task subclass
 
 
+class GraderError(Exception):
+    """The grader crashed or its output was unreadable -> outcome grader_error."""
+
+
 class Benchmark(ABC, Generic[TaskT]):
     """One benchmark, adapted to the harness. Subclass as e.g. `BashOperations(Benchmark[BashTask])`."""
 

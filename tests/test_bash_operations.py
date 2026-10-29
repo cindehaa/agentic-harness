@@ -1,0 +1,94 @@
+"""BashOperations adapter against real Docker: oracle solutions pass, doing nothing fails (skipped if Docker isn't running)."""
+
+import json
+import subprocess
+
+import pytest
+
+from agentic_harness.agents import AgentSession
+from agentic_harness.benchmarks import BashOperations
+from agentic_harness.benchmarks.bash_operations import ROOT
+from agentic_harness.environments import DockerEnvironment
+from agentic_harness.types import Message, Text
+
+if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+    pytest.skip("Docker is not running", allow_module_level=True)
+
+# A correct shell solution per task, written from each problem statement and its verification spec
+ORACLES = {
+    "bash-001": "echo 'Hello World' > hello.txt",
+    "bash-002": "mkdir test_dir && touch test_dir/file1.txt test_dir/file2.txt test_dir/file3.txt",
+    "bash-003": "grep -c '' input.txt > count.txt",  # not `wc -l`: input.txt has no trailing newline, so wc says 4
+    "bash-004": "ls *.txt > txt_files.txt",
+    "bash-005": "seq 1 10 > numbers.txt",
+}
+
+bench = BashOperations()
+TASKS = {t.id: t for t in bench.tasks()}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def images():
+    bench.setup(list(TASKS.values()))
+
+
+class RecordingSession(AgentSession):
+    """A fake agent that remembers what it was sent."""
+
+    def __init__(self) -> None:
+        self.sent: list[Message] = []
+
+    def send(self, message: Message) -> Message:
+        self.sent.append(message)
+        return Message("agent", (Text("done"),))
+
+
+def test_tasks_match_dataset():
+    rows = json.loads((ROOT / "dataset.json").read_text())
+    assert [t.id for t in TASKS.values()] == [r["task_id"] for r in rows] and len(rows) == 5
+    for t, r in zip(TASKS.values(), rows):
+        assert t.benchmark == "bash-operations"
+        assert t.image == f"harness-bash-operations:{r['task_id']}"
+        assert (t.problem_statement, t.base_image) == (r["problem_statement"], r["docker_image"])
+
+
+def test_run_agent_sends_problem_statement_verbatim():
+    task = TASKS["bash-001"]
+    session = RecordingSession()
+    bench.run_agent(task, session, env=None)  # a simple benchmark never touches the env itself
+    assert session.sent == [Message("user", (Text(task.problem_statement),))]
+
+
+@pytest.mark.parametrize("task_id", ORACLES)
+def test_oracle_passes(task_id):
+    task = TASKS[task_id]
+    with DockerEnvironment(task.image) as env:
+        assert env.exec(ORACLES[task_id]).exit_code == 0
+        score = bench.grade(task, env, ())
+    assert score.value is True, score.explanation
+
+
+@pytest.mark.parametrize("task_id", ORACLES)
+def test_doing_nothing_fails(task_id):
+    task = TASKS[task_id]
+    with DockerEnvironment(task.image) as env:
+        score = bench.grade(task, env, ())
+    assert score.value is False, score.explanation
+
+
+def test_world_has_no_python_before_grading():
+    with DockerEnvironment(TASKS["bash-001"].image) as env:
+        assert env.exec("command -v python3 || command -v python").exit_code != 0
+        assert env.exec("ls -A /workspace").stdout == ""  # setup made no files for this task, but the folder exists
+
+
+def test_setup_files_are_baked_in():
+    with DockerEnvironment(TASKS["bash-003"].image) as env:
+        assert env.read_file("/workspace/input.txt") == b"line 1\nline 2\nline 3\nline 4\nline 5"
+
+
+def test_no_leftover_containers():
+    listed = subprocess.run(
+        ["docker", "ps", "-a", "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True
+    ).stdout
+    assert listed == ""
