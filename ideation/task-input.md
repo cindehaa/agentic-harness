@@ -163,7 +163,7 @@ until the simulated user stops.
   accept. The benchmark never returns the transcript; the harness has it.
 - **`grade(task, env, transcript)`** grades the world state (our two,
   SWE-bench), the agent's answer (GAIA, τ-bench outputs), or both. Grader prep
-  (installing deps, restoring tests) is the first lines of `grade()`. The
+  (copying grader files in, installing grader deps) is the first lines of `grade()`. The
   harness kills leftover agent processes before calling it.
 - **Messages carry typed `Content`:** `Text`, `File` (path in the world,
   media type), or `Data` (a structured, JSON-serializable value). Prior

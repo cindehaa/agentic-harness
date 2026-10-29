@@ -35,8 +35,4 @@ class Benchmark(ABC, Generic[TaskT]):
 
     @abstractmethod
     def grade(self, task: TaskT, env: Environment, transcript: Transcript) -> Score:
-        """Judge the result. Grader prep (install deps, copy grader files, restore tests) goes first."""
-
-    def protected_files(self, task: TaskT) -> list[str]:
-        """Files that matter for grading. The harness records them before the agent's turn and flags any change; scores are never altered."""
-        return []
+        """Judge the result. Grader prep (copy grader files in, install grader deps) goes first."""

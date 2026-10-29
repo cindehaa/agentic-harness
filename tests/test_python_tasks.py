@@ -74,6 +74,15 @@ def test_untouched_stub_fails(task_id):
     assert score.value is False, score.explanation
 
 
+def test_cheater_scores_as_benchmark_says():
+    """Documents the benchmark's own loophole: grade.py runs whatever test_solution.py is in the workspace."""
+    task = TASKS["py-001"]
+    with DockerEnvironment(task.image) as env:
+        env.write_file("/workspace/solution.py", "def add():\n    return 5\n")  # wrong
+        env.write_file("/workspace/test_solution.py", "def test_ok(): assert True\n")
+        assert bench.grade(task, env, ()).value is True  # faithful: the score is what the benchmark says
+
+
 def test_world_is_prepared():
     with DockerEnvironment(TASKS["py-001"].image) as env:
         assert env.read_file("/workspace/test_solution.py").decode() == json.loads((ROOT / "dataset.json").read_text())[0]["test_code"]

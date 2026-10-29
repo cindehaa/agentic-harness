@@ -52,9 +52,6 @@ class PythonTasks(Benchmark[PythonTask]):
     def run_agent(self, task: PythonTask, agent: AgentSession, env: Environment) -> None:
         agent.send(Message("user", (Text(task.prompt),)))
 
-    def protected_files(self, task: PythonTask) -> list[str]:
-        return ["/workspace/test_solution.py"]  # the tests grade.py runs; the agent can edit them (benchmark as designed)
-
     def grade(self, task: PythonTask, env: Environment, transcript: Transcript) -> Score:
         env.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, copied in late
         r = env.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=GRADE_TIMEOUT)

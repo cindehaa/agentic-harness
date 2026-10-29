@@ -68,14 +68,15 @@ onsite talking point.
    Either way, nothing the agent left running can interfere with grading.
 2. **Copy the benchmark's grader files in late.** They enter the container
    only now, so the agent never saw them and couldn't edit them.
-3. **Restore protected test files** from `dataset.json`. python-tasks'
-   `grade.py` runs whatever `test_solution.py` is in the workspace, and the
-   agent could have replaced it, for example with `assert True`.
-4. **Install grader dependencies**, e.g. `apk add python3` on alpine.
-5. **Run the grader.**
+3. **Install grader dependencies**, e.g. `apk add python3` on alpine.
+4. **Run the grader.**
 
-Steps 2–4 are implemented by each adapter's `grade()`. The harness provides
+Steps 2–3 are implemented by each adapter's `grade()`. The harness provides
 the ordering and the late-copy mechanism.
+
+We do **not** restore files the benchmark puts in the agent's workspace (e.g.
+python-tasks' `test_solution.py`, which its `grade.py` runs as-is): that would
+change the benchmark. See `fidelity-vs-integrity.md`.
 
 ## 4. Outcome rules
 
@@ -101,8 +102,9 @@ dies mid-trial, everything up to that point is already saved.
 ## 6. Out of scope
 
 - **Hash-verifying protected files** (checking that tests and grader weren't
-  modified). Late copying plus restoring tests covers the realistic risk.
-  Hash verification is a talking point.
+  modified). Built as `protected_files` and removed 2026-10-29 as overfitting.
+  Late copying protects the grader; integrity evidence otherwise comes from
+  the trace and the saved final workspace (`fidelity-vs-integrity.md`).
 
 ## Decided: install grader dependencies at grade time
 
