@@ -1,7 +1,7 @@
 # Agents and the trial runner (Phase 3)
 
-**Status:** Decided 2026-10-29. Code not written yet. Ownership: Claude drafts
-everything; Cindy reviews line by line.
+**Status:** Decided 2026-10-29; built 2026-10-29 (`agents/`, `runner.py`,
+`harness run`). Ownership: Claude drafts everything; Cindy reviews line by line.
 
 ## Decisions
 
@@ -37,3 +37,15 @@ for a future `harness cleanup`.
 5. `grade` (`GraderError` → `grader_error`).
 6. Write `outcome.json`, `transcript.json`, trajectory.
 7. Stop the container (always, in `finally`).
+
+## Built (2026-10-29): details and deviations to review
+
+- **Pre-grade kill is not `kill -9 -1`.** Under `--init`, `kill -9 -1` also kills the main `sleep`, the init exits with it, and the container dies before grading. `kill_agent_processes()` kills everything except PID 1 and the sleep (`environment.md` #9).
+- **mini config:** `mini.yaml` (what the `mini` CLI uses: tool calls, `LitellmModel`). Its `environment.env` (PAGER=cat etc.) isn't applied: our exec has no TTY, so pagers don't page.
+- **Continuation:** mini ends a run with an `exit` message and, after a submit, an unanswered tool call. `MiniAgent.resume()` drops the `exit` marker, answers the pending tool call with the command's real output, appends the user message, and runs mini's loop again.
+- **`Limits.max_turns` = 20** (new): the recording session raises `TurnLimit` past it; the runner then grades what the agent did.
+- **Model-call timeout:** 120 s per call (`MODEL_TIMEOUT_S`); mini retries failed calls itself.
+- **`Unsupported`:** mini raises it for any non-`Text` content.
+- **Any other exception** from the agent or harness (e.g. a model API auth error) → `infra_error` with the traceback.
+- **Container `lifetime_s`** = trial timeout + 600 s grading margin.
+- **Score checks:** a non-JSON `Score.value`, or one `score_to_float` can't convert → `grader_error`.

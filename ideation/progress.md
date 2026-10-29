@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 3 build (Phase 4 schema decided 2026-10-29, `database.md`).
-**Next:** Phase 3 build: agent registry, `MiniSweAgent` adapter, trial runner, `harness run` (Claude drafts, Cindy reviews line by line).
+**Now:** Phase 3 built: `harness run` runs end to end (live, Haiku: bash-operations 4/5, python-tasks 3/3, $0.005 total). Awaiting Cindy's line-by-line review.
+**Next:** Phase 4: SQLite schema (`database.md`), recorder, `harness status` / `results`.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
@@ -214,6 +214,7 @@ flowchart TB
   class q_status open
   class d4_schema,d5_setup done
   class reg,bashad,pyad,oracle done
-  class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync next
-  class tasks,hcleanup,fb,truns,ttrials,tatt,tev,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync done
+  class truns,ttrials,tatt,tev,traj,files,status,results next
+  class tasks,hcleanup,fb,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
