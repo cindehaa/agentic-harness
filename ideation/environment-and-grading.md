@@ -103,14 +103,19 @@ dies mid-trial, everything up to that point is already saved.
   modified). Late copying plus restoring tests covers the realistic risk.
   Hash verification is a talking point.
 
-## ⚠️ Open question
+## Decided: install grader dependencies at grade time
 
-**When to install grader dependencies:**
+Agent runtime and grade time stay separate: the agent sees exactly the
+environment the benchmark specified, and grader dependencies are installed in
+the pre-grade step (e.g. `apk add python3`). Costs a few seconds per trial and
+needs network at grade time.
 
-- **At grade time (recommended):** e.g. `apk add python3` in the pre-grade
-  step. This preserves the agent's environment exactly as the benchmark
-  specified (no python on alpine during the agent run). It costs a few
-  seconds per trial and needs network access at grade time.
-- **Bake into a derived image once per run:** build `alpine + python3` before
-  the trials start. This is faster per trial, but the agent sees the extra
-  dependencies, which changes the benchmark's environment.
+Rejected: baking them into a derived image once per run. Faster, but the agent
+would see the extra tools (e.g. python on a bash-only benchmark), which changes
+what the benchmark measures.
+
+Prior art: Terminal-Bench 2 / Harbor tasks install test deps inside
+`tests/test.sh` at verify time; METR installs everything at build time but
+hides scoring assets from the agent with user permissions (agent runs as a
+non-root user); SWE-bench bakes test deps into the instance image because they
+are the repo's own deps.
