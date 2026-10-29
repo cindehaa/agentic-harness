@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 0: verifying both examples run, reading benchmark scripts and mini-swe-agent's DockerEnvironment.
-**Next:** Phase 1: core types (`Task`, `GradeResult`), `Benchmark` ABC + registry, `Environment` ABC + `LocalEnvironment`.
+**Now:** Phase 1: designing core types (`Task`, `GradeResult`), `Benchmark` ABC + registry, `Environment` ABC + `LocalEnvironment`.
+**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters with oracle-solution tests.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
@@ -27,6 +27,7 @@ flowchart TB
     d_pre["Pre-grade: kill agent procs, late copy, restore tests, install deps"]
     d_out["Grader crash → failed (grader_error); container death → error"]
     d_logs["Exec output streamed to host artifacts"]
+    d_deps["Grader deps installed at grade time"]
   end
 
   subgraph P1["Phase 1: core types + benchmark adapters"]
@@ -148,15 +149,16 @@ flowchart TB
   d_pre -.-> grade
   d_out -.-> fb
   d_logs -.-> files
+  d_deps -.-> grade
 
   classDef done fill:#d3f0d3,stroke:#1e5e1e,color:#1e5e1e
   classDef wip fill:#fff1b8,stroke:#6b5300,color:#6b5300
   classDef next fill:#f8d0d0,stroke:#7a1f1f,color:#7a1f1f
   classDef todo fill:#ececec,stroke:#999,color:#555
 
-  class repo,base,notes,cmd done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs done
-  class ex,read wip
-  class types,benchabc,reg,envabc,localenv next
-  class bashad,pyad,oracle,tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,readme,diagram,demo todo
+  class repo,base,notes,cmd,ex,read done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps done
+  class types,benchabc,reg,envabc,localenv wip
+  class bashad,pyad,oracle next
+  class tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,readme,diagram,demo todo
 ```
