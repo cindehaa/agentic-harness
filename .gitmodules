@@ -1,3 +1,16 @@
 [submodule "agents/mini-swe-agent"]
 	path = agents/mini-swe-agent
 	url = https://github.com/SWE-agent/mini-swe-agent.git
+[submodule "benchmarks/terminal-bench"]
+	path = benchmarks/terminal-bench
+	url = https://github.com/harbor-framework/terminal-bench-1.git
+[submodule "benchmarks/swe-bench"]
+	path = benchmarks/swe-bench
+	url = https://github.com/SWE-bench/SWE-bench.git
+[submodule "benchmarks/tau2-bench"]
+	path = benchmarks/tau2-bench
+	url = https://github.com/sierra-research/tau2-bench.git
+	shallow = true
+[submodule "benchmarks/miniwob-plusplus"]
+	path = benchmarks/miniwob-plusplus
+	url = https://github.com/Farama-Foundation/miniwob-plusplus.git
