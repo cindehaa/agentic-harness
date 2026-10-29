@@ -3,8 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-# What a grader can return: a verdict, a number, or named results (Inspect AI-style).
-Value = Any  # must be JSON-serializable (the recorder checks); e.g. True, 0.75, "C", {"passed": True}
+# What a grader can return: a verdict, a number, or named results
+Value = Any # must be JSON-serializable (the recorder checks); e.g. True, 0.75, "C", {"passed": True}
 
 
 @dataclass
@@ -28,7 +28,6 @@ class Text:
 class File:
     path: str  # where the file lives in the world (inside the container), e.g. "/workspace/shot.png"
     media_type: str  # MIME type, e.g. "image/png", "application/pdf"
-    inline: bool = False  # benchmark requires the agent to see it directly in the message
 
 
 @dataclass(frozen=True)

@@ -164,9 +164,8 @@ until the simulated user stops.
   (installing deps, restoring tests) is the first lines of `grade()`. The
   harness kills leftover agent processes before calling it.
 - **Messages carry typed `Content`:** `Text`, or `File` (path in the world,
-  media type, `inline` flag). Prior context is earlier messages. Files are
-  always placed in the container; `inline` ones also go in the prompt for
-  agents that accept them.
+  media type). Prior context is earlier messages. Files are always placed in
+  the container.
 - **World = `Environment` exposing capabilities.** Today: shell + files.
   Later: browser, tools (MCP), and a simulated-user channel. A mismatch between
   what the benchmark needs and what the agent can use makes the trial
@@ -193,10 +192,7 @@ We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
 - **`Score.metadata`** is non-verdict grader info for humans and debugging
   (stdout/stderr, expected vs actual, lists of passed/failed tests). Stored as
   JSON, never aggregated.
-- **`File.inline`:** the file is always placed in the world at `path`.
-  `inline=True` means the benchmark requires the agent to perceive it directly
-  (in the message); an agent that can't is `unsupported`. Rendering non-text
-  content for a given agent is the agent adapter's job, and it is logged.
+- `File.inline` removed (2026-10-29) — added complexity; re-add if a benchmark needs the agent to perceive a file directly (e.g. VisualWebArena query images).
 - **Transcript vs Trace** are separate. The Transcript is the conversation
   (benchmark ↔ agent messages), read by graders, defined in `types.py`. The
   Trace is the agent's internal actions (commands, tool calls): recorder events
