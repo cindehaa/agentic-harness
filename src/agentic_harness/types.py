@@ -63,3 +63,13 @@ class Task:
     benchmark: str  # e.g. "bash-operations"; makes a Task self-describing in logs and the DB
     id: str  # e.g. "bash-001"
     image: str  # Docker image for the world (prebuilt by the benchmark, or built in Benchmark.setup())
+
+
+@dataclass(frozen=True)
+class Limits:
+    """What one trial may spend. Defaults decided 2026-10-29 (`ideation/agents-and-runner.md`)."""
+
+    trial_timeout_s: float = 600  # the first agent command after this deadline ends the agent's run
+    cost_usd: float = 1.0  # model spend per trial
+    max_steps: int = 50  # model calls per trial
+    command_timeout_s: float = 60  # one agent command

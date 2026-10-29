@@ -24,3 +24,4 @@ mini-swe-agent = { path = "agents/mini-swe-agent", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["live: calls a real model API (skipped unless RUN_LIVE=1 and an API key is set)"]
