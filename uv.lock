@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -17,6 +17,10 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "mini-swe-agent" },
+]
+
+[package.dev-dependencies]
+dev = [
     { name = "pytest" },
 ]
 
@@ -24,8 +28,10 @@ dependencies = [
 requires-dist = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "mini-swe-agent", editable = "agents/mini-swe-agent" },
-    { name = "pytest", specifier = ">=7.0.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=7.0.0" }]
 
 [[package]]
 name = "aiohappyeyeballs"

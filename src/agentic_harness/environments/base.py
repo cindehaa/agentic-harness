@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 DEFAULT_TIMEOUT = 60.0  # seconds per exec when the caller doesn't say; stops one hung command eating the whole budget
 
@@ -13,6 +14,7 @@ class ExecResult:
     stdout: str
     stderr: str
     timed_out: bool = False
+    truncated: bool = False  # stdout or stderr was cut to the environment's output cap
 
 
 class Environment(ABC):
@@ -49,7 +51,7 @@ class Environment(ABC):
     def download(self, remote: str, local: Path) -> None:
         """Copy a file or folder from the world to the host."""
 
-    def __enter__(self) -> "Environment":
+    def __enter__(self) -> Self:
         self.start()
         return self
 

@@ -23,7 +23,7 @@ grader, reads its output, and writes the row.
 
 ## 2. Grading runs in the same trial container, after the agent
 
-**Decision:** setup → agent → grade all run in one trial container. There is
+**Decision:** start env → agent → grade all run in one trial container. There is
 no per-adapter choice of where grading runs.
 
 ### Options considered
@@ -62,9 +62,10 @@ onsite talking point.
 
 ## 3. Pre-grade step (in order)
 
-1. **Kill leftover agent processes:** `kill -9 -1` inside the container. This
-   kills everything except PID 1 (the `sleep`), so nothing the agent left
-   running can interfere with grading.
+1. **Kill leftover agent processes** (as root): `kill -9 -1` when `agent_user`
+   is root (kills everything except PID 1, the `sleep`); `pkill -9 -u agent`
+   when the agent runs as the unprivileged `agent` user (see `security.md`).
+   Either way, nothing the agent left running can interfere with grading.
 2. **Copy the benchmark's grader files in late.** They enter the container
    only now, so the agent never saw them and couldn't edit them.
 3. **Restore protected test files** from `dataset.json`. python-tasks'
@@ -78,17 +79,17 @@ the ordering and the late-copy mechanism.
 
 ## 4. Outcome rules
 
+Full model: `task-input.md` → "Outcome model". Statuses are exactly:
+
 | What happened | Status | Notes |
 |---|---|---|
-| Container died / infra failure | `error` | Infra's fault; retried per retry policy |
-| Grader ran but crashed or produced unparseable output | `failed`, reason `grader_error` | stderr saved as an artifact; flagged separately in the results summary |
-| Grader ran and reported fail | `failed` | Normal failure |
-| Grader ran and reported pass | `passed` | |
+| Container died, image pull failed (harness/infra failure) | `error` | Excluded from accuracy; retried per retry policy. May be renamed `infra_error` (open). |
+| Agent ran, then the grader crashed or its output was unparseable | `grader_error` | Usually the agent broke the world. Grader stderr saved as an artifact; flagged in results so real grader bugs stay visible. **OPEN:** counts as 0 (proposal) or excluded. |
+| Agent can't handle the task's content | `unsupported` | Excluded from accuracy; reported separately |
+| Grader ran and returned a `Score` | `graded` | Normal. The score is converted to a number for accuracy (Inspect-style default, overridable per benchmark) |
 
-This **supersedes** the earlier fallback row "grader crash → error". If the
-agent broke the environment badly enough that the grader can't run, that
-counts against the agent. The `grader_error` flag keeps these cases visible,
-so a genuinely buggy grader can't hide inside the failure count.
+This supersedes the earlier `passed` / `failed` (+ reason `grader_error`) /
+`error` model.
 
 ## 5. Logs never live only in the container
 

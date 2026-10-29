@@ -6,7 +6,7 @@ import time
 import pytest
 
 from agentic_harness.environments import DockerEnvironment
-from agentic_harness.environments.docker import DockerError
+from agentic_harness.environments.docker import MAX_OUTPUT, DockerError
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -78,9 +78,11 @@ def test_upload_and_download_folder(env, tmp_path):
     (src / "sub").mkdir(parents=True)
     (src / "sub" / "f.txt").write_text("data")
     env.upload(src, "/workspace/up")
+    env.upload(src, "/workspace/up")  # again, onto the existing folder: replaces, doesn't nest
     assert env.read_file("/workspace/up/sub/f.txt") == b"data"
     env.download("/workspace/up", tmp_path / "out" / "back")
     assert (tmp_path / "out" / "back" / "sub" / "f.txt").read_text() == "data"
+    assert env.exec("ls /workspace/up").stdout == "sub\n"
 
 
 def test_stop_twice_is_safe():
@@ -90,3 +92,84 @@ def test_stop_twice_is_safe():
     env.stop()
     env.stop()
     assert env.container_id is None
+
+
+def _listed(container_id: str) -> str:
+    return subprocess.run(
+        ["docker", "ps", "-a", "-q", "--no-trunc", "--filter", f"id={container_id}"], capture_output=True, text=True
+    ).stdout
+
+
+def test_exec_when_container_is_gone():
+    with DockerEnvironment(IMAGE) as env:
+        subprocess.run(["docker", "rm", "-f", env.container_id], capture_output=True, check=True)
+        with pytest.raises(DockerError, match="container is gone"):
+            env.exec("true")
+
+
+def test_exec_with_missing_cwd_raises(env):
+    with pytest.raises(DockerError, match="chdir"):
+        env.exec("true", cwd="/no/such/dir")
+
+
+def test_exit_127_from_a_command_is_a_normal_result(env):
+    assert env.exec("nosuchprogram").exit_code == 127
+    assert env.exec("exit 127").exit_code == 127
+
+
+def test_upload_replaces_planted_folder(env, tmp_path):
+    env.exec("mkdir -p /grader/tests && echo evil > /grader/tests/planted.txt")
+    (tmp_path / "t.txt").write_text("real")
+    env.upload(tmp_path, "/grader/tests")
+    assert env.exec("ls -A /grader/tests").stdout == "t.txt\n"
+
+
+def test_upload_single_file(env, tmp_path):
+    (tmp_path / "one.txt").write_text("1")
+    env.upload(tmp_path / "one.txt", "files/one.txt")
+    assert env.read_file("files/one.txt") == b"1"
+
+
+def test_download_refuses_existing_local_path(env, tmp_path):
+    env.write_file("d.txt", "x")
+    (tmp_path / "d.txt").write_text("host")
+    with pytest.raises(FileExistsError):
+        env.download("d.txt", tmp_path / "d.txt")
+    assert (tmp_path / "d.txt").read_text() == "host"
+
+
+def test_binary_round_trip(env):
+    data = bytes(range(256)) + b"\xff\xfe\x00"
+    env.write_file("bin.dat", data)
+    assert env.read_file("bin.dat") == data
+
+
+def test_read_directory_raises_oserror(env):
+    with pytest.raises(OSError) as info:
+        env.read_file("/workspace")
+    assert not isinstance(info.value, FileNotFoundError)
+
+
+def test_output_is_truncated(env):
+    result = env.exec("head -c 3000000 /dev/zero | tr '\\0' a")
+    assert result.exit_code == 0 and result.truncated
+    assert len(result.stdout) <= MAX_OUTPUT
+
+
+def test_image_with_entrypoint_starts():
+    tag = "harness-test-entrypoint"
+    dockerfile = b'FROM alpine:latest\nENTRYPOINT ["echo"]\n'
+    subprocess.run(["docker", "build", "-t", tag, "-"], input=dockerfile, capture_output=True, check=True)
+    try:
+        with DockerEnvironment(tag) as env:
+            assert env.exec("echo ok").stdout == "ok\n"
+    finally:
+        subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
+
+
+def test_container_is_gone_after_stop():
+    env = DockerEnvironment(IMAGE)
+    env.start()
+    container_id = env.container_id
+    env.stop()
+    assert _listed(container_id) == ""

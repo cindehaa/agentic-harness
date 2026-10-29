@@ -4,7 +4,7 @@
 **Now:** Phase 1: `BashOperations` adapter.
 **Next:** Phase 1: `PythonTasks` adapter + oracle tests.
 
-Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
+Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
 ```mermaid
 flowchart TB
@@ -25,7 +25,9 @@ flowchart TB
     d_sleep["Container keep-alive: sleep timeout+margin"]
     d_same["Grade in same trial container"]
     d_pre["Pre-grade: kill agent procs, late copy, restore tests, install deps"]
-    d_out["Grader crash → failed (grader_error); container death → error"]
+    d_out["Outcome: graded / grader_error / error / unsupported, error = infra, retried"]
+    d_score["Score → number: Inspect-style default, per-benchmark override"]
+    q_out["OPEN: grader_error counts as 0 or excluded? rename error → infra_error?"]
     d_logs["Exec output streamed to host artifacts"]
     d_deps["Grader deps installed at grade time"]
     d_turns["Turn model (benchmark-driven turns)"]
@@ -44,7 +46,8 @@ flowchart TB
     envabc["Environment ABC"]
     dockenv["DockerEnvironment"]
     mount["Workspace in container + download"]
-    cleanup["Guaranteed cleanup"]
+    cleanup["Guaranteed cleanup (context manager, labels)"]
+    hcleanup["harness cleanup command"]
     bashad["BashOperations adapter"]
     pyad["PythonTasks adapter"]
     oracle["Oracle solutions + adapter tests"]
@@ -54,11 +57,12 @@ flowchart TB
   subgraph P3["Phase 3: agent + trial runner"]
     direction TB
     agentsess["AgentSession stub (send)"]
-    agentabc["Agent ABC"]
+    agentabc["Agent adapters (details TBD)"]
+    q_agent["OPEN: --agent path → adapter + config, record agent/model/submodule SHAs"]
     mini["MiniSweAgent adapter"]
     subgraph TR["Trial runner"]
       direction LR
-      setup["setup"] --> agentph["agent"] --> grade["grade"] --> record["record"]
+      startenv["start env"] --> agentph["agent"] --> grade["grade"] --> record["record"]
     end
     fb["Fallbacks: retry setup, timeout→grade, regrade"]
     runsync["harness run (sync)"]
@@ -76,6 +80,7 @@ flowchart TB
     files["Artifacts on disk"]
     status["harness status"]
     results["harness results"]
+    q_status["OPEN: harness status: one run (--run_id) vs list active runs"]
   end
 
   subgraph P5["Phase 5: queue + workers"]
@@ -83,7 +88,8 @@ flowchart TB
     enqueue["harness run enqueues"]
     claim["Atomic claim + lease"]
     worker["harness worker --concurrency N"]
-    retry["Retry policy: failed vs error"]
+    retry["Retry policy: retry error only"]
+    q_setup["OPEN: who calls Benchmark.setup() in queue mode? (one worker claims a per-run setup step)"]
   end
 
   subgraph P6["Phase 6: hardening"]
@@ -120,16 +126,16 @@ flowchart TB
   pyad --> oracle
   reg --> tasks
   envabc --> dockenv
-  dockenv --> mount --> cleanup
+  dockenv --> mount --> cleanup --> hcleanup
   dockenv --> bashad
   dockenv --> pyad
   agentsess --> benchabc
   agentsess --> agentabc
   agentabc --> mini
   mini --> agentph
-  bashad --> setup
+  bashad --> startenv
   pyad --> grade
-  dockenv --> setup
+  dockenv --> startenv
   TR --> fb
   TR --> runsync
   record --> tatt
@@ -155,6 +161,12 @@ flowchart TB
   d_same -.-> grade
   d_pre -.-> grade
   d_out -.-> fb
+  d_out -.-> retry
+  d_score -.-> results
+  q_out -.-> results
+  q_agent -.-> runsync
+  q_status -.-> status
+  q_setup -.-> enqueue
   d_logs -.-> files
   d_deps -.-> grade
   d_turns -.-> TR
@@ -170,12 +182,14 @@ flowchart TB
   classDef wip fill:#fff1b8,stroke:#6b5300,color:#6b5300
   classDef next fill:#f8d0d0,stroke:#7a1f1f,color:#7a1f1f
   classDef todo fill:#ececec,stroke:#999,color:#555
+  classDef open fill:#ececec,stroke:#999,color:#555,stroke-dasharray:4 3
 
   class repo,base,notes,cmd,ex,read done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred done
-  class types,envabc,benchabc,agentsess,dockenv done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score done
+  class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
+  class q_out,q_agent,q_status,q_setup open
   class reg wip
   class bashad wip
   class pyad,oracle next
-  class tasks,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class tasks,hcleanup,agentabc,mini,startenv,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

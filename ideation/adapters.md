@@ -1,7 +1,7 @@
 # Ideas: validating adapters + AI-written adapters
 
 Both are optional extensions on top of the core harness. They build on the
-`Benchmark` adapter interface (`list_tasks`, `setup`, `grade`) and answer the
+`Benchmark` adapter interface (`tasks`, `setup`, `run_agent`, `grade`) and answer the
 problem statement's "integration overhead" point: adapters are still written
 once per benchmark, but they become cheap to write and safe to trust.
 
@@ -15,7 +15,7 @@ built-in fake agents:
 |---|---|---|---|
 | Null run | does nothing | every task **fails** | grader that always passes, setup that leaks the answer |
 | Oracle run | applies the reference solution | every task **passes** | broken setup, wrong paths, wrong pass/fail parsing |
-| Listing | — | every task has `id`, `instruction`, `image` | bad field mapping (`task_id` vs `id`, `problem_statement` vs `prompt`) |
+| Listing | — | every task has `benchmark`, `id`, `image`; `run_agent` sends a non-empty first message | bad field mapping (`task_id` vs `id`, `problem_statement` vs `prompt`) |
 | Image check | — | image pulls, required tools exist (e.g. python for in-container grading) | alpine-has-no-python style surprises |
 
 - Neither sample benchmark ships solutions, so we write oracle solutions for
@@ -24,7 +24,7 @@ built-in fake agents:
 - Output: per-task pass/fail table plus a summary; non-zero exit if any check
   fails so it can run in CI.
 - Implementation stays small because it reuses the trial runner: `NullAgent`
-  and `OracleAgent` are just two more `Agent` subclasses.
+  and `OracleAgent` are just two more agent adapters.
 
 Prior art: Harbor tasks include a reference solution and the CLI has
 `harbor adapters validate`; SWE-bench validates instances by checking that
@@ -44,7 +44,7 @@ new adapter, with `harness validate` as the gate:
 2. Read the `Benchmark` base class and one existing adapter as the example.
 3. Write `adapters/<name>.py` (+ oracle solutions if missing and feasible).
 4. Run `harness validate --benchmark <name>`; fix and repeat until it passes.
-5. Report what it assumed (how pass/fail is read, where grading runs).
+5. Report what it assumed (how pass/fail is read, what the grader needs installed).
 
 The point to make: the generation is easy and not novel; the **validator is
 what makes generated adapters trustworthy**. A human still reviews the diff.

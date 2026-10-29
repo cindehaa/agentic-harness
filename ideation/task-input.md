@@ -2,7 +2,8 @@
 
 **Status:** Adopted 2026-10-29. Every trial is a series of **turns driven by
 the benchmark**. What the agent learns arrives through two channels: the
-**opening** (the messages it's sent) and the **world** (the environment it acts on).
+**messages** it's sent (starting with the **first message**) and the **world**
+(the environment it acts on).
 
 We kept running into this while designing `Task`. "The instruction" is only
 the simplest case; across agentic benchmarks, input sits on a spectrum.
@@ -23,7 +24,7 @@ the simplest case; across agentic benchmarks, input sits on a spectrum.
 
 ## Survey: what the agent gets, by channel
 
-| Benchmark | Opening (told at start) | World (acts on) |
+| Benchmark | First message (told at start) | World (acts on) |
 |---|---|---|
 | Ours, SWE-bench, Terminal-Bench | Instruction text | Container with files / repo |
 | GAIA | Question | Container + attached file |
@@ -70,7 +71,7 @@ adapters** behind a blocking `send()`. Unlike AgentBeats or A2A, they are
 
 1. **Start the world.** The runner starts the task's image; per-task world
    setup (files, DBs) is already baked into it (see "World setup" below).
-2. **Opening.** The benchmark sends its first message(s).
+2. **First message.** The benchmark sends the agent its first message(s).
 3. **Agent's turn.** The agent acts on the world as much as it likes, within
    limits. The harness logs every action.
 4. **Hand back.** The agent says it's done or replies. What counts as "done"
@@ -87,7 +88,7 @@ Limits apply at **three levels**: per turn, per attempt (all turns), and a
 maximum number of turns. Without them the turns can deadlock, with the agent waiting for
 the user while the benchmark waits for the agent.
 
-Most benchmarks (ours included) go through the loop once: opening, agent,
+Most benchmarks (ours included) go through the loop once: first message, agent,
 done, grade.
 
 ### Implications
@@ -132,7 +133,7 @@ screen, so these adapters need a parity check.
 - **The agent's own scaffolding** (mini-swe-agent's system and instance
   templates, Claude Code's system prompt) is part of the agent being evaluated.
 - **Formats a benchmark requires** (e.g. GAIA's answer format) belong to the
-  benchmark adapter, are logged with the rendered opening, and are covered by
+  benchmark adapter, are logged with the rendered first message, and are covered by
   parity checks.
 
 ## Locked interface (2026-10-29)
@@ -164,13 +165,14 @@ until the simulated user stops.
   SWE-bench), the agent's answer (GAIA, τ-bench outputs), or both. Grader prep
   (installing deps, restoring tests) is the first lines of `grade()`. The
   harness kills leftover agent processes before calling it.
-- **Messages carry typed `Content`:** `Text`, or `File` (path in the world,
-  media type). Prior context is earlier messages. Files are always placed in
-  the container.
-- **World = `Environment` exposing capabilities.** Today: shell + files.
-  Later: browser, tools (MCP), and a simulated-user channel. A mismatch between
-  what the benchmark needs and what the agent can use makes the trial
-  `unsupported`.
+- **Messages carry typed `Content`:** `Text`, `File` (path in the world,
+  media type), or `Data` (a structured, JSON-serializable value). Prior
+  context is earlier messages. Files are always placed in the container.
+- **World = `Environment`.** Today it offers shell + files only (`exec`,
+  `write_file`/`read_file`, `upload`/`download`). There is no capabilities
+  field until a second capability exists. Later: browser, tools (MCP), and a
+  simulated-user channel; a mismatch between what the benchmark needs and what
+  the agent can use will then make the trial `unsupported`.
 
 ### World setup: baked into the image (D, 2026-10-29)
 
@@ -198,10 +200,10 @@ We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
 ### Types
 
 `types.py` holds `Task` (`benchmark`, `id`, `image`; adapters subclass it),
-`Content` (`Text | File`), `Message` (role `"user" | "agent"`, `content`),
+`Content` (`Text | File | Data`), `Message` (role `"user" | "agent"`, `content`),
 `Transcript` and `Score`/`Value`. `ExecResult` lives in
-`environments/base.py`. `Outcome` (statuses `graded`, `grader_error`, `error`,
-`unsupported`) and `Limits` are deferred to Phase 3.
+`environments/base.py`. `Outcome` (see "Outcome model" below) and `Limits` are
+deferred to Phase 3.
 
 - **`Value = Any`**, but it must be JSON-serializable. The recorder checks;
   a non-serializable value makes the outcome `grader_error`.
@@ -213,6 +215,35 @@ We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
   (benchmark ↔ agent messages), read by graders, defined in `types.py`. The
   Trace is the agent's internal actions (commands, tool calls): recorder events
   plus raw trajectory files, built in Phase 4.
+
+### Outcome model (2026-10-29)
+
+A trial ends with one `Outcome`. Its status is exactly one of:
+
+| Status | When | Accuracy | Retried |
+|---|---|---|---|
+| `graded` | Normal: the grader ran and returned a `Score` | counts (its score) | no |
+| `grader_error` | The agent ran, then the grader crashed or its output was unparseable (usually the agent broke the world) | **OPEN** (see below) | no |
+| `error` | Harness/infra failure (container died, image pull failed) | excluded | yes, per retry policy |
+| `unsupported` | The agent can't handle the task's content (e.g. a `File` it can't read, multi-turn without resume) | excluded; reported separately | no |
+
+- `grader_error` trials are **flagged in the results** (grader stderr saved as
+  an artifact), so humans can spot real grader bugs among them.
+- A non-JSON-serializable `Score.value` also gives `grader_error`.
+- **OPEN (pending decision): how `grader_error` counts.** Proposal: as 0
+  (it's usually the agent's fault); alternative: excluded, like `error`.
+- **OPEN: `error` may be renamed `infra_error`** for clarity (it is never the
+  agent's fault).
+
+**Score → number for aggregation.** Inspect-style default conversion:
+`True`/`"C"` → 1.0, `"P"` → 0.5, `False`/`"I"`/`"N"` → 0.0, int/float as-is.
+Overridable per benchmark (e.g. a `Benchmark.score_to_float(score)` method,
+added in Phase 4). **Accuracy** = mean of that number over `graded` +
+`grader_error` trials (`grader_error` as 0.0), if the proposal above holds;
+over `graded` trials only if `grader_error` ends up excluded.
+
+This replaces the earlier `passed` / `failed` / `error` model (grader crash →
+`failed` with reason `grader_error`; before that, grader crash → `error`).
 
 ### Rejected along the way
 
@@ -233,7 +264,8 @@ We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
 - **Chat format as the whole input.** That's the model-eval paradigm, where
   the input goes straight to a model. Agents own their system prompt and their
   loop, so a benchmark's `system`/`assistant` messages would clash with them.
-  We use messages only for the opening, where a conversation really does start.
+  We use messages only for what the benchmark tells the agent (the first message
+  and later turns), where a conversation really does start.
 - **`instruction: str` only.** Too narrow: it can't express attachments, prior
   context, or inputs that live in the environment.
 - **E (gym loop):** see above.
@@ -261,7 +293,7 @@ benchmark's native input through untouched:
 Our rules:
 
 1. Typed `Task` subclasses keep the benchmark's native record.
-2. The exact rendered opening is logged for every attempt.
+2. The exact rendered first message (and every later message) is logged for every attempt.
 3. Parity runs are the acceptance test for an adapter (an extension of `harness validate`).
 
 ### Parity check: future command, out of scope

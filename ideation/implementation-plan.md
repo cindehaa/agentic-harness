@@ -7,7 +7,7 @@ writes the first draft: **You** = you write it, Claude reviews;
 
 Rule of thumb for ownership: you write the parts an interviewer will poke at
 (interfaces, trial runner, claim query, error semantics); Claude drafts
-plumbing (Docker SDK calls, CLI formatting, boilerplate SQL, tests).
+plumbing (docker CLI calls, CLI formatting, boilerplate SQL, tests).
 
 ---
 
@@ -27,17 +27,17 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 
 | Piece | Owner |
 |---|---|
-| `Task`, `GradeResult`, `Benchmark` ABC, registry | You |
+| `Task`, `Score`, `Benchmark` ABC, registry | You |
 | `Environment` ABC | Claude |
-| `DockerEnvironment`: start(image), exec(cmd, timeout), copy in/out, stop | Claude |
-| Workspace lives in the container (no bind mount; `download()` gets it out); decide per adapter where grading runs (host vs container) | You |
+| `DockerEnvironment` (image in constructor): start, exec(cmd, timeout), copy in/out, stop | Claude |
+| Workspace lives in the container (no bind mount; `download()` gets it out). Grading always runs in the trial container, after the agent | You |
 | Guaranteed cleanup (`finally`, container labels, `harness cleanup`) | Claude |
-| `BashOperations`, `PythonTasks` adapters | You (first), Claude (second, for comparison) |
+| `BashOperations`, `PythonTasks` adapters (world setup, incl. python-tasks' `prepare.py`, baked into images in `Benchmark.setup()`) | You (first), Claude (second, for comparison) |
 | Hand-written oracle solutions + pytest for setup → oracle → grade (in Docker) | Claude |
 | `harness tasks --benchmark X` (list tasks) | Claude |
 
 **Done when:** tests show oracle solutions pass and empty workspaces fail, for every task, in Docker, via the adapter interface only.
-**Explain-back:** Where do the two benchmarks' differences live, and why nowhere else? What would adding a third benchmark touch? What happens to a container if the process is killed mid-trial? Why does python-tasks setup run inside the container?
+**Explain-back:** Where do the two benchmarks' differences live, and why nowhere else? What would adding a third benchmark touch? What happens to a container if the process is killed mid-trial? Why is python-tasks setup baked into the image by `Benchmark.setup()` instead of run on the host?
 
 ## Phase 2 — (merged into Phase 1)
 
@@ -45,12 +45,15 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 
 | Piece | Owner |
 |---|---|
-| `Agent` ABC (`run`, `parse_trajectory`) | You |
+| `AgentSession.send(message) -> Message` + agent adapters (details TBD) | You |
 | `MiniSweAgent` adapter (drives the container from the host) | Claude, you review closely |
 | Trial runner: phases, per-phase timeout, artifacts dir per attempt | You |
 | `harness run` synchronous — runs trials in-process, prints results | Claude |
 
 **Done when:** `harness run --agent agents/mini-swe-agent --benchmark bash-operations --task_ids bash-001` passes in Docker.
+
+- **Note:** link the container's `lifetime_s` (its self-destruct `sleep`) to the trial's limits; today it is a fixed 7200 s.
+- **OPEN:** how `--agent agents/mini-swe-agent` (a path) resolves to an agent adapter + agent config (model, `forward_env`); and recording the agent, model and submodule SHAs per run for reproducibility.
 **Explain-back:** Walk through one trial line by line. What happens on agent timeout? Where does the trajectory end up?
 
 ## Phase 4 — Persistence + status/results
@@ -61,8 +64,12 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 | Recorder: phase events, grade results, artifact paths | Claude |
 | Trajectory → normalized events for mini-swe-agent | Claude |
 | `harness status` / `harness results --format json|table|summary` (accuracy, errors separated) | Claude |
+| Score → number: Inspect-style default, `Benchmark.score_to_float(score)` override | You |
 
 **Done when:** a completed run can be inspected entirely from the DB + files after the process exits.
+
+- **OPEN:** `harness status --run_id X` shows one run, and bare `harness status` lists active runs (the brief says "viewing active runs").
+- **OPEN (from the outcome model):** whether `grader_error` counts as 0 or is excluded from accuracy; whether `error` is renamed `infra_error`.
 **Explain-back:** Why an attempts table? What's in the DB vs on disk, and why? How is accuracy computed when some trials errored?
 
 ## Phase 5 — Queue + workers (Part 2)
@@ -72,9 +79,11 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 | `harness run` enqueues and returns a run_id immediately | Claude |
 | Atomic claim query + leases/heartbeat | You |
 | `harness worker --concurrency N` (process pool / threads) | Claude, you review closely |
-| Retry policy: infra `error` vs agent `failed`, max attempts, backoff | You |
+| Retry policy: retry only `error` (infra); `graded` / `grader_error` / `unsupported` are final; max attempts, backoff | You |
 
 **Done when:** submit 3 runs back to back, start 2 workers, all finish; `kill -9` a worker mid-trial and its trial gets re-queued and completes.
+
+- **OPEN:** who calls `Benchmark.setup()` in queue mode. Proposal: a per-run setup step, claimed by exactly one worker, before the run's trials are released.
 **Explain-back:** How do two workers never grab the same trial? What bounds concurrency? What happens to a trial whose worker died?
 
 ## Phase 6 — Hardening

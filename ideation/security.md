@@ -10,7 +10,12 @@ shared trial container.
 - An unprivileged `agent` user is created at image build.
 - The agent's commands run via `docker exec -u agent`.
 - Grader files are root-only (`chmod 700`); grading runs as root.
-- Before grading, `pkill -9 -u agent` kills leftover agent processes.
+- Before grading, leftover agent processes are killed: `pkill -9 -u agent`
+  when the agent runs as the unprivileged user; `kill -9 -1` when `agent_user`
+  is root (our two benchmarks).
+- **`docker cp` keeps the host's uid and mode bits**, so grader files uploaded
+  with `Environment.upload` are not root-only by default. After upload, run an
+  explicit `chown -R root:root <path>` + `chmod 700 <path>` (as root).
 - **Caveat:** permissions hide files, not installed tools. Grader-only tools go
   in a root-only prefix; final grading can still install them at grade time.
 - Each adapter declares `agent_user`. Default `"root"` for fidelity

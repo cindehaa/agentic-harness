@@ -51,8 +51,8 @@ the process inside the container. Leftover processes are killed before grading
 (`kill -9 -1`); Phase 6 may harden this.
 
 **Known gaps (Phase 6):**
-- `_docker()` has no default timeout for `cp`/`rm`, so a stuck daemon could hang a worker.
 - A timed-out `exec` keeps running inside the container until the pre-grade `kill -9 -1`.
 - The first `docker pull` can hang silently in sandboxed shells → pre-pull images once per run.
+- `download()` copies symlinks as symlinks, so a link the agent planted can point at a host path when read later.
 
 Dropped: `LocalEnvironment` (2026-10-29) — Docker starts in ~1s, and a fake local world behaves differently from real containers (e.g. has python where alpine doesn't, needs `/workspace` path mapping) and is extra code to explain.

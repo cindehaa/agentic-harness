@@ -5,3 +5,6 @@ workspaces/
 .DS_Store
 instructions.md
 CLAUDE.md
+runs/
+*.db
+*.sqlite

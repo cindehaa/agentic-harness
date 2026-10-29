@@ -1,6 +1,6 @@
 # Decision: one job per trial (phases are not split into separate jobs)
 
-**Decision:** a trial (one task × one agent) is a single queue job. Setup,
+**Decision:** a trial (one task × one agent) is a single queue job. Start env,
 agent, and grade run back to back in the same live container. Phases are
 still tracked individually (per-phase status, timing, logs, retries), but
 they are not scheduled independently.
@@ -8,7 +8,7 @@ they are not scheduled independently.
 ## What we considered
 
 Splitting phases into separate queue jobs, e.g. an inference job
-(setup → agent → save workspace snapshot) followed by a grade job that
+(start env → agent → save workspace snapshot) followed by a grade job that
 restores the snapshot into a fresh container and runs only the grader.
 
 Benefits it would have bought:
@@ -33,8 +33,8 @@ the live environment (installed packages, running services, permissions).
 
 ## Why we didn't split
 
-- Setup and agent must share the live container anyway, so only grading
-  could ever be split off.
+- The agent must run in the live container anyway (world setup is baked
+  into the image), so only grading could ever be split off.
 - Not every benchmark can be graded from a snapshot (e.g. "start a server
   on port 80"), and the harness should run any agentic benchmark.
 - Splitting adds a job-kind dispatcher, snapshot storage, and cross-job

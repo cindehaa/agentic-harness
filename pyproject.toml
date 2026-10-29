@@ -7,8 +7,10 @@ requires-python = ">=3.11"
 dependencies = [
     "click>=8.3.1",
     "mini-swe-agent",
-    "pytest>=7.0.0",
 ]
+
+[dependency-groups]
+dev = ["pytest>=7.0.0"]
 
 [project.scripts]
 harness = "agentic_harness.cli:main"
@@ -19,3 +21,6 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 mini-swe-agent = { path = "agents/mini-swe-agent", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
