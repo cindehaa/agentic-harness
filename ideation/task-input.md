@@ -1,7 +1,7 @@
 # What exactly is a task input?
 
-**Status:** Adopted 2026-10-29. Every trial is an **episode driven by the
-benchmark**. What the agent learns arrives through two channels: the
+**Status:** Adopted 2026-10-29. Every trial is a series of **turns driven by
+the benchmark**. What the agent learns arrives through two channels: the
 **opening** (the messages it's sent) and the **world** (the environment it acts on).
 
 We kept running into this while designing `Task`. "The instruction" is only
@@ -35,7 +35,7 @@ the simplest case; across agentic benchmarks, input sits on a spectrum.
 
 ## Five approaches compared
 
-| | A. Prompt-centric (Inspect) | B. Env-centric (Harbor, METR) | C. Pass-through (HAL) | **D. Episode (AgentBeats, τ)** | E. Gym loop (OSWorld, BrowserGym) |
+| | A. Prompt-centric (Inspect) | B. Env-centric (Harbor, METR) | C. Pass-through (HAL) | **D. Benchmark-driven turns (AgentBeats "episode", τ)** | E. Gym loop (OSWorld, BrowserGym) |
 |---|---|---|---|---|---|
 | Who controls the loop | agent | agent | agent | **benchmark, between turns** | harness, every action |
 | Plain text | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -59,10 +59,10 @@ the finest control possible over an agent that runs its own loop.
 agents (Claude Code, mini-swe-agent) run their own think/act/observe loop and
 can't be driven step by step. We'd have to know too much about each agent.
 
-## Decision: episodes are the backbone (D)
+## Decision: benchmark-driven turns are the backbone (D)
 
-Every trial is an episode that the benchmark drives through `run_agent`.
-Single-shot is just a one-turn episode. Agents stay **in-process Python
+Every trial's turns are driven by the benchmark through `run_agent`.
+Single-shot is just a one-turn trial. Agents stay **in-process Python
 adapters** behind a blocking `send()`. Unlike AgentBeats or A2A, they are
 **not** network services. The final names are under "Locked interface" below.
 
@@ -82,8 +82,8 @@ adapters** behind a blocking `send()`. Unlike AgentBeats or A2A, they are
 6. **Grade.** The benchmark inspects the world and/or the transcript and
    returns a `Score`.
 
-Limits apply at **three levels**: per turn, per episode, and a maximum number
-of turns. Without them the episode can deadlock, with the agent waiting for
+Limits apply at **three levels**: per turn, per attempt (all turns), and a
+maximum number of turns. Without them the turns can deadlock, with the agent waiting for
 the user while the benchmark waits for the agent.
 
 Most benchmarks (ours included) go through the loop once: opening, agent,
@@ -98,9 +98,9 @@ done, grade.
 | "Done" | Defined per agent. |
 | Logging | Events gain a turn index; the transcript is a list of turns. |
 | Limits | Three levels instead of one. |
-| Grading | Can also happen mid-episode (per-step checks). |
+| Grading | Can also happen between turns (per-step checks). |
 | Reproducibility | Worse when the benchmark uses an LLM user, so we record the full transcript and seeds. |
-| Queue (Part 2) | No change: the episode runs inside the trial job, still one job per trial. |
+| Queue (Part 2) | No change: the turns run inside the trial job, still one job per trial. |
 
 ### Pros and cons
 
@@ -116,7 +116,7 @@ done, grade.
 - More moving parts: sessions, resume, per-agent "done", three levels of limits.
 - Multi-turn support is extra work in each agent adapter.
 - Benchmark adapters can become programs with their own bugs, cost and randomness.
-- An episode is sequential. That's fine: parallelism comes from running many trials.
+- A trial's turns are sequential. That's fine: parallelism comes from running many trials.
 
 ### Gym-style benchmarks (OSWorld) still fit D
 
@@ -144,7 +144,7 @@ class Benchmark(ABC, Generic[TaskT]):
     def grade(self, task: TaskT, env: Environment, transcript: Transcript) -> Score: ...
 ```
 
-A simple benchmark is a **one-turn episode**:
+A simple benchmark is a **one-turn trial**:
 
 ```python
 def run_agent(self, task, agent, env):
@@ -176,8 +176,9 @@ until the simulated user stops.
 
 Run (one `harness run`; Harbor calls it a job) → **Trial** (one task × agent;
 the queue unit; ends with one `Outcome`) → **Attempt** (a retry after an
-infra error) → **Episode** (the turns inside an attempt) → **Turn** (one
-`send` → reply).
+infra error) → **Turn** (one `send` → reply).
+
+We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
 
 ### Types
 
@@ -187,15 +188,29 @@ infra error) → **Episode** (the turns inside an attempt) → **Turn** (one
 `environments/base.py`. `Outcome` (statuses `graded`, `grader_error`, `error`,
 `unsupported`) and `Limits` are deferred to Phase 3.
 
+- **`Value = Any`**, but it must be JSON-serializable. The recorder checks;
+  a non-serializable value makes the outcome `grader_error`.
+- **`Score.metadata`** is non-verdict grader info for humans and debugging
+  (stdout/stderr, expected vs actual, lists of passed/failed tests). Stored as
+  JSON, never aggregated.
+- **`File.inline`:** the file is always placed in the world at `path`.
+  `inline=True` means the benchmark requires the agent to perceive it directly
+  (in the message); an agent that can't is `unsupported`. Rendering non-text
+  content for a given agent is the agent adapter's job, and it is logged.
+- **Transcript vs Trace** are separate. The Transcript is the conversation
+  (benchmark ↔ agent messages), read by graders, defined in `types.py`. The
+  Trace is the agent's internal actions (commands, tool calls): recorder events
+  plus raw trajectory files, built in Phase 4.
+
 ### Rejected along the way
 
 - **A separate `opening()`/`load_input()` method.** Collapsed into
   `run_agent`: a simple task is just one turn.
-- **A generator-based episode** (`reply = yield msg`). It keeps the agent out
+- **A generator-based turn loop** (`reply = yield msg`). It keeps the agent out
   of benchmark code, but it's an unusual idiom and harder to explain.
 - **Separate `send()` + `wait_until_done()`.** Merged into one blocking `send`.
 - **A separate `prepare_grading()`.** Folded into `grade()`.
-- **The names `run_episode`, `interact` and `run`.** `run_agent` matches the
+- **The names `run_episode` ("episode" is RL jargon), `interact` and `run`.** `run_agent` matches the
   trial phases and avoids clashing with Run.
 - **Earlier names:** `list_tasks` → `tasks`, `setup` → `build_world`,
   `Part` → `Content`, `TrialOutcome` → `Outcome`.

@@ -3,12 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-# What a grader can return: a verdict, a number, or named results (mirrors Inspect AI's Value).
-Value = (
-    str | int | float | bool
-    | list[str | int | float | bool]
-    | dict[str, str | int | float | bool | None]
-)
+# What a grader can return: a verdict, a number, or named results (Inspect AI-style).
+Value = Any  # must be JSON-serializable (the recorder checks); e.g. True, 0.75, "C", {"passed": True}
 
 
 @dataclass
@@ -45,14 +41,14 @@ Content = Text | File | Data
 
 @dataclass(frozen=True)
 class Message:
-    """One message in an episode. Benchmarks send "user" messages; agents reply as "agent"."""
+    """One message exchanged between the benchmark and the agent. Benchmarks send "user" messages; agents reply as "agent"."""
 
     role: Literal["user", "agent"]
     content: tuple[Content, ...]
 
 
-# Everything said during an episode: benchmark messages ("user") and agent replies ("agent").
-# The session builds it as a list during the episode and hands grade() a read-only snapshot.
+# Everything said during a trial's turns: benchmark messages ("user") and agent replies ("agent").
+# The session builds it as a list while the agent runs and hands grade() a read-only snapshot.
 # The agent's individual commands/tool calls live in the recorder's event log, not here.
 Transcript = tuple[Message, ...]
 

@@ -28,7 +28,7 @@ flowchart TB
     d_out["Grader crash → failed (grader_error); container death → error"]
     d_logs["Exec output streamed to host artifacts"]
     d_deps["Grader deps installed at grade time"]
-    d_episode["Episode model (benchmark-driven turns)"]
+    d_turns["Turn model (benchmark-driven turns)"]
     d_iface["Benchmark API locked: tasks / build_world / run_agent / grade"]
   end
 
@@ -154,7 +154,7 @@ flowchart TB
   d_out -.-> fb
   d_logs -.-> files
   d_deps -.-> grade
-  d_episode -.-> TR
+  d_turns -.-> TR
   d_iface -.-> benchabc
 
   classDef done fill:#d3f0d3,stroke:#1e5e1e,color:#1e5e1e
@@ -163,7 +163,7 @@ flowchart TB
   classDef todo fill:#ececec,stroke:#999,color:#555
 
   class repo,base,notes,cmd,ex,read done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_episode,d_iface done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface done
   class types done
   class benchabc,reg,envabc,localenv wip
   class bashad,pyad,oracle next
