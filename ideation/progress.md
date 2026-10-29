@@ -40,7 +40,7 @@ flowchart TB
     reg["Benchmark registry"]
     envabc["Environment ABC"]
     dockenv["DockerEnvironment"]
-    mount["Workspace mount"]
+    mount["Workspace in container + download"]
     cleanup["Guaranteed cleanup"]
     bashad["BashOperations adapter"]
     pyad["PythonTasks adapter"]

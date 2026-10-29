@@ -6,6 +6,7 @@ import time
 import pytest
 
 from agentic_harness.environments import DockerEnvironment
+from agentic_harness.environments.docker import DockerError
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -63,6 +64,13 @@ def test_write_then_read_file(env):
 def test_read_missing_file(env):
     with pytest.raises(FileNotFoundError):
         env.read_file("/nope.txt")
+
+
+def test_read_file_when_container_is_gone():
+    with DockerEnvironment(IMAGE) as env:
+        subprocess.run(["docker", "rm", "-f", env.container_id], capture_output=True, check=True)
+        with pytest.raises(DockerError, match="container is gone"):
+            env.read_file("/etc/hostname")
 
 
 def test_upload_and_download_folder(env, tmp_path):

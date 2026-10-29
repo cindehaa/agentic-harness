@@ -30,7 +30,7 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 | `Task`, `GradeResult`, `Benchmark` ABC, registry | You |
 | `Environment` ABC | Claude |
 | `DockerEnvironment`: start(image), exec(cmd, timeout), copy in/out, stop | Claude |
-| Workspace bind mount; decide per adapter where grading runs (host vs container) | You |
+| Workspace lives in the container (no bind mount; `download()` gets it out); decide per adapter where grading runs (host vs container) | You |
 | Guaranteed cleanup (`finally`, container labels, `harness cleanup`) | Claude |
 | `BashOperations`, `PythonTasks` adapters | You (first), Claude (second, for comparison) |
 | Hand-written oracle solutions + pytest for setup → oracle → grade (in Docker) | Claude |

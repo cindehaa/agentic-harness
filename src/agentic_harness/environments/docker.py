@@ -65,6 +65,9 @@ class DockerEnvironment(Environment):
     def read_file(self, path: str) -> bytes:
         result = subprocess.run(["docker", "exec", self._id(), "cat", path], capture_output=True)
         if result.returncode != 0:
+            running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", self._id()], capture_output=True)
+            if running.returncode != 0 or running.stdout.strip() != b"true":
+                raise DockerError("container is gone")  # not the agent's fault, so not FileNotFoundError
             raise FileNotFoundError(path)
         return result.stdout
 
