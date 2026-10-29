@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: `Benchmark` ABC.
-**Next:** Phase 1: `LocalEnvironment`, then `BashOperations` + `PythonTasks` adapters.
+**Now:** Phase 1: `LocalEnvironment`.
+**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
@@ -55,6 +55,7 @@ flowchart TB
 
   subgraph P3["Phase 3: agent + trial runner"]
     direction TB
+    agentsess["AgentSession stub (send)"]
     agentabc["Agent ABC"]
     mini["MiniSweAgent adapter"]
     subgraph TR["Trial runner"]
@@ -123,6 +124,8 @@ flowchart TB
   reg --> tasks
   envabc --> dockenv
   dockenv --> mount --> cleanup
+  agentsess --> benchabc
+  agentsess --> agentabc
   agentabc --> mini
   mini --> agentph
   bashad --> setup
@@ -166,8 +169,8 @@ flowchart TB
 
   class repo,base,notes,cmd,ex,read done
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env done
-  class types,envabc done
-  class benchabc,reg wip
-  class localenv,bashad,pyad,oracle next
+  class types,envabc,benchabc,agentsess done
+  class localenv,reg wip
+  class bashad,pyad,oracle next
   class tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
