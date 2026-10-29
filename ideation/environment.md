@@ -35,5 +35,6 @@ benchmarks and agents only get a handle.
 
 ## Next
 
-- `LocalEnvironment`: temp dir + `subprocess`, for tests (Phase 1).
-- `DockerEnvironment`: one container per trial (Phase 2).
+- `DockerEnvironment`: one container per trial; tests use it directly (needs Docker running).
+
+Dropped: `LocalEnvironment` (2026-10-29) — Docker starts in ~1s, and a fake local world behaves differently from real containers (e.g. has python where alpine doesn't, needs `/workspace` path mapping) and is extra code to explain.

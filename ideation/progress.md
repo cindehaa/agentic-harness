@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: `LocalEnvironment`.
-**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters.
+**Now:** Phase 1: `DockerEnvironment` design.
+**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters + oracle tests.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
@@ -33,24 +33,19 @@ flowchart TB
     d_env["Environment API locked: start/stop/exec/write_file/read_file/upload/download"]
   end
 
-  subgraph P1["Phase 1: core types + benchmark adapters"]
+  subgraph P1["Phase 1: core types + Docker environment + benchmark adapters"]
     direction TB
     types["types.py: Task / Content / Message / Transcript / Score"]
     benchabc["Benchmark ABC"]
     reg["Benchmark registry"]
     envabc["Environment ABC"]
-    localenv["LocalEnvironment"]
+    dockenv["DockerEnvironment"]
+    mount["Workspace mount"]
+    cleanup["Guaranteed cleanup"]
     bashad["BashOperations adapter"]
     pyad["PythonTasks adapter"]
     oracle["Oracle solutions + adapter tests"]
     tasks["harness tasks"]
-  end
-
-  subgraph P2["Phase 2: Docker environment"]
-    direction TB
-    dockenv["DockerEnvironment"]
-    mount["Workspace mount"]
-    cleanup["Guaranteed cleanup"]
   end
 
   subgraph P3["Phase 3: agent + trial runner"]
@@ -118,12 +113,13 @@ flowchart TB
   types --> benchabc --> reg
   benchabc --> bashad
   benchabc --> pyad
-  envabc --> localenv
   bashad --> oracle
   pyad --> oracle
   reg --> tasks
   envabc --> dockenv
   dockenv --> mount --> cleanup
+  dockenv --> bashad
+  dockenv --> pyad
   agentsess --> benchabc
   agentsess --> agentabc
   agentabc --> mini
@@ -170,7 +166,8 @@ flowchart TB
   class repo,base,notes,cmd,ex,read done
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env done
   class types,envabc,benchabc,agentsess done
-  class localenv,reg wip
+  class reg wip
+  class dockenv next
   class bashad,pyad,oracle next
-  class tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class tasks,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

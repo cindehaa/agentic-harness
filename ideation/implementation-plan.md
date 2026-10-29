@@ -21,29 +21,25 @@ plumbing (Docker SDK calls, CLI formatting, boilerplate SQL, tests).
 **Done when:** both examples pass locally.
 **Explain-back:** How does each benchmark report pass/fail? Why can't `evaluate.py` run inside the alpine container? How does mini-swe-agent's DockerEnvironment execute a command?
 
-## Phase 1 — Core types + benchmark adapters (no Docker yet)
+## Phase 1 — Core types + Docker environment + benchmark adapters
+
+Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local world behaves differently (python on the host, path mapping), so tests use `DockerEnvironment` directly (needs Docker running).
 
 | Piece | Owner |
 |---|---|
 | `Task`, `GradeResult`, `Benchmark` ABC, registry | You |
-| `Environment` ABC + `LocalEnvironment` (temp dir, subprocess) | Claude |
-| `BashOperations`, `PythonTasks` adapters | You (first), Claude (second, for comparison) |
-| Hand-written oracle solutions + pytest for setup → oracle → grade | Claude |
-| `harness tasks --benchmark X` (list tasks) | Claude |
-
-**Done when:** tests show oracle solutions pass and empty workspaces fail, for every task, via the adapter interface only.
-**Explain-back:** Where do the two benchmarks' differences live, and why nowhere else? What would adding a third benchmark touch?
-
-## Phase 2 — Docker environment
-
-| Piece | Owner |
-|---|---|
+| `Environment` ABC | Claude |
 | `DockerEnvironment`: start(image), exec(cmd, timeout), copy in/out, stop | Claude |
 | Workspace bind mount; decide per adapter where grading runs (host vs container) | You |
 | Guaranteed cleanup (`finally`, container labels, `harness cleanup`) | Claude |
+| `BashOperations`, `PythonTasks` adapters | You (first), Claude (second, for comparison) |
+| Hand-written oracle solutions + pytest for setup → oracle → grade (in Docker) | Claude |
+| `harness tasks --benchmark X` (list tasks) | Claude |
 
-**Done when:** Phase 1 tests pass against `DockerEnvironment` too.
-**Explain-back:** What happens to a container if the process is killed mid-trial? Why does python-tasks setup run inside the container?
+**Done when:** tests show oracle solutions pass and empty workspaces fail, for every task, in Docker, via the adapter interface only.
+**Explain-back:** Where do the two benchmarks' differences live, and why nowhere else? What would adding a third benchmark touch? What happens to a container if the process is killed mid-trial? Why does python-tasks setup run inside the container?
+
+## Phase 2 — (merged into Phase 1)
 
 ## Phase 3 — Agent adapter + trial runner (end of Part 1 core)
 
