@@ -33,8 +33,21 @@ benchmarks and agents only get a handle.
 - **Harbor `BaseEnvironment`:** `start` / `stop` / `exec` / `upload` / `download`. Closest match; we add `write_file` / `read_file` and the str-or-list `exec`.
 - **mini-swe-agent:** `execute` only. Enough for an agent, not for a benchmark that must stage files and grade.
 
-## Next
+## DockerEnvironment
 
-- `DockerEnvironment`: one container per trial; tests use it directly (needs Docker running).
+Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_environment.py` (need Docker running).
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Drive the `docker` CLI via `subprocess` | No docker SDK dependency; same approach as mini-swe-agent |
+| 2 | No bind mount; the workspace lives only in the container | Callers use `download()` to get it out |
+| 3 | Main process is `sleep <lifetime_s>` (default 7200) | Keeps the container alive; self-destruct timer if the harness dies |
+| 4 | Every container gets `--label agentic-harness=1` and name `harness-<8 hex>` | Leftovers are easy to find and remove |
+| 5 | `/workspace` is the working directory (`-w`, created at start) and `exec`'s default cwd | One predictable place for task files |
+| 6 | No CPU/memory limits yet | Not needed until we run many trials at once |
+
+**Caveat:** on an `exec` timeout we kill the `docker exec` client, which does NOT kill
+the process inside the container. Leftover processes are killed before grading
+(`kill -9 -1`); Phase 6 may harden this.
 
 Dropped: `LocalEnvironment` (2026-10-29) — Docker starts in ~1s, and a fake local world behaves differently from real containers (e.g. has python where alpine doesn't, needs `/workspace` path mapping) and is extra code to explain.

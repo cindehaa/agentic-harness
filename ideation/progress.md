@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: `DockerEnvironment` design.
-**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters + oracle tests.
+**Now:** Phase 1: `BashOperations` + `PythonTasks` adapters + oracle tests.
+**Next:** Phase 1: `harness tasks`.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
@@ -165,9 +165,8 @@ flowchart TB
 
   class repo,base,notes,cmd,ex,read done
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env done
-  class types,envabc,benchabc,agentsess done
+  class types,envabc,benchabc,agentsess,dockenv done
   class reg wip
-  class dockenv next
   class bashad,pyad,oracle next
   class tasks,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
