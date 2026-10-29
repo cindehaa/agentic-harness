@@ -73,3 +73,31 @@ class Limits:
     cost_usd: float = 1.0  # model spend per trial
     max_steps: int = 50  # model calls per trial
     command_timeout_s: float = 60  # one agent command
+    max_turns: int = 20  # benchmark -> agent messages per trial (a looping benchmark can't run forever)
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """How one attempt at one trial ended (`ideation/task-input.md`, Outcome model). Accuracy counts only "graded"."""
+
+    status: Literal["graded", "grader_error", "infra_error", "unsupported"]
+    score: Score | None = None
+    score_float: float | None = None  # what accuracy averages; from Benchmark.score_to_float
+    error: str | None = None  # why it isn't graded (or the traceback)
+    agent_exit_status: str | None = None  # the agent's own reason for stopping, e.g. "Submitted", "TimeLimit"
+    cost_usd: float = 0.0
+    duration_s: float = 0.0
+    turns: int = 0
+
+
+def score_to_float(value: Value) -> float:
+    """Inspect-style default: True/"C" -> 1, "P" (partial) -> 0.5, False/"I"/"N" -> 0, numbers as they are."""
+    if value is True or value == "C":
+        return 1.0
+    if value == "P":
+        return 0.5
+    if value is False or value == "I" or value == "N":
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    raise ValueError(f"no default conversion to a number for score value {value!r}")

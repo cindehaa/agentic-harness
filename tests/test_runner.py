@@ -1,0 +1,120 @@
+"""run_trial end to end on bash-operations with scripted fake agents (real Docker, no model)."""
+
+import json
+import subprocess
+import time
+from collections.abc import Callable
+
+import pytest
+
+from agentic_harness.agents import Agent, AgentSession
+from agentic_harness.benchmarks import BashOperations, GraderError
+from agentic_harness.environments import Environment
+from agentic_harness.runner import run_trial
+from agentic_harness.types import Limits, Message, Text, score_to_float
+
+if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+    pytest.skip("Docker is not running", allow_module_level=True)
+
+bench = BashOperations()
+TASK = next(t for t in bench.tasks() if t.id == "bash-001")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def image():
+    bench.setup([TASK])
+
+
+class ScriptedAgent(Agent):
+    """A fake agent: on each message it runs `act(env)`, then replies "done"."""
+
+    name = "scripted"
+
+    def __init__(self, act: Callable[[Environment], None]) -> None:
+        self.act = act
+
+    def start(self, env, artifacts_dir, limits) -> AgentSession:
+        agent = self
+
+        class Session(AgentSession):
+            def send(self, message: Message) -> Message:
+                agent.act(env)
+                self.exit_status, self.cost_usd = "done", 0.01
+                return Message("agent", (Text("done"),))
+
+        return Session()
+
+
+def kill_container(env) -> None:
+    env.exec("kill 1")  # the init forwards SIGTERM to the main sleep; the container exits
+    while env.state()["Running"]:  # wait until Docker has noticed, so the runner sees it as the agent's doing
+        time.sleep(0.1)
+
+
+class BrokenGrader(BashOperations):
+    def grade(self, task, env, transcript):
+        raise GraderError("grader crashed")
+
+
+def test_oracle_agent_is_graded_true(tmp_path):
+    outcome = run_trial(bench, ScriptedAgent(lambda env: env.exec("echo 'Hello World' > hello.txt")), TASK, Limits(), tmp_path)
+    assert (outcome.status, outcome.score.value, outcome.score_float) == ("graded", True, 1.0)
+    assert (outcome.agent_exit_status, outcome.cost_usd, outcome.turns) == ("done", 0.01, 1)
+    saved = json.loads((tmp_path / "outcome.json").read_text())
+    assert saved["status"] == "graded" and saved["score"]["value"] is True
+    transcript = json.loads((tmp_path / "transcript.json").read_text())
+    assert [m["role"] for m in transcript] == ["user", "agent"]
+    events = json.loads((tmp_path / "events.json").read_text())
+    assert [(e["kind"], e["turn"]) for e in events] == [("message_sent", 1), ("message_received", 1)]
+
+
+def test_empty_agent_is_graded_false(tmp_path):
+    outcome = run_trial(bench, ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path)
+    assert (outcome.status, outcome.score.value, outcome.score_float) == ("graded", False, 0.0)
+
+
+def test_agent_that_kills_the_container_is_graded_false(tmp_path):
+    outcome = run_trial(bench, ScriptedAgent(kill_container), TASK, Limits(), tmp_path)
+    assert (outcome.status, outcome.score.value) == ("graded", False)
+    assert outcome.score.explanation == "container died during agent turn"
+
+
+def test_grader_crash_is_grader_error(tmp_path):
+    outcome = run_trial(BrokenGrader(), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path)
+    assert (outcome.status, outcome.error, outcome.score) == ("grader_error", "grader crashed", None)
+    assert json.loads((tmp_path / "outcome.json").read_text())["status"] == "grader_error"
+
+
+def test_leftover_agent_process_is_killed_before_grading(tmp_path):
+    # a background writer would overwrite hello.txt after the agent "finished"; it must be dead before grading
+    act = lambda env: env.exec(
+        "(sleep 1; while true; do echo wrong > hello.txt; sleep 0.1; done) > /dev/null 2>&1 & echo 'Hello World' > hello.txt"
+    )
+    outcome = run_trial(bench, ScriptedAgent(act), TASK, Limits(), tmp_path)
+    assert outcome.score.value is True
+
+
+def test_missing_image_is_infra_error(tmp_path):
+    task = type(TASK)(**{**TASK.__dict__, "image": "harness-no-such-image:nope"})
+    outcome = run_trial(bench, ScriptedAgent(lambda env: None), task, Limits(), tmp_path)
+    assert outcome.status == "infra_error" and "DockerError" in outcome.error
+    assert (tmp_path / "outcome.json").exists()
+
+
+@pytest.mark.parametrize(
+    "value, expected", [(True, 1.0), ("C", 1.0), ("P", 0.5), (False, 0.0), ("I", 0.0), ("N", 0.0), (0.25, 0.25), (3, 3.0)]
+)
+def test_score_to_float(value, expected):
+    assert score_to_float(value) == expected
+
+
+def test_score_to_float_rejects_other_values():
+    with pytest.raises(ValueError):
+        score_to_float({"passed": True})
+
+
+def test_no_leftover_containers():
+    listed = subprocess.run(
+        ["docker", "ps", "-a", "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True
+    ).stdout
+    assert listed == ""

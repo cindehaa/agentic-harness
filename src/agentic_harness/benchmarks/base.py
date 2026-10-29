@@ -5,7 +5,7 @@ from typing import Generic, TypeVar
 
 from agentic_harness.agents.base import AgentSession
 from agentic_harness.environments.base import Environment
-from agentic_harness.types import Score, Task, Transcript
+from agentic_harness.types import Score, Task, Transcript, score_to_float
 
 TaskT = TypeVar("TaskT", bound=Task)  # each adapter's own Task subclass
 
@@ -36,3 +36,7 @@ class Benchmark(ABC, Generic[TaskT]):
     @abstractmethod
     def grade(self, task: TaskT, env: Environment, transcript: Transcript) -> Score:
         """Judge the result. Grader prep (copy grader files in, install grader deps) goes first."""
+
+    def score_to_float(self, score: Score) -> float:
+        """The number accuracy averages. Override when this benchmark's Score.value needs its own conversion."""
+        return score_to_float(score.value)
