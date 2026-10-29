@@ -198,6 +198,18 @@ Our rules:
 2. The exact rendered opening is logged for every attempt.
 3. Parity runs are the acceptance test for an adapter (an extension of `harness validate`).
 
+### Parity check: future command, out of scope
+
+Decided (2026-10-29) as a future standalone command:
+`harness parity --benchmark X --agent Y`. It follows Harbor's method:
+
+- run the same agent and model on the benchmark's original harness and on ours;
+- do at least 2–3 runs per side and compare mean ± SEM;
+- treat the adapter as faithful only if the score ranges overlap.
+
+It is **out of scope for the take-home**. It is a design note and an onsite
+talking point only.
+
 ## Scope
 
 Phase 1 implements only text messages, a shell + files container, and the

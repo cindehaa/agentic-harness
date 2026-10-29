@@ -98,6 +98,7 @@ flowchart TB
     validate["harness validate"]
     nullor["Null / Oracle agents"]
     skill["Add-benchmark skill"]
+    parity["harness parity (out of scope)"]
   end
 
   subgraph P8["Phase 8: deliverables"]
@@ -141,6 +142,7 @@ flowchart TB
   nullor --> validate
   oracle --> nullor
   validate --> skill
+  validate -.-> parity
   P7 --> P8
   d_own -.-> envabc
   d_own -.-> agentabc
@@ -162,5 +164,5 @@ flowchart TB
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_episode done
   class types,benchabc,reg,envabc,localenv wip
   class bashad,pyad,oracle next
-  class tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,readme,diagram,demo todo
+  class tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

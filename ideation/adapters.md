@@ -30,6 +30,11 @@ Prior art: Harbor tasks include a reference solution and the CLI has
 `harbor adapters validate`; SWE-bench validates instances by checking that
 tests fail before and pass after the gold patch.
 
+`validate` is not the same as `harness parity`. `validate` checks wiring with
+the null and oracle agents. `harness parity` checks that scores match the
+original harness. Parity is a future command, out of scope (see
+`task-input.md` → Fidelity).
+
 ## 2. AI-written adapters ("add a benchmark" skill)
 
 A Claude Code skill (`.claude/skills/add-benchmark/SKILL.md`) that drafts a
