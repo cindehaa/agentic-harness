@@ -61,11 +61,10 @@ can't be driven step by step. We'd have to know too much about each agent.
 
 ## Decision: episodes are the backbone (D)
 
-Every trial is an episode that the benchmark drives. Single-shot is just the
-default `run_episode`: send the opening, wait until the agent is done, grade.
-Agents stay **in-process Python adapters** with `send()` and
-`wait_until_done()`. Unlike AgentBeats or A2A, they are **not** network
-services.
+Every trial is an episode that the benchmark drives through `run_agent`.
+Single-shot is just a one-turn episode. Agents stay **in-process Python
+adapters** behind a blocking `send()`. Unlike AgentBeats or A2A, they are
+**not** network services. The final names are under "Locked interface" below.
 
 ### The loop, state by state
 
@@ -135,32 +134,71 @@ screen, so these adapters need a parity check.
   benchmark adapter, are logged with the rendered opening, and are covered by
   parity checks.
 
-## Interface sketch
+## Locked interface (2026-10-29)
 
 ```python
 class Benchmark(ABC, Generic[TaskT]):
-    def list_tasks(self) -> list[TaskT]: ...
-    def setup(self, task: TaskT, env: Environment) -> None: ...      # build the world
-    def load_input(self, task: TaskT) -> list[Message]: ...          # the opening
-    def run_episode(self, task: TaskT, agent: AgentSession, env: Environment) -> Score:
-        agent.send(self.load_input(task))                            # default: single-shot
-        agent.wait_until_done()
-        return self.grade(task, env, agent.transcript)
+    def tasks(self) -> list[TaskT]: ...
+    def build_world(self, task: TaskT, env: Environment) -> None: ...
+    def run_agent(self, task: TaskT, agent: AgentSession, env: Environment) -> None: ...  # one or more turns
     def grade(self, task: TaskT, env: Environment, transcript: Transcript) -> Score: ...
 ```
 
-- **`grade(task, env, transcript)`:** some benchmarks grade the world state
-  (our two, SWE-bench); others grade the agent's final answer (GAIA, τ-bench
-  outputs). Both are available to `grade`.
-- **Opening = messages with typed parts.** Parts are text, or a file
-  (`env_path`, `media_type`, `inline` flag). Prior context is just earlier
-  messages in the list. Files are always placed in the container; `inline`
-  ones also go in the prompt for agents that accept them.
+A simple benchmark is a **one-turn episode**:
+
+```python
+def run_agent(self, task, agent, env):
+    agent.send(Message("user", (Text(task.problem_statement),)))
+```
+
+A complex one (τ-bench) loops: `reply = agent.send(msg); msg = user.respond(reply)`
+until the simulated user stops.
+
+- **`AgentSession`** is the harness-wrapped session. It has a single blocking
+  `send(message) -> Message` (send and wait are merged). It logs every turn,
+  builds the transcript, enforces limits including the maximum number of
+  turns, and raises `Unsupported` when a message has content the agent can't
+  accept. The benchmark never returns the transcript; the harness has it.
+- **`grade(task, env, transcript)`** grades the world state (our two,
+  SWE-bench), the agent's answer (GAIA, τ-bench outputs), or both. Grader prep
+  (installing deps, restoring tests) is the first lines of `grade()`. The
+  harness kills leftover agent processes before calling it.
+- **Messages carry typed `Content`:** `Text`, or `File` (path in the world,
+  media type, `inline` flag). Prior context is earlier messages. Files are
+  always placed in the container; `inline` ones also go in the prompt for
+  agents that accept them.
 - **World = `Environment` exposing capabilities.** Today: shell + files.
-  Later: browser, tools (MCP), and a simulated-user channel. The benchmark
-  declares what it needs and the agent adapter declares what it can use; a
-  mismatch makes the trial `unsupported`.
-- **`AgentSession`:** `send(messages)`, `wait_until_done()`, `transcript`.
+  Later: browser, tools (MCP), and a simulated-user channel. A mismatch between
+  what the benchmark needs and what the agent can use makes the trial
+  `unsupported`.
+
+### Terminology
+
+Run (one `harness run`; Harbor calls it a job) → **Trial** (one task × agent;
+the queue unit; ends with one `Outcome`) → **Attempt** (a retry after an
+infra error) → **Episode** (the turns inside an attempt) → **Turn** (one
+`send` → reply).
+
+### Types
+
+`types.py` holds `Task` (`benchmark`, `id`, `image`; adapters subclass it),
+`Content` (`Text | File`), `Message` (role `"user" | "agent"`, `content`),
+`Transcript` and `Score`/`Value`. `ExecResult` lives in
+`environments/base.py`. `Outcome` (statuses `graded`, `grader_error`, `error`,
+`unsupported`) and `Limits` are deferred to Phase 3.
+
+### Rejected along the way
+
+- **A separate `opening()`/`load_input()` method.** Collapsed into
+  `run_agent`: a simple task is just one turn.
+- **A generator-based episode** (`reply = yield msg`). It keeps the agent out
+  of benchmark code, but it's an unusual idiom and harder to explain.
+- **Separate `send()` + `wait_until_done()`.** Merged into one blocking `send`.
+- **A separate `prepare_grading()`.** Folded into `grade()`.
+- **The names `run_episode`, `interact` and `run`.** `run_agent` matches the
+  trial phases and avoids clashing with Run.
+- **Earlier names:** `list_tasks` → `tasks`, `setup` → `build_world`,
+  `Part` → `Content`, `TrialOutcome` → `Outcome`.
 
 ## Rejected
 
@@ -212,8 +250,8 @@ talking point only.
 
 ## Scope
 
-Phase 1 implements only text messages, a shell + files container, and the
-default single-shot `run_episode`. Multimodal parts, browsers, tools, simulated
+Phase 1 implements only text messages, a shell + files container, and
+one-turn `run_agent`. Multimodal parts, browsers, tools, simulated
 users, multi-turn resume and parity runs are designed for but not built. They
 go in the README as design notes.
 
