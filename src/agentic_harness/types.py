@@ -49,3 +49,22 @@ class Message:
 
     role: Literal["user", "agent"]
     content: tuple[Content, ...]
+
+
+# Everything said during an episode: benchmark messages ("user") and agent replies ("agent").
+# The session builds it as a list during the episode and hands grade() a read-only snapshot.
+# The agent's individual commands/tool calls live in the recorder's event log, not here.
+Transcript = tuple[Message, ...]
+
+
+@dataclass(frozen=True)
+class Task:
+    """One task from a benchmark. Adapters subclass this with their own typed fields.
+
+    Base fields deliberately have no defaults: if they did, every subclass field would
+    need a default too (dataclass inheritance rule).
+    """
+
+    benchmark: str  # e.g. "bash-operations"; makes a Task self-describing in logs and the DB
+    id: str  # e.g. "bash-001"
+    image: str  # Docker image for the world; the runner starts it before build_world()

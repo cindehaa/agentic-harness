@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: Benchmark interface locked (`tasks`, `build_world`, `run_agent`, `grade`); writing `types.py` (`Task`, `Content`, `Message`, `Transcript`, `Score`), then `Benchmark` ABC + registry, `Environment` ABC + `LocalEnvironment`.
-**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters with oracle-solution tests.
+**Now:** Phase 1: `Benchmark` ABC + `Environment` ABC.
+**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
@@ -164,7 +164,8 @@ flowchart TB
 
   class repo,base,notes,cmd,ex,read done
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_episode,d_iface done
-  class types,benchabc,reg,envabc,localenv wip
+  class types done
+  class benchabc,reg,envabc,localenv wip
   class bashad,pyad,oracle next
   class tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
