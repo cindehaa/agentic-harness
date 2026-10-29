@@ -181,3 +181,30 @@ def test_container_is_gone_after_stop():
     container_id = env.container_id
     env.stop()
     assert _listed(container_id) == ""
+
+
+def test_state_of_running_container(env):
+    assert env.state() == {"Status": "running", "Running": True, "ExitCode": 0, "OOMKilled": False}
+
+
+def test_state_after_main_process_dies():
+    with DockerEnvironment(IMAGE) as env:
+        env.exec("kill 1")  # the init forwards SIGTERM to the sleep; the container exits but is kept (no --rm)
+        time.sleep(1)
+        state = env.state()
+    assert state["Status"] == "exited" and not state["Running"] and not state["OOMKilled"]
+
+
+def test_state_after_removal_is_none():
+    with DockerEnvironment(IMAGE) as env:
+        subprocess.run(["docker", "rm", "-f", env.container_id], capture_output=True, check=True)
+        assert env.state() is None
+
+
+def test_kill_agent_processes_keeps_container_alive():
+    with DockerEnvironment(IMAGE) as env:
+        env.exec("sleep 999 > /dev/null 2>&1 &")
+        assert "sleep 999" in env.exec("ps").stdout
+        env.kill_agent_processes()
+        assert "sleep 999" not in env.exec("ps").stdout
+        assert env.state()["Running"]

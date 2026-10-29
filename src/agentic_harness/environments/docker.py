@@ -1,5 +1,6 @@
 """An Environment backed by one Docker container, driven through the `docker` CLI (no SDK dependency)."""
 
+import json
 import posixpath
 import subprocess
 import threading
@@ -29,19 +30,22 @@ class DockerEnvironment(Environment):
         self.lifetime_s = lifetime_s  # the container's main process is `sleep lifetime_s`: a self-destruct timer if the harness dies
         self.workdir = workdir  # default cwd for exec; relative paths resolve here
         self.container_id: str | None = None
+        self.sleep_pid: str | None = None  # the main `sleep` (child of the init, PID 1); kill_agent_processes spares it
 
     def start(self) -> None:
         name = f"harness-{uuid.uuid4().hex[:8]}"
         try:
-            # --rm: deleted when sleep expires. --init: sleep as PID 1 would never reap zombies.
+            # No --rm: a container that dies mid-trial must stay inspectable (state()); stop() removes it.
+            # --init: sleep as PID 1 would never reap zombies.
             # --entrypoint: images with their own ENTRYPOINT would otherwise wrap our sleep.
             result = _docker(
-                "run", "-d", "--rm", "--init", "--label", LABEL, "--name", name, "-w", self.workdir,
+                "run", "-d", "--init", "--label", LABEL, "--name", name, "-w", self.workdir,
                 "--entrypoint", "sleep", self.image, str(self.lifetime_s),
                 timeout=START_TIMEOUT,
             )
             self.container_id = result.stdout.decode().strip()
             _docker("exec", self.container_id, "mkdir", "-p", self.workdir)
+            self.sleep_pid = _decode(_docker("exec", self.container_id, "cat", "/proc/1/task/1/children").stdout).split()[0]
         except BaseException:
             # __exit__ won't run if start() fails; the name is known even if `run` never returned an id
             _rm(name)
@@ -54,6 +58,7 @@ class DockerEnvironment(Environment):
             return
         _rm(self.container_id)
         self.container_id = None
+        self.sleep_pid = None
 
     def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None) -> ExecResult:
         argv = ["sh", "-c", cmd] if isinstance(cmd, str) else cmd
@@ -85,6 +90,29 @@ class DockerEnvironment(Environment):
             if not self._alive():
                 raise DockerError("container is gone")
         return ExecResult(proc.returncode, stdout, stderr, truncated=truncated)
+
+    def state(self) -> dict | None:
+        """The container's `docker inspect` State fields we use (Status, Running, ExitCode, OOMKilled).
+
+        None if Docker is unreachable or the container is gone (both mean infra_error).
+        """
+        try:
+            result = _docker("inspect", "-f", "{{json .State}}", self._id(), check=False)
+        except DockerError:
+            return None
+        if result.returncode != 0:
+            return None
+        state = json.loads(result.stdout)
+        return {k: state[k] for k in ("Status", "Running", "ExitCode", "OOMKilled")}
+
+    def kill_agent_processes(self) -> None:
+        """Kill every process the agent left running, before grading: all except PID 1 (the init) and its `sleep`.
+
+        Not a plain `kill -9 -1`: that also kills the sleep, and the init exits when its child does, taking the
+        container with it. One pass over /proc, so a process that keeps forking could slip through (Phase 6).
+        """
+        script = 'for p in /proc/[0-9]*; do p=${p#/proc/}; [ "$p" = 1 ] || [ "$p" = "$1" ] || [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; true'
+        self.exec(["sh", "-c", script, "sh", self.sleep_pid])
 
     def write_file(self, path: str, content: str | bytes) -> None:
         data = content.encode() if isinstance(content, str) else content

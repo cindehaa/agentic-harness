@@ -46,18 +46,20 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | 5 | `/workspace` is the working directory (`-w`, created at start) and `exec`'s default cwd | One predictable place for task files |
 | 6 | No CPU/memory limits yet | Not needed until we run many trials at once |
 | 7 | `DockerError` (→ `infra_error`) only when the container is verifiably gone (`_alive()` check); anything the agent can cause (bad cwd, OCI exec error, a printed fake docker message) stays a normal command failure | Prevents gaming failures into excluded trials |
+| 8 | No `--rm` (2026-10-29): a container that dies mid-trial stays until `stop()` removes it, so `state()` (`docker inspect`: `Status`, `Running`, `ExitCode`, `OOMKilled`; None = gone or Docker unreachable) can tell the runner why it died | Rule 6 in `agents-and-runner.md` needs the evidence |
+| 9 | `kill_agent_processes()` kills every process except PID 1 (the init) and the main `sleep` (its PID is read from `/proc/1/task/1/children` at start), via one pass over `/proc` | A plain `kill -9 -1` also kills the sleep, and `--init` exits when its child does: the container dies before grading (found while building it) |
 
 **Caveat:** on an `exec` timeout we kill the `docker exec` client, which does NOT kill
 the process inside the container. Leftover processes are killed before grading
-(`kill -9 -1`); Phase 6 may harden this.
+(`kill_agent_processes()`); Phase 6 may harden this (one pass over `/proc` can miss a process that keeps forking).
 
 **Known gaps (Phase 6):**
-- A timed-out `exec` keeps running inside the container until the pre-grade `kill -9 -1`.
+- A timed-out `exec` keeps running inside the container until the pre-grade `kill_agent_processes()`.
 - The first `docker pull` can hang silently in sandboxed shells → pre-pull images once per run.
 - `download()` copies symlinks as symlinks, so a link the agent planted can point at a host path when read later.
 - DockerError (→ infra_error) only when the container is verifiably gone; anything the agent can cause stays a normal command failure (prevents gaming failures into excluded trials). Remaining hole: if the agent itself kills the container, that still reads as infra (planned fix in Phase 3, below).
 
-**Planned for Phase 3** (decided 2026-10-29, `agents-and-runner.md`):
+**Phase 3** (decided 2026-10-29, `agents-and-runner.md`; `--rm` dropped and `state()` added, decisions 8-9 above):
 - Drop `--rm` from `docker run` so a container that dies during the agent's turn can be `docker inspect`ed: vanished / Docker unreachable / `OOMKilled` → `infra_error`; exited otherwise → `graded`, failed. `stop()` still removes the container; expired containers are found by label for a future `harness cleanup`.
 - `lifetime_s` = trial timeout + margin instead of the fixed 7200 s default.
 
