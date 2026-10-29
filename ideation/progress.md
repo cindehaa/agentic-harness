@@ -64,7 +64,7 @@ flowchart TB
       direction LR
       startenv["start env"] --> agentph["agent"] --> grade["grade"] --> record["record"]
     end
-    fb["Fallbacks: retry setup, timeout→grade, regrade"]
+    fb["Fallbacks: retry start env, timeout→grade, regrade"]
     runsync["harness run (sync)"]
   end
 
