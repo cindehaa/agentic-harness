@@ -1,7 +1,7 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 4 schema design discussion (Phase 3 decisions recorded in `agents-and-runner.md`).
+**Now:** Phase 3 build (Phase 4 schema decided 2026-10-29, `database.md`).
 **Next:** Phase 3 build: agent registry, `MiniSweAgent` adapter, trial runner, `harness run` (Claude drafts, Cindy reviews line by line).
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
@@ -85,8 +85,8 @@ flowchart TB
       direction LR
       truns[("runs")] --> ttrials[("trials")] --> tatt[("attempts")]
       tatt --> tev[("events")]
-      tatt --> tart[("artifacts")]
     end
+    d4_schema["Decided 2026-10-29 (database.md): runs/harness.db, WAL; queue in trials; attempts never overwritten; score raw JSON + score_float; agent-neutral events by turn; files in attempts.artifacts_dir (no artifacts table); versions + config per run"]
     traj["Trajectory → events"]
     files["Artifacts on disk"]
     status["harness status"]
@@ -100,7 +100,7 @@ flowchart TB
     claim["Atomic claim + lease"]
     worker["harness worker --concurrency N"]
     retry["Retry policy: retry infra_error only"]
-    q_setup["OPEN: who calls Benchmark.setup() in queue mode? (one worker claims a per-run setup step)"]
+    d5_setup["Decided: first worker claims runs.setup_claimed_by, runs setup(), sets run running; trials claimable only then"]
   end
 
   subgraph P6["Phase 6: hardening"]
@@ -151,7 +151,7 @@ flowchart TB
   TR --> runsync
   record --> tatt
   mini --> traj --> tev
-  record --> files --> tart
+  record --> files --> tatt
   ttrials --> status
   tatt --> results
   enqueue --> ttrials
@@ -188,7 +188,8 @@ flowchart TB
   d3_files -.-> record
   dockenv --> norm
   q_status -.-> status
-  q_setup -.-> enqueue
+  d5_setup -.-> enqueue
+  d4_schema -.-> DB
   d_logs -.-> files
   d_deps -.-> grade
   d_turns -.-> TR
@@ -210,8 +211,9 @@ flowchart TB
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr,d_integ done
   class d3_reg,d3_host,d3_multi,d3_reply,d3_lim,d3_dead,d3_files done
   class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
-  class q_status,q_setup open
+  class q_status open
+  class d4_schema,d5_setup done
   class reg,bashad,pyad,oracle done
   class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync next
-  class tasks,hcleanup,fb,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class tasks,hcleanup,fb,truns,ttrials,tatt,tev,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

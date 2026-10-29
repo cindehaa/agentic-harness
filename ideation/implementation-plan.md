@@ -67,13 +67,15 @@ Decided 2026-10-29; details and alternatives in `agents-and-runner.md`. Ownershi
 
 | Piece | Owner |
 |---|---|
-| SQLite schema: runs, trials, attempts, events, artifacts | You (design), Claude (DDL) |
+| SQLite schema (`runs/harness.db`, WAL): runs, trials, attempts, events; no artifacts table (files live in `attempts.artifacts_dir`). Decided 2026-10-29, see `database.md` | You (design), Claude (DDL) |
 | Recorder: phase events, grade results, artifact paths | Claude |
 | Trajectory → normalized events for mini-swe-agent | Claude |
 | `harness status` / `harness results --format json|table|summary` (accuracy, errors separated) | Claude |
 | Score → number: Inspect-style default, `Benchmark.score_to_float(score)` override | You |
 
 **Done when:** a completed run can be inspected entirely from the DB + files after the process exits.
+
+- **DECIDED (2026-10-29):** schema and its eight decisions in `database.md`. `status` = trial counts by state and outcome; `results` = mean `score_float` over `graded` trials, `grader_error` / `infra_error` / `unsupported` listed separately.
 
 - **OPEN:** `harness status --run_id X` shows one run, and bare `harness status` lists active runs (the brief says "viewing active runs").
 - **DECIDED (2026-10-29):** `grader_error` is excluded from accuracy and reported prominently (count + list), because a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare. Accuracy = mean over `graded` trials only; `grader_error`, `infra_error`, `unsupported` each reported separately.
@@ -91,7 +93,7 @@ Decided 2026-10-29; details and alternatives in `agents-and-runner.md`. Ownershi
 
 **Done when:** submit 3 runs back to back, start 2 workers, all finish; `kill -9` a worker mid-trial and its trial gets re-queued and completes.
 
-- **OPEN:** who calls `Benchmark.setup()` in queue mode. Proposal: a per-run setup step, claimed by exactly one worker, before the run's trials are released.
+- **DECIDED (2026-10-29):** who calls `Benchmark.setup()` in queue mode: the first worker to claim `runs.setup_claimed_by` runs it, then sets the run's status to `running`; trials are claimable only after that. The queue lives in `trials` (`state`, `claimed_by`, `lease_until`), no separate jobs table (`database.md`).
 **Explain-back:** How do two workers never grab the same trial? What bounds concurrency? What happens to a trial whose worker died?
 
 ## Phase 6 — Hardening
