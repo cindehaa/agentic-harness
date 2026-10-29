@@ -1,0 +1,21 @@
+[project]
+name = "agentic-harness"
+version = "0.1.0"
+description = "Run any benchmark against any agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.3.1",
+    "mini-swe-agent",
+    "pytest>=7.0.0",
+]
+
+[project.scripts]
+harness = "agentic_harness.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+mini-swe-agent = { path = "agents/mini-swe-agent", editable = true }
