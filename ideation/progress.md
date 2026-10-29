@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: `Benchmark` ABC + `Environment` ABC.
-**Next:** Phase 1: `BashOperations` + `PythonTasks` adapters.
+**Now:** Phase 1: `Benchmark` ABC.
+**Next:** Phase 1: `LocalEnvironment`, then `BashOperations` + `PythonTasks` adapters.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · dashed arrow = decision applies here
 
@@ -18,7 +18,7 @@ flowchart TB
     read["Read benchmark scripts + DockerEnvironment"]
   end
 
-  subgraph DEC["Decided (see environment-and-grading.md, task-input.md)"]
+  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md)"]
     direction LR
     d_own["Harness owns containers; agents get Environment handle"]
     d_db["Only harness writes DB"]
@@ -30,6 +30,7 @@ flowchart TB
     d_deps["Grader deps installed at grade time"]
     d_turns["Turn model (benchmark-driven turns)"]
     d_iface["Benchmark API locked: tasks / build_world / run_agent / grade"]
+    d_env["Environment API locked: start/stop/exec/write_file/read_file/upload/download"]
   end
 
   subgraph P1["Phase 1: core types + benchmark adapters"]
@@ -156,6 +157,7 @@ flowchart TB
   d_deps -.-> grade
   d_turns -.-> TR
   d_iface -.-> benchabc
+  d_env -.-> envabc
 
   classDef done fill:#d3f0d3,stroke:#1e5e1e,color:#1e5e1e
   classDef wip fill:#fff1b8,stroke:#6b5300,color:#6b5300
@@ -163,9 +165,9 @@ flowchart TB
   classDef todo fill:#ececec,stroke:#999,color:#555
 
   class repo,base,notes,cmd,ex,read done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface done
-  class types done
-  class benchabc,reg,envabc,localenv wip
-  class bashad,pyad,oracle next
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env done
+  class types,envabc done
+  class benchabc,reg wip
+  class localenv,bashad,pyad,oracle next
   class tasks,dockenv,mount,cleanup,agentabc,mini,setup,agentph,grade,record,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
