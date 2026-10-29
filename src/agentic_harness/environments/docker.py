@@ -75,14 +75,14 @@ class DockerEnvironment(Environment):
         stdout, stderr = _decode(out[:MAX_OUTPUT]), _decode(err[:MAX_OUTPUT])
         if timed_out:
             return ExecResult(-1, stdout, stderr, timed_out=True, truncated=truncated)
-        # docker's own failures look like a command's (exit 1/126/127), so tell them apart by its messages
-        # (which it prints on stderr or, for OCI errors, stdout)
-        message = stderr or stdout
+        # docker's own failures look like a command's (exit 1/126/127). Raise DockerError (-> infra_error, excluded
+        # and retried) ONLY when the container is verifiably gone. Anything else, like a missing cwd or an OCI exec
+        # error, the agent can cause (delete /workspace, or just print a fake docker message), so it stays a normal
+        # failed command; otherwise an agent could turn a failing trial into an excluded one.
+        message = stderr or stdout  # docker prints on stderr or, for OCI errors, stdout
         if proc.returncode != 0 and message.startswith(("Error response from daemon", "OCI runtime exec failed")):
             if not self._alive():
                 raise DockerError("container is gone")
-            if "Error response from daemon" in message or "chdir" in message:
-                raise DockerError(f"docker exec failed: {message.strip()}")
         return ExecResult(proc.returncode, stdout, stderr, truncated=truncated)
 
     def write_file(self, path: str, content: str | bytes) -> None:

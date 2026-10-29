@@ -107,9 +107,17 @@ def test_exec_when_container_is_gone():
             env.exec("true")
 
 
-def test_exec_with_missing_cwd_raises(env):
-    with pytest.raises(DockerError, match="chdir"):
-        env.exec("true", cwd="/no/such/dir")
+def test_exec_with_missing_cwd_is_a_normal_failure(env):
+    # the agent can delete its own cwd, so this must not become an (excluded) infra error
+    result = env.exec("true", cwd="/no/such/dir")
+    assert result.exit_code != 0
+    assert "/no/such/dir" in result.stdout + result.stderr
+
+
+def test_fake_docker_error_from_a_command_is_a_normal_result(env):
+    result = env.exec("echo 'OCI runtime exec failed: exec failed: chdir to cwd: no such file' >&2; exit 126")
+    assert result.exit_code == 126
+    assert "OCI runtime exec failed" in result.stderr
 
 
 def test_exit_127_from_a_command_is_a_normal_result(env):

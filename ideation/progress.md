@@ -25,9 +25,9 @@ flowchart TB
     d_sleep["Container keep-alive: sleep timeout+margin"]
     d_same["Grade in same trial container"]
     d_pre["Pre-grade: kill agent procs, late copy, restore tests, install deps"]
-    d_out["Outcome: graded / grader_error / error / unsupported, error = infra, retried"]
+    d_out["Outcome: graded / grader_error / infra_error / unsupported, infra_error = infra, retried (renamed from error 2026-10-29)"]
     d_score["Score → number: Inspect-style default, per-benchmark override"]
-    q_out["OPEN: grader_error counts as 0 or excluded? rename error → infra_error?"]
+    q_out["OPEN: grader_error counts as 0 or excluded? (leaning: exclude, report prominently)"]
     d_logs["Exec output streamed to host artifacts"]
     d_deps["Grader deps installed at grade time"]
     d_turns["Turn model (benchmark-driven turns)"]
@@ -88,7 +88,7 @@ flowchart TB
     enqueue["harness run enqueues"]
     claim["Atomic claim + lease"]
     worker["harness worker --concurrency N"]
-    retry["Retry policy: retry error only"]
+    retry["Retry policy: retry infra_error only"]
     q_setup["OPEN: who calls Benchmark.setup() in queue mode? (one worker claims a per-run setup step)"]
   end
 

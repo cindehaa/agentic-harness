@@ -45,6 +45,7 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | 4 | Every container gets `--label agentic-harness=1` and name `harness-<8 hex>` | Leftovers are easy to find and remove |
 | 5 | `/workspace` is the working directory (`-w`, created at start) and `exec`'s default cwd | One predictable place for task files |
 | 6 | No CPU/memory limits yet | Not needed until we run many trials at once |
+| 7 | `DockerError` (→ `infra_error`) only when the container is verifiably gone (`_alive()` check); anything the agent can cause (bad cwd, OCI exec error, a printed fake docker message) stays a normal command failure | Prevents gaming failures into excluded trials |
 
 **Caveat:** on an `exec` timeout we kill the `docker exec` client, which does NOT kill
 the process inside the container. Leftover processes are killed before grading
@@ -54,5 +55,6 @@ the process inside the container. Leftover processes are killed before grading
 - A timed-out `exec` keeps running inside the container until the pre-grade `kill -9 -1`.
 - The first `docker pull` can hang silently in sandboxed shells → pre-pull images once per run.
 - `download()` copies symlinks as symlinks, so a link the agent planted can point at a host path when read later.
+- DockerError (→ infra_error) only when the container is verifiably gone; anything the agent can cause stays a normal command failure (prevents gaming failures into excluded trials). Remaining hole: if the agent itself kills the container, that still reads as infra.
 
 Dropped: `LocalEnvironment` (2026-10-29) — Docker starts in ~1s, and a fake local world behaves differently from real containers (e.g. has python where alpine doesn't, needs `/workspace` path mapping) and is extra code to explain.

@@ -69,7 +69,8 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 **Done when:** a completed run can be inspected entirely from the DB + files after the process exits.
 
 - **OPEN:** `harness status --run_id X` shows one run, and bare `harness status` lists active runs (the brief says "viewing active runs").
-- **OPEN (from the outcome model):** whether `grader_error` counts as 0 or is excluded from accuracy; whether `error` is renamed `infra_error`.
+- **OPEN (from the outcome model):** whether `grader_error` counts as 0 or is excluded from accuracy. Leaning: exclude grader_error from accuracy and report it prominently — a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare.
+- **DECIDED (2026-10-29):** `error` is renamed `infra_error`; statuses are `graded`, `grader_error`, `infra_error`, `unsupported`.
 **Explain-back:** Why an attempts table? What's in the DB vs on disk, and why? How is accuracy computed when some trials errored?
 
 ## Phase 5 — Queue + workers (Part 2)
@@ -79,7 +80,7 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 | `harness run` enqueues and returns a run_id immediately | Claude |
 | Atomic claim query + leases/heartbeat | You |
 | `harness worker --concurrency N` (process pool / threads) | Claude, you review closely |
-| Retry policy: retry only `error` (infra); `graded` / `grader_error` / `unsupported` are final; max attempts, backoff | You |
+| Retry policy: retry only `infra_error`; `graded` / `grader_error` / `unsupported` are final; max attempts, backoff | You |
 
 **Done when:** submit 3 runs back to back, start 2 workers, all finish; `kill -9` a worker mid-trial and its trial gets re-queued and completes.
 

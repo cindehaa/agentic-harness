@@ -224,16 +224,18 @@ A trial ends with one `Outcome`. Its status is exactly one of:
 |---|---|---|---|
 | `graded` | Normal: the grader ran and returned a `Score` | counts (its score) | no |
 | `grader_error` | The agent ran, then the grader crashed or its output was unparseable (usually the agent broke the world) | **OPEN** (see below) | no |
-| `error` | Harness/infra failure (container died, image pull failed) | excluded | yes, per retry policy |
+| `infra_error` | Harness/infra failure (container died, image pull failed) | excluded | yes, per retry policy |
 | `unsupported` | The agent can't handle the task's content (e.g. a `File` it can't read, multi-turn without resume) | excluded; reported separately | no |
 
 - `grader_error` trials are **flagged in the results** (grader stderr saved as
   an artifact), so humans can spot real grader bugs among them.
 - A non-JSON-serializable `Score.value` also gives `grader_error`.
 - **OPEN (pending decision): how `grader_error` counts.** Proposal: as 0
-  (it's usually the agent's fault); alternative: excluded, like `error`.
-- **OPEN: `error` may be renamed `infra_error`** for clarity (it is never the
-  agent's fault).
+  (it's usually the agent's fault); alternative: excluded, like `infra_error`.
+  Leaning: exclude grader_error from accuracy and report it prominently — a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare.
+- **DECIDED (2026-10-29): `error` is renamed `infra_error`** for clarity (it is
+  never the agent's fault). The statuses are `graded`, `grader_error`,
+  `infra_error`, `unsupported`.
 
 **Score → number for aggregation.** Inspect-style default conversion:
 `True`/`"C"` → 1.0, `"P"` → 0.5, `False`/`"I"`/`"N"` → 0.0, int/float as-is.
