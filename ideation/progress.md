@@ -1,8 +1,8 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 1: `PythonTasks` adapter + oracle tests (`BashOperations` adapter green).
-**Next:** Phase 3: trial runner.
+**Now:** Phase 3 design: agent adapter + trial runner (`BashOperations` + `PythonTasks` adapters and oracle tests green).
+**Next:** Phase 3: build the trial runner.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
@@ -18,7 +18,7 @@ flowchart TB
     read["Read benchmark scripts + DockerEnvironment"]
   end
 
-  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md, security.md)"]
+  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md, security.md, fidelity-vs-integrity.md)"]
     direction LR
     d_own["Harness owns containers; agents get Environment handle"]
     d_db["Only harness writes DB"]
@@ -28,6 +28,7 @@ flowchart TB
     d_out["Outcome: graded / grader_error / infra_error / unsupported, infra_error = infra, retried (renamed from error 2026-10-29)"]
     d_score["Score → number: Inspect-style default, per-benchmark override"]
     d_grerr["grader_error excluded from accuracy, reported prominently (count + list); accuracy = mean over graded only (2026-10-29)"]
+    d_tamper["Tamper detection (flag only): protected_files + integrity.py → modified_protected_files, scores unchanged (fidelity-vs-integrity.md)"]
     d_logs["Exec output streamed to host artifacts"]
     d_deps["Grader deps installed at grade time"]
     d_turns["Turn model (benchmark-driven turns)"]
@@ -164,6 +165,8 @@ flowchart TB
   d_out -.-> retry
   d_score -.-> results
   d_grerr -.-> results
+  d_tamper -.-> pyad
+  d_tamper -.-> record
   q_agent -.-> runsync
   q_status -.-> status
   q_setup -.-> enqueue
@@ -185,11 +188,10 @@ flowchart TB
   classDef open fill:#ececec,stroke:#999,color:#555,stroke-dasharray:4 3
 
   class repo,base,notes,cmd,ex,read done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr,d_tamper done
   class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
   class q_agent,q_status,q_setup open
-  class reg,bashad done
-  class pyad,oracle wip
-  class startenv,agentph,grade,record next
-  class tasks,hcleanup,agentabc,mini,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class reg,bashad,pyad,oracle done
+  class agentabc,startenv,agentph,grade,record next
+  class tasks,hcleanup,mini,fb,runsync,truns,ttrials,tatt,tev,tart,traj,files,status,results,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
