@@ -21,7 +21,8 @@
 |---|---|
 | Docker unreachable, or container vanished | `infra_error` |
 | `OOMKilled: true` | `infra_error` for now (no per-container memory limit yet). Revisit when limits exist: then exceeding our limit is the agent's failure |
-| Exited for any other reason (a process inside killed the main process) | `graded`, failed ("container died during agent turn") |
+| Exited with code 0: the keep-alive `sleep` ended on its own, i.e. its lifetime ran out (2026-10-29 audit) | `infra_error` (we sized it) |
+| Exited with a non-zero code (a process inside killed the main process) | `graded`, failed ("container died during agent turn") |
 | Container died before the agent's turn | `infra_error` |
 | Pre-grade kill or grading hits `DockerError` | re-check `docker inspect`: exited → `graded`, failed (the agent killed PID 1 just before handing back); otherwise `infra_error` |
 
@@ -31,7 +32,7 @@ for a future `harness cleanup`.
 
 ## Trial runner flow
 
-1. Start the container (`lifetime_s` = trial timeout + margin).
+1. Start the container (`lifetime_s` = 3 × trial timeout + 600 s margin).
 2. `run_agent` with the wrapped session (logs turns, enforces the deadline, builds the transcript).
 3. Container died? Apply rule 6.
 4. Kill leftover agent processes.
@@ -49,7 +50,7 @@ for a future `harness cleanup`.
 - **`Unsupported`:** mini raises it for any non-`Text` content.
 - **`AgentLimitation`** (`agents/base.py`): the agent itself can't go on. mini raises it for litellm `ContextWindowExceededError` / `ContentPolicyViolationError`; the runner ends the turns and grades the world as it is (like a timeout), reason in `agent_exit_status`.
 - **Any other exception** from the agent or harness (e.g. a model API auth error, provider down, rate limit after mini's retries) → `infra_error` with the traceback. All error paths: `errors.md`.
-- **Container `lifetime_s`** = trial timeout + 600 s grading margin.
+- **Container `lifetime_s`** = 3 × trial timeout + 600 s grading margin (was trial timeout + 600 s; made generous in the 2026-10-29 audit, so it never ends before the trial does).
 - **Trace on disk (Phase 4+5):** the recording session appends each event to `events.jsonl` (redacted) as it happens and calls the worker after each turn, which loads the file into the `events` table; `outcome.json` / `transcript.json` are written atomically and redacted, and every file in the attempt folder (e.g. mini's `trajectory.json`) is redacted after the trial.
 - **Score checks:** a non-JSON `Score.value`, or one `score_to_float` can't convert → `grader_error`.
 

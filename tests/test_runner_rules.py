@@ -116,3 +116,14 @@ def test_environment_lost_while_still_running_is_infra_error(tmp_path):
 
     outcome, env = run(act, tmp_path)
     assert (outcome.status, outcome.error) == ("infra_error", "EnvironmentLost: backend unreachable") and env.stopped
+
+
+def test_keep_alive_ending_normally_is_infra_error(tmp_path):
+    # exit code 0: the keep-alive's lifetime ran out, the harness sized it too short; not the agent's doing
+    outcome, _ = run(die(running=False, exit_code=0, oom_killed=False), tmp_path)
+    assert (outcome.status, outcome.error) == ("infra_error", "container lifetime expired")
+
+
+def test_container_lifetime_is_several_times_the_trial_timeout(tmp_path):
+    _, env = run(write_ok, tmp_path, Limits(trial_timeout_s=100))
+    assert env.lifetime_s >= 3 * 100

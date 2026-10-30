@@ -29,7 +29,8 @@ flowchart TB
 
   check{"after the turn: env.state() (Docker: docker inspect)"}
   check -->|"None (vanished, Docker unreachable) or OOMKilled"| IE3
-  check -->|"exited (not Running)"| GF
+  check -->|"exited, exit code 0: the keep-alive's lifetime (3 x trial timeout + 600 s) ran out"| IE3
+  check -->|"exited, non-zero exit code: something inside killed the main process"| GF
   check -->|"Running, but the turn raised EnvironmentLost"| IE3
   check -->|"Running"| kill["env.kill_agent_processes()"]
 
@@ -37,7 +38,8 @@ flowchart TB
   kill -->|"EnvironmentLost"| recheck
   grade -->|"EnvironmentLost"| recheck{"env.state() again (the agent may have killed PID 1 just before handing back)"}
   recheck -->|"None or OOMKilled"| IE3
-  recheck -->|"exited"| GF
+  recheck -->|"exited, exit code 0"| IE3
+  recheck -->|"exited, non-zero"| GF
   recheck -->|"Running"| IE3
   grade -->|"GraderSetupError: installing the grader's deps failed (e.g. apk add, no network)"| IE4["infra_error (grader setup)"]
   grade -->|"GraderError: grader crashed, unparseable output"| GE["grader_error"]

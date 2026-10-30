@@ -70,6 +70,6 @@ the process inside the container. Leftover processes are killed before grading
 
 **Phase 3** (decided 2026-10-29, `agents-and-runner.md`; `--rm` dropped and `state()` added, decisions 8-9 above):
 - Drop `--rm` from `docker run` so a container that dies during the agent's turn can be `docker inspect`ed: vanished / Docker unreachable / `OOMKilled` → `infra_error`; exited otherwise → `graded`, failed. `stop()` still removes the container; expired containers are found by label for a future `harness cleanup`.
-- `lifetime_s` = trial timeout + margin instead of the fixed 7200 s default.
+- `lifetime_s` = 3 × trial timeout + 600 s margin (2026-10-29 audit; was timeout + margin) instead of the fixed 7200 s default. A keep-alive that exits with code 0 ran out of lifetime → `infra_error`.
 
 Dropped: `LocalEnvironment` (2026-10-29) — Docker starts in ~1s, and a fake local world behaves differently from real containers (e.g. has python where alpine doesn't, needs `/workspace` path mapping) and is extra code to explain.

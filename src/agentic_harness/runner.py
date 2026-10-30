@@ -14,7 +14,10 @@ from agentic_harness.environments.base import Environment, EnvironmentFactory, E
 from agentic_harness.redact import redact, redact_file
 from agentic_harness.types import Limits, Message, Outcome, Score, Task
 
-GRADE_MARGIN_S = 600  # the container outlives the trial deadline by this much, so grading has time to finish
+# The container's keep-alive runs this long: generous, so it never ends before the trial does (if it does, that is
+# infra_error, not the agent's doing). It is still a self-destruct timer if the harness dies.
+LIFETIME_FACTOR = 3  # times the trial timeout
+GRADE_MARGIN_S = 600  # plus time for grading to finish
 
 
 class TurnLimit(Exception):
@@ -64,7 +67,7 @@ def run_trial(
     began = time.monotonic()
     session: RecordingSession | None = None
     try:
-        with env_factory(task.image, int(limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
+        with env_factory(task.image, int(LIFETIME_FACTOR * limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
             inner = agent.start(env, attempt_dir, limits)
             session = RecordingSession(inner, limits.max_turns, attempt_dir / "events.jsonl", on_turn_end)
             outcome = _agent_turns(benchmark, task, env, session)
@@ -112,10 +115,13 @@ def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
     state = env.state()
     if state is None or state.oom_killed:  # gone, Docker unreachable, or out of memory (no limit of ours yet)
         return Outcome("infra_error", error=f"container lost: {state}")
-    if not state.running:  # something inside killed the main process: the agent's doing
-        score = Score(False, "container died during agent turn", {"state": state})
-        return Outcome("graded", score, benchmark.score_to_float(score))
-    return None
+    if state.running:
+        return None
+    if state.exit_code == 0:  # the keep-alive ended on its own: its lifetime ran out, which is ours to size
+        return Outcome("infra_error", error="container lifetime expired")
+    # something inside killed the main process (non-zero exit): the agent's doing
+    score = Score(False, "container died during agent turn", {"state": asdict(state)})
+    return Outcome("graded", score, benchmark.score_to_float(score))
 
 
 def _grade(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession) -> Outcome:

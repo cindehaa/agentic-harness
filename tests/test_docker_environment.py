@@ -212,3 +212,10 @@ def test_kill_agent_processes_keeps_container_alive():
 
 def test_docker_error_is_the_backend_neutral_environment_lost():
     assert issubclass(DockerError, EnvironmentLost)  # the runner only knows EnvironmentLost
+
+
+def test_state_after_lifetime_expires_is_exit_code_0():
+    with DockerEnvironment(IMAGE, lifetime_s=1) as env:
+        while env.state().running:
+            time.sleep(0.2)
+        assert env.state().exit_code == 0  # how the runner tells "lifetime ran out" from "killed"
