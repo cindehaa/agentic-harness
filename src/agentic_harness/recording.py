@@ -110,6 +110,9 @@ class RecordingEnvironment(Environment):
     def save_workspace(self, local: Path, max_bytes: int) -> bool:
         return self.env.save_workspace(local, max_bytes)
 
+    def attach_grader(self, image: str) -> Environment:
+        return self.env.attach_grader(image)
+
     def write_file(self, path: str, content: str | bytes) -> None:
         self.env.write_file(path, content)
 

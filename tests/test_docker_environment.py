@@ -246,7 +246,74 @@ def test_save_workspace_stops_at_the_cap(env, tmp_path):
     assert (tmp_path / "w.tar").stat().st_size == 100_000
 
 
-def test_save_workspace_of_a_deleted_workspace_is_oserror(env, tmp_path):
-    env.exec("rm -rf /workspace")
-    with pytest.raises(OSError, match="tar failed"):
-        env.save_workspace(tmp_path / "w.tar", 1000)
+def test_deleting_the_workspace_leaves_its_mount_point(env, tmp_path):
+    env.exec("rm -rf /workspace")  # empties the volume; the mount point itself can't be removed
+    assert env.save_workspace(tmp_path / "w.tar", 10_000_000) is False
+    with tarfile.open(tmp_path / "w.tar") as tar:
+        assert [m.name for m in tar.getmembers()] == ["."]
+
+
+def test_save_workspace_of_a_missing_folder_is_oserror(env, tmp_path):
+    env.workdir = "/no/such/dir"
+    try:
+        with pytest.raises(OSError, match="tar failed"):
+            env.save_workspace(tmp_path / "w.tar", 1000)
+    finally:
+        env.workdir = "/workspace"
+
+
+def _volumes() -> str:
+    return subprocess.run(["docker", "volume", "ls", "-q", "--filter", "label=agentic-harness=1"],
+                          capture_output=True, text=True).stdout
+
+
+def test_workspace_is_a_volume_that_keeps_the_image_files_and_is_removed_on_stop():
+    tag = "harness-test-workspace"
+    dockerfile = b"FROM alpine:latest\nRUN mkdir /workspace && echo baked > /workspace/f.txt\n"
+    subprocess.run(["docker", "build", "-t", tag, "-"], input=dockerfile, capture_output=True, check=True)
+    try:
+        with DockerEnvironment(tag) as env:
+            volume = env.volume
+            assert volume in _volumes()
+            assert env.read_file("f.txt") == b"baked\n"  # Docker copies the image's files into a new volume
+        assert volume not in _volumes()
+    finally:
+        subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
+
+
+def test_attached_grader_sees_the_workspace_a_live_service_and_the_processes():
+    with DockerEnvironment(IMAGE) as env:
+        env.write_file("answer.txt", "42")
+        env.exec("mkdir /trial-only && (while true; do echo up | nc -l -p 8080; done) > /dev/null 2>&1 &")  # a live service
+        with env.attach_grader(IMAGE) as grader:
+            assert grader.read_file("/workspace/answer.txt") == b"42"
+            assert grader.exec("nc -w 2 localhost 8080 < /dev/null").stdout == "up\n"  # the trial's network
+            assert "nc -l -p 8080" in grader.exec("ps").stdout  # the trial's processes
+            grader.write_file("/workspace/from-grader.txt", "x")  # shared both ways
+            assert grader.exec("test -e /trial-only").exit_code != 0  # only the workspace is shared, not the filesystem
+        assert env.read_file("from-grader.txt") == b"x"
+        assert env.state().running  # stopping the grader leaves the trial up
+
+
+def test_attached_grader_has_the_trial_limits():
+    with DockerEnvironment(IMAGE, limits=Limits(memory="256m", cpus=0.5, pids_limit=64)) as env:
+        with env.attach_grader(IMAGE) as grader:
+            host = json.loads(subprocess.run(["docker", "inspect", "-f", "{{json .HostConfig}}", grader.container_id],
+                                             capture_output=True, check=True).stdout)
+    assert (host["Memory"], host["NanoCpus"], host["PidsLimit"]) == (256 * 2**20, 500_000_000, 64)
+
+
+def test_stopping_the_trial_removes_its_grader_and_volume():
+    env = DockerEnvironment(IMAGE)
+    env.start()
+    grader = env.attach_grader(IMAGE)
+    grader.start()  # never stopped on its own, e.g. the runner crashed mid-grade
+    ids, volume = (env.container_id, grader.container_id), env.volume
+    env.stop()
+    assert all(_listed(i) == "" for i in ids) and volume not in _volumes()
+
+
+def test_grader_that_fails_to_start_is_environment_lost():
+    with DockerEnvironment(IMAGE) as env:
+        with pytest.raises(EnvironmentLost):
+            env.attach_grader("harness-no-such-image:nope").start()

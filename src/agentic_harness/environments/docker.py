@@ -24,7 +24,8 @@ class DockerError(EnvironmentLost):
 
 
 class DockerEnvironment(Environment):
-    """One long-lived container. The workspace lives only inside it (no bind mount); use download() to get files out."""
+    """One long-lived container. The workspace is a Docker volume of its own (not a host folder), so an attached
+    grader can share it; use download() or save_workspace() to get files out."""
 
     def __init__(self, image: str, lifetime_s: int = 7200, limits: Limits = Limits(), workdir: str = "/workspace") -> None:
         super().__init__(image)
@@ -32,36 +33,60 @@ class DockerEnvironment(Environment):
         self.lifetime_s = lifetime_s  # the container's main process is `sleep lifetime_s`: a self-destruct timer if the harness dies
         self.workdir = workdir  # default cwd for exec; relative paths resolve here
         self.container_id: str | None = None
+        self.volume: str | None = None  # the workspace volume, removed in stop(); None for an attached grader
         self.sleep_pid: str | None = None  # the main `sleep` (child of the init, PID 1); kill_agent_processes spares it
+        self.attached_to: str | None = None  # set by attach_grader(): the trial container this one shares a world with
+        self.graders: list[DockerEnvironment] = []  # attached to this one; stopped before it, or its volume stays in use
 
     def start(self) -> None:
         name = f"harness-{uuid.uuid4().hex[:8]}"
         try:
+            if self.attached_to is None:
+                # A named volume starts with the image's own /workspace files (Docker copies them in on first use)
+                _docker("volume", "create", "--label", LABEL, name)
+                self.volume = name
+                world = ["-v", f"{name}:{self.workdir}"]
+            else:
+                # The trial's workspace volume, its network (localhost is the trial's) and its processes
+                t = self.attached_to
+                world = ["--volumes-from", t, "--network", f"container:{t}", "--pid", f"container:{t}"]
             # No --rm: a container that dies mid-trial must stay inspectable (state()); stop() removes it.
             # --init: sleep as PID 1 would never reap zombies.
             # --entrypoint: images with their own ENTRYPOINT would otherwise wrap our sleep.
             result = _docker(
-                "run", "-d", "--init", "--label", LABEL, "--name", name, "-w", self.workdir,
+                "run", "-d", "--init", "--label", LABEL, "--name", name, "-w", self.workdir, *world,
                 "--memory", self.limits.memory, "--cpus", str(self.limits.cpus), "--pids-limit", str(self.limits.pids_limit),
                 "--entrypoint", "sleep", self.image, str(self.lifetime_s),
                 timeout=START_TIMEOUT,
             )
             self.container_id = result.stdout.decode().strip()
-            _docker("exec", self.container_id, "mkdir", "-p", self.workdir)
-            self.sleep_pid = _decode(_docker("exec", self.container_id, "cat", "/proc/1/task/1/children").stdout).split()[0]
+            if self.attached_to is None:  # in an attached grader, PID 1 is the trial's init
+                _docker("exec", self.container_id, "mkdir", "-p", self.workdir)
+                self.sleep_pid = _decode(_docker("exec", self.container_id, "cat", "/proc/1/task/1/children").stdout).split()[0]
         except BaseException:
             # __exit__ won't run if start() fails; the name is known even if `run` never returned an id
             _rm(name)
             self.container_id = None
+            self._remove_volume()
             raise
 
     def stop(self) -> None:
-        """Remove the container. Safe to call twice or before start()."""
+        """Remove attached graders, then the container and its workspace volume. Safe to call twice or before start()."""
+        for grader in self.graders:
+            grader.stop()
         if self.container_id is None:
             return
         _rm(self.container_id)
         self.container_id = None
         self.sleep_pid = None
+        self._remove_volume()
+
+    def attach_grader(self, image: str) -> "DockerEnvironment":
+        """`--volumes-from`, `--network container:`, `--pid container:` this container, same lifetime and limits."""
+        grader = DockerEnvironment(image, self.lifetime_s, self.limits, self.workdir)
+        grader.attached_to = self._id()
+        self.graders.append(grader)
+        return grader
 
     def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None) -> ExecResult:
         argv = ["sh", "-c", cmd] if isinstance(cmd, str) else cmd
@@ -176,6 +201,16 @@ class DockerEnvironment(Environment):
             raise DockerError("not started")
         return self.container_id
 
+    def _remove_volume(self) -> None:
+        """Best effort, like _rm: a volume still in use by a container is left (found later by its label)."""
+        if self.volume is None:
+            return
+        try:
+            _docker("volume", "rm", "-f", self.volume, check=False)
+        except DockerError:
+            pass
+        self.volume = None
+
     def _alive(self) -> bool:
         result = _docker("inspect", "-f", "{{.State.Running}}", self._id(), check=False)
         return result.returncode == 0 and result.stdout.strip() == b"true"
@@ -184,6 +219,12 @@ class DockerEnvironment(Environment):
 def build_image(dockerfile: str, context: Path, tag: str) -> None:
     """Build `tag` from Dockerfile text (sent on stdin) with `context` as the build folder."""
     _docker("build", "-t", tag, "-f", "-", str(context), input=dockerfile.encode(), timeout=BUILD_TIMEOUT)
+
+
+def ensure_image(image: str) -> None:
+    """Pull `image` unless it is already local, so later trials need no network to start it (e.g. a grader image)."""
+    if _docker("image", "inspect", image, check=False).returncode != 0:
+        _docker("pull", image, timeout=BUILD_TIMEOUT)
 
 
 def _docker(

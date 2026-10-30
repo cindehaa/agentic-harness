@@ -12,8 +12,8 @@ benchmarks and agents only get a handle.
 
 | Caller | Methods |
 |---|---|
-| Trial runner | `start` / `stop` (via `with env:`) |
-| Benchmark (`run_agent`, `grade`) | `write_file`, `read_file`, `upload`, `download`, `exec` |
+| Trial runner | `start` / `stop` (via `with env:`), `attach_grader` (2026-10-29) |
+| Benchmark (`run_agent`, `grade`) | `write_file`, `read_file`, `upload`, `download`, `exec`; `grade` gets the attached grader and the trial's world |
 | Agent adapter | `exec`, through a `RecordingEnvironment` that traces every command into `events.jsonl` (2026-10-29 audit) |
 
 ## Decisions
@@ -35,8 +35,9 @@ benchmarks and agents only get a handle.
 | 8 | `state() -> EnvironmentState | None` (running, exit code, OOM-killed; None = gone) and `kill_agent_processes()` are on the ABC | The runner's container-death rule and pre-grade kill work for any backend |
 | 9 | `EnvironmentLost` (in `base.py`) is the backend-neutral "the world is gone" error; `DockerError` subclasses it | The runner catches `EnvironmentLost` and never imports Docker |
 | 10 | The runner takes an `EnvironmentFactory` = `(image, lifetime_s, limits) -> Environment`; the worker injects `DockerEnvironment` (its constructor is one) | The runner is testable with a fake environment (`tests/test_runner_rules.py`, no Docker) |
-| 11 | `build_image(dockerfile, context, tag)` is exported by the `environments` package as the image-building port; benchmarks import it from there, never from `docker.py` | Benchmarks name images, not a container backend |
+| 11 | `build_image(dockerfile, context, tag)` is exported by the `environments` package as the image-building port; benchmarks import it from there, never from `docker.py`. `ensure_image(image)` (2026-10-29) pulls an image only if it isn't local (a benchmark's `setup()` pre-pulls its grader image) | Benchmarks name images, not a container backend |
 | 12 | `save_workspace(local, max_bytes) -> truncated`: the working directory as a tar file, streamed out (Docker: `tar` via `docker exec`), capped (the runner uses 50 MB), never unpacked on the host | Integrity evidence (`fidelity-vs-integrity.md`) without `download()`'s symlink hazard |
+| 13 | `attach_grader(image) -> Environment` (2026-10-29): a second, not-yet-started world from `image` that shares this one's workspace, network and processes, with the same limits; stopped with this world at the latest (`environment-and-grading.md` #7) | Grading needs the grader's own tools *and* the evidence (files, live services, processes); the port says what is shared, not how |
 
 ## Prior art
 
@@ -50,7 +51,7 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | # | Decision | Why |
 |---|---|---|
 | 1 | Drive the `docker` CLI via `subprocess` | No docker SDK dependency; same approach as mini-swe-agent |
-| 2 | No bind mount; the workspace lives only in the container | Callers use `download()` to get it out |
+| 2 | No bind mount; the workspace is a Docker named volume per trial container (2026-10-29; was: only in the container's own filesystem), created at `start()` with label `agentic-harness=1`, removed in `stop()`. A new volume starts with the image's own `/workspace` files (Docker copies them in) | An attached grader can share it (`--volumes-from`); callers still use `download()` / `save_workspace()` to get it out. Side effect: `rm -rf /workspace` only empties it, the mount point stays |
 | 3 | Main process is `sleep <lifetime_s>` (default 7200) | Keeps the container alive; self-destruct timer if the harness dies |
 | 4 | Every container gets `--label agentic-harness=1` and name `harness-<8 hex>` | Leftovers are easy to find and remove |
 | 5 | `/workspace` is the working directory (`-w`, created at start) and `exec`'s default cwd | One predictable place for task files |
@@ -58,6 +59,7 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | 7 | `DockerError` (→ `infra_error`) only when the container is verifiably gone (`_alive()` check); anything the agent can cause (bad cwd, OCI exec error, a printed fake docker message) stays a normal command failure | Prevents gaming failures into excluded trials |
 | 8 | No `--rm` (2026-10-29): a container that dies mid-trial stays until `stop()` removes it, so `state()` (`docker inspect`: `Status`, `Running`, `ExitCode`, `OOMKilled`; None = gone or Docker unreachable) can tell the runner why it died | Rule 6 in `agents-and-runner.md` needs the evidence |
 | 9 | `kill_agent_processes()` kills every process except PID 1 (the init) and the main `sleep` (its PID is read from `/proc/1/task/1/children` at start), via one pass over `/proc` | A plain `kill -9 -1` also kills the sleep, and `--init` exits when its child does: the container dies before grading (found while building it) |
+| 10 | `attach_grader(image)`: `docker run --volumes-from <trial> --network container:<trial> --pid container:<trial>` with the trial's `--memory` / `--cpus` / `--pids-limit` and lifetime, the same label; the trial's `stop()` stops its graders first (a volume in use can't be removed) | One Docker flag per thing shared; nothing is copied. Inside the grader, `localhost` and `ps` are the trial's |
 
 **Caveat:** on an `exec` timeout we kill the `docker exec` client, which does NOT kill
 the process inside the container. Leftover processes are killed before grading

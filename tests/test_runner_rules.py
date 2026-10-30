@@ -25,6 +25,7 @@ class FakeEnvironment(Environment):
         self.state_now: EnvironmentState | None = EnvironmentState(running=True, exit_code=0, oom_killed=False)
         self.lose_on_exec = False
         self.started = self.stopped = self.killed = False
+        self.graders: list[FakeEnvironment] = []
 
     def start(self): self.started = True
     def stop(self): self.stopped = True
@@ -39,6 +40,12 @@ class FakeEnvironment(Environment):
     def write_file(self, path, content): self.files[path] = content.encode() if isinstance(content, str) else content
     def read_file(self, path): return self.files[path]
     def upload(self, local, remote): ...
+
+    def attach_grader(self, image):
+        grader = FakeEnvironment(image, self.lifetime_s, self.limits)
+        grader.files = self.files  # the shared workspace
+        self.graders.append(grader)
+        return grader
     def download(self, remote, local): ...
 
     def exec(self, cmd, timeout=60, cwd=None) -> ExecResult:

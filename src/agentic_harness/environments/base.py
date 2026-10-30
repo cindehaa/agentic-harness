@@ -68,6 +68,12 @@ class Environment(ABC):
         reach a host path). Stops at `max_bytes`; True if cut short. OSError if it can't be read."""
 
     @abstractmethod
+    def attach_grader(self, image: str) -> "Environment":
+        """A second world from `image`, attached to this one: it sees this world's workspace, network (e.g. a service
+        on localhost) and processes, with the same limits. Not started yet: use it as a context manager. It is
+        stopped with this world at the latest."""
+
+    @abstractmethod
     def write_file(self, path: str, content: str | bytes) -> None:
         """Create or overwrite one small file in the world from data in memory."""
 
