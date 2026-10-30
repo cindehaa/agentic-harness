@@ -21,6 +21,7 @@ CP_TIMEOUT = 600.0  # seconds; copies can be large
 BUILD_TIMEOUT = 1800.0  # seconds; builds may pull base images and run setup scripts
 MAX_OUTPUT = 1_000_000  # bytes kept per stream of one exec; the rest is read and thrown away
 LABEL = "agentic-harness=1"  # on every container we start, so leftovers are easy to find
+KILL_PASSES = 5  # kill_agent_processes: passes over /proc at most, so a fork loop can't keep it busy forever
 SERVICE_START_TIMEOUT = 60.0  # seconds for an attached service to listen on its port
 
 
@@ -167,8 +168,13 @@ class DockerEnvironment(Environment):
 
     def kill_agent_processes(self) -> None:
         """Kill every process except PID 1 (the init) and its `sleep`. Not `kill -9 -1`: that kills the sleep too,
-        and the init exits with it, taking the container down. One pass over /proc: a fork loop could slip through."""
-        script = 'for p in /proc/[0-9]*; do p=${p#/proc/}; [ "$p" = 1 ] || [ "$p" = "$1" ] || [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; true'
+        and the init exits with it, taking the container down. Repeated until a pass kills nothing: /proc is listed
+        once per pass, so a process forked after the listing (e.g. by a fork loop not yet killed) survives that pass."""
+        script = (
+            f'i=0; while [ $i -lt {KILL_PASSES} ]; do i=$((i+1)); n=0; '
+            'for p in /proc/[0-9]*; do p=${p#/proc/}; [ "$p" = 1 ] || [ "$p" = "$1" ] || [ "$p" = $$ ] || '
+            '{ kill -9 "$p" 2>/dev/null && n=$((n+1)); }; done; [ $n = 0 ] && break; done; true'
+        )
         self.exec(["sh", "-c", script, "sh", self.sleep_pid])
 
     def save_workspace(self, local: Path, max_bytes: int) -> bool:

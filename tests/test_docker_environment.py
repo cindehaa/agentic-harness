@@ -223,6 +223,16 @@ def test_kill_agent_processes_keeps_container_alive():
         assert env.state().running
 
 
+def test_kill_agent_processes_outlasts_a_fork_loop():
+    # One pass over /proc misses children forked after its listing; the loop below forks hundreds a second
+    with DockerEnvironment(IMAGE, limits=Limits(pids_limit=4096)) as env:
+        env.exec("(while :; do sleep 0.5 & done) > /dev/null 2>&1 &")
+        time.sleep(1)
+        env.kill_agent_processes()
+        assert "sleep 0.5" not in env.exec("ps -o args").stdout
+        assert env.state().running
+
+
 def test_docker_error_is_the_backend_neutral_environment_lost():
     assert issubclass(DockerError, EnvironmentLost)  # the runner only knows EnvironmentLost
 

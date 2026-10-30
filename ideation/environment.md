@@ -58,12 +58,12 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | 6 | Per-container limits from `Limits` (2026-10-29 audit): `--memory` (2g), `--cpus` (1.0), `--pids-limit` (512) | Many trials run at once; one agent must not starve the others or fork-bomb the host. OOM-killed under our limit = the agent's failure (`graded`) |
 | 7 | `DockerError` (→ `infra_error`) only when the container is verifiably gone (`_alive()` check); anything the agent can cause (bad cwd, OCI exec error, a printed fake docker message) stays a normal command failure | Prevents gaming failures into excluded trials |
 | 8 | No `--rm` (2026-10-29): a container that dies mid-trial stays until `stop()` removes it, so `state()` (`docker inspect`: `Status`, `Running`, `ExitCode`, `OOMKilled`; None = gone or Docker unreachable) can tell the runner why it died. `_end_reason()` translates: `Status` not `exited` → `UNKNOWN`; `OOMKilled` → `RESOURCE_LIMIT`; exit code 0 (the `sleep` ran its course) → `EXPIRED`; other exit codes → `KILLED` | Rule 6 in `agents-and-runner.md` needs the evidence |
-| 9 | `kill_agent_processes()` kills every process except PID 1 (the init) and the main `sleep` (its PID is read from `/proc/1/task/1/children` at start), via one pass over `/proc` | A plain `kill -9 -1` also kills the sleep, and `--init` exits when its child does: the container dies before grading (found while building it) |
+| 9 | `kill_agent_processes()` kills every process except PID 1 (the init) and the main `sleep` (its PID is read from `/proc/1/task/1/children` at start), via passes over `/proc` repeated until one kills nothing (at most 5; 2026-10-29: one pass missed 30-170 children of a fork loop, forked after `/proc` was listed) | A plain `kill -9 -1` also kills the sleep, and `--init` exits when its child does: the container dies before grading (found while building it) |
 | 10 | `attach_grader(image)`: `docker run --volumes-from <trial> --network container:<trial> --pid container:<trial>` with the trial's `--memory` / `--cpus` / `--pids-limit` and lifetime, the same label; the trial's `stop()` stops its graders first (a volume in use can't be removed) | One Docker flag per thing shared; nothing is copied. Inside the grader, `localhost` and `ps` are the trial's |
 
 **Caveat:** on an `exec` timeout we kill the `docker exec` client, which does NOT kill
 the process inside the container. Leftover processes are killed before grading
-(`kill_agent_processes()`); Phase 6 may harden this (one pass over `/proc` can miss a process that keeps forking).
+(`kill_agent_processes()`, repeated passes over `/proc`, so a fork loop can't outrun it).
 
 **Known gaps (Phase 6):**
 - A timed-out `exec` keeps running inside the container until the pre-grade `kill_agent_processes()`.
