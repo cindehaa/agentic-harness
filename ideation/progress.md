@@ -2,6 +2,7 @@
 
 **Last updated:** 2026-10-29
 **Now:** Phase 3 built: `harness run` runs end to end (live, Haiku: bash-operations 4/5, python-tasks 3/3, $0.005 total). Awaiting Cindy's line-by-line review.
+**Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
 **Next:** Phase 4: SQLite schema (`database.md`), recorder, `harness status` / `results`.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
@@ -66,6 +67,7 @@ flowchart TB
       d3_lim["Limits: deadline in command wrapper + mini cost/step + model-call timeout; 10 min, $1, 50 steps, 60 s/command; lifetime = timeout + margin"]
       d3_dead["Container death in agent turn: docker inspect decides infra_error vs graded-failed; drop --rm"]
       d3_files["Until DB: runs/run_id/trial_id/attempt-n/ (outcome, transcript, trajectory)"]
+      d3_errs["Error paths (errors.md): AgentLimitation (context full, model refused) → grade as is; provider/auth/unknown → infra_error; grading DockerError → re-check container state"]
     end
     agentsess["AgentSession stub (send)"]
     agentabc["Agent registry + adapters"]
@@ -186,6 +188,8 @@ flowchart TB
   d3_dead -.-> died
   d3_dead -.-> norm
   d3_files -.-> record
+  d3_errs -.-> TR
+  d3_errs -.-> retry
   dockenv --> norm
   q_status -.-> status
   d5_setup -.-> enqueue
@@ -209,7 +213,7 @@ flowchart TB
 
   class repo,base,notes,cmd,ex,read done
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr,d_integ done
-  class d3_reg,d3_host,d3_multi,d3_reply,d3_lim,d3_dead,d3_files done
+  class d3_reg,d3_host,d3_multi,d3_reply,d3_lim,d3_dead,d3_files,d3_errs done
   class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
   class q_status open
   class d4_schema,d5_setup done

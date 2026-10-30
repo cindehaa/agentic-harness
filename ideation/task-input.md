@@ -218,7 +218,8 @@ deferred to Phase 3.
 
 ### Outcome model (2026-10-29)
 
-A trial ends with one `Outcome`. Its status is exactly one of:
+A trial ends with one `Outcome`. Its status is exactly one of (every failure
+point and where it leads: [`errors.md`](errors.md)):
 
 | Status | When | Accuracy | Retried |
 |---|---|---|---|

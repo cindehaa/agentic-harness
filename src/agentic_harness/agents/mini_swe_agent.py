@@ -8,16 +8,20 @@ from pathlib import Path
 
 os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")  # mini prints a banner on import otherwise
 
+from litellm.exceptions import ContentPolicyViolationError, ContextWindowExceededError  # noqa: E402
 from minisweagent.agents.default import DefaultAgent  # noqa: E402
 from minisweagent.config import get_config_from_spec  # noqa: E402
 from minisweagent.exceptions import InterruptAgentFlow, LimitsExceeded, Submitted  # noqa: E402
 from minisweagent.models import get_model  # noqa: E402
 
-from agentic_harness.agents.base import Agent, AgentSession, Unsupported  # noqa: E402
+from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported  # noqa: E402
 from agentic_harness.environments.base import Environment  # noqa: E402
 from agentic_harness.types import Limits, Message, Text  # noqa: E402
 
 MODEL_TIMEOUT_S = 120  # one model call (litellm `timeout`); mini retries failed calls itself
+# litellm errors that mean the model itself can't go on (not our setup or the provider): grade the world as it is.
+# mini re-raises them as they are (after logging an "exit" message whose exit_status is the class name).
+LIMITATIONS = (ContextWindowExceededError, ContentPolicyViolationError)
 
 
 class TimeLimit(LimitsExceeded):
@@ -103,6 +107,8 @@ class MiniSweSession(AgentSession):
         try:
             # First turn: mini's own run() (its system + instance templates). Later turns continue the history.
             info = self.agent.resume(text) if self.agent.messages else self.agent.run(text)
+        except LIMITATIONS as e:
+            raise AgentLimitation(f"{type(e).__name__}: {e}") from e
         finally:  # recorded even if the agent crashed
             self.exit_status = self.agent.messages[-1].get("extra", {}).get("exit_status") if self.agent.messages else None
             self.cost_usd = self.agent.cost

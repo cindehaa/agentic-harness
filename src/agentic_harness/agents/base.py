@@ -12,6 +12,11 @@ class Unsupported(Exception):
     """The agent can't handle this message's content (e.g. a File) -> outcome unsupported."""
 
 
+class AgentLimitation(Exception):
+    """The agent itself couldn't continue (context window exceeded, model refused) -> its turns end and the world
+    is graded as it is, like a timeout. Not for our own setup or provider failures (those are infra_error)."""
+
+
 class AgentSession(ABC):
     """One live conversation with an agent, as a benchmark sees it.
 

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from agentic_harness.agents.base import Agent, AgentSession, Unsupported
+from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported
 from agentic_harness.agents.mini_swe_agent import MiniSweAgent
 
 # registry: name -> adapter class
@@ -19,4 +19,4 @@ def resolve_agent(name_or_path: str) -> type[Agent]:
     return AGENTS[name]
 
 
-__all__ = ["AGENTS", "Agent", "AgentSession", "MiniSweAgent", "Unsupported", "resolve_agent"]
+__all__ = ["AGENTS", "Agent", "AgentLimitation", "AgentSession", "MiniSweAgent", "Unsupported", "resolve_agent"]

@@ -6,7 +6,7 @@ import traceback
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from agentic_harness.agents.base import Agent, AgentSession, Unsupported
+from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError
 from agentic_harness.environments.docker import DockerEnvironment, DockerError
 from agentic_harness.types import Limits, Message, Outcome, Score, Task
@@ -78,25 +78,39 @@ def _agent_turns(benchmark: Benchmark, task: Task, env: DockerEnvironment, sessi
         benchmark.run_agent(task, session, env)
     except TurnLimit:
         pass  # the agent's turns are over; grade what it did
+    except AgentLimitation as e:  # the agent can't go on (context full, model refused): grade what it did, like a timeout
+        session.inner.exit_status = session.inner.exit_status or f"AgentLimitation: {e}"
     except DockerError as e:
         docker_error = e  # maybe the agent killed its own container: the evidence below decides
-    state = env.state()
-    if state is None or state["OOMKilled"]:  # gone, Docker unreachable, or out of memory (no limit of ours yet)
-        return Outcome("infra_error", error=f"container lost during the agent's turn: {state}")
-    if not state["Running"]:  # something inside killed the main process: the agent's doing
-        score = Score(False, "container died during agent turn", {"state": state})
-        return Outcome("graded", score, benchmark.score_to_float(score))
+    if died := _container_death(benchmark, env):
+        return died
     if docker_error:
         raise docker_error
     return None
 
 
+def _container_death(benchmark: Benchmark, env: DockerEnvironment) -> Outcome | None:
+    """Rule 6, from `docker inspect`: None if the container still runs, else how the trial ends."""
+    state = env.state()
+    if state is None or state["OOMKilled"]:  # gone, Docker unreachable, or out of memory (no limit of ours yet)
+        return Outcome("infra_error", error=f"container lost: {state}")
+    if not state["Running"]:  # something inside killed the main process: the agent's doing
+        score = Score(False, "container died during agent turn", {"state": state})
+        return Outcome("graded", score, benchmark.score_to_float(score))
+    return None
+
+
 def _grade(benchmark: Benchmark, task: Task, env: DockerEnvironment, session: RecordingSession) -> Outcome:
-    env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
     try:
+        env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         score = benchmark.grade(task, env, tuple(session.transcript))
     except GraderError as e:
         return Outcome("grader_error", error=str(e))
+    except DockerError:
+        # The agent may have killed PID 1 as its last act and the container exited only now: rule 6 again
+        if died := _container_death(benchmark, env):
+            return died
+        raise  # the container still runs: an infra problem
     try:
         json.dumps(score.value)  # the stored score must be JSON
         return Outcome("graded", score, benchmark.score_to_float(score))

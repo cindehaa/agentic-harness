@@ -6,12 +6,13 @@ import time
 from collections.abc import Callable
 
 import pytest
+from litellm.exceptions import AuthenticationError
 
-from agentic_harness.agents import Agent, AgentSession
+from agentic_harness.agents import Agent, AgentLimitation, AgentSession
 from agentic_harness.benchmarks import BashOperations, GraderError
-from agentic_harness.environments import Environment
+from agentic_harness.environments import DockerEnvironment, Environment
 from agentic_harness.runner import run_trial
-from agentic_harness.types import Limits, Message, Text, score_to_float
+from agentic_harness.types import Limits, Message, Score, Text, score_to_float
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -56,6 +57,14 @@ class BrokenGrader(BashOperations):
         raise GraderError("grader crashed")
 
 
+class FixedGrader(BashOperations):
+    def __init__(self, value) -> None:
+        self.value = value
+
+    def grade(self, task, env, transcript):
+        return Score(self.value)
+
+
 def test_oracle_agent_is_graded_true(tmp_path):
     outcome = run_trial(bench, ScriptedAgent(lambda env: env.exec("echo 'Hello World' > hello.txt")), TASK, Limits(), tmp_path)
     assert (outcome.status, outcome.score.value, outcome.score_float) == ("graded", True, 1.0)
@@ -77,6 +86,47 @@ def test_agent_that_kills_the_container_is_graded_false(tmp_path):
     outcome = run_trial(bench, ScriptedAgent(kill_container), TASK, Limits(), tmp_path)
     assert (outcome.status, outcome.score.value) == ("graded", False)
     assert outcome.score.explanation == "container died during agent turn"
+
+
+@pytest.mark.parametrize("docker_notices_late", [False, True])
+def test_agent_that_kills_the_container_without_waiting_is_graded_false(tmp_path, monkeypatch, docker_notices_late):
+    # the race: Docker may notice the exit only after the post-turn check, i.e. during the pre-grade kill or grading
+    if docker_notices_late:
+        real_state, checks = DockerEnvironment.state, []
+
+        def state(self):  # the first check after the turn still sees it running
+            checks.append(1)
+            return {**real_state(self), "Running": True} if len(checks) == 1 else real_state(self)
+
+        monkeypatch.setattr(DockerEnvironment, "state", state)
+    outcome = run_trial(bench, ScriptedAgent(lambda env: env.exec("kill 1")), TASK, Limits(), tmp_path)
+    assert (outcome.status, outcome.score.value) == ("graded", False)
+    assert outcome.score.explanation == "container died during agent turn"
+
+
+def test_agent_limitation_grades_the_world_as_it_is(tmp_path):
+    def act(env):
+        env.exec("echo 'Hello World' > hello.txt")
+        raise AgentLimitation("context window exceeded")
+
+    outcome = run_trial(bench, ScriptedAgent(act), TASK, Limits(), tmp_path)
+    assert (outcome.status, outcome.score.value) == ("graded", True)
+    assert outcome.agent_exit_status == "AgentLimitation: context window exceeded"
+
+
+def test_provider_auth_error_is_infra_error_with_traceback(tmp_path):
+    def act(env):
+        raise AuthenticationError("invalid x-api-key", llm_provider="anthropic", model="fake")
+
+    outcome = run_trial(bench, ScriptedAgent(act), TASK, Limits(), tmp_path)
+    assert outcome.status == "infra_error"
+    assert "Traceback" in outcome.error and "AuthenticationError" in outcome.error
+
+
+@pytest.mark.parametrize("value", [{"passed": True}, object()])  # no float conversion; not JSON
+def test_unusable_score_value_is_grader_error(tmp_path, value):
+    outcome = run_trial(FixedGrader(value), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path)
+    assert outcome.status == "grader_error" and "unusable score value" in outcome.error
 
 
 def test_grader_crash_is_grader_error(tmp_path):

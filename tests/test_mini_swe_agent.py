@@ -6,10 +6,11 @@ import os
 import time
 
 import pytest
+from litellm.exceptions import AuthenticationError, ContextWindowExceededError
 from minisweagent.exceptions import LimitsExceeded, Submitted
 from minisweagent.models.test_models import DeterministicToolcallModel, make_toolcall_output
 
-from agentic_harness.agents import MiniSweAgent, Unsupported, resolve_agent
+from agentic_harness.agents import AgentLimitation, MiniSweAgent, Unsupported, resolve_agent
 from agentic_harness.agents.mini_swe_agent import ContainerEnv, MiniAgent, MiniSweSession, TimeLimit
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, Message, Text
@@ -105,6 +106,36 @@ def test_non_text_content_is_unsupported(tmp_path):
     _, session = scripted_session([], tmp_path)
     with pytest.raises(Unsupported):
         session.send(Message("user", (File("/workspace/a.png", "image/png"),)))
+
+
+class FailingModel(DeterministicToolcallModel):
+    """A model whose every call raises `error` (no live API call)."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(outputs=[])
+        self.error = error
+
+    def query(self, messages, **kwargs):
+        raise self.error
+
+
+def failing_session(error: Exception, tmp_path) -> MiniSweSession:
+    _, cenv = wrapper()
+    agent = MiniAgent(FailingModel(error), cenv, system_template="sys", instance_template="{{task}}", output_path=tmp_path / "t.json")
+    return MiniSweSession(agent)
+
+
+def test_context_window_exceeded_is_an_agent_limitation(tmp_path):
+    session = failing_session(ContextWindowExceededError("too long", model="fake", llm_provider="anthropic"), tmp_path)
+    with pytest.raises(AgentLimitation):
+        session.send(Message("user", (Text("go"),)))
+    assert session.exit_status == "ContextWindowExceededError"
+
+
+def test_auth_error_is_not_an_agent_limitation(tmp_path):
+    session = failing_session(AuthenticationError("bad key", llm_provider="anthropic", model="fake"), tmp_path)
+    with pytest.raises(AuthenticationError):  # the runner turns it into infra_error
+        session.send(Message("user", (Text("go"),)))
 
 
 def test_resolve_agent_by_name_or_path():

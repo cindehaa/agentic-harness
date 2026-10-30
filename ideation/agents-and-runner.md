@@ -22,7 +22,8 @@
 | Docker unreachable, or container vanished | `infra_error` |
 | `OOMKilled: true` | `infra_error` for now (no per-container memory limit yet). Revisit when limits exist: then exceeding our limit is the agent's failure |
 | Exited for any other reason (a process inside killed the main process) | `graded`, failed ("container died during agent turn") |
-| Container died before or after the agent's turn | `infra_error` |
+| Container died before the agent's turn | `infra_error` |
+| Pre-grade kill or grading hits `DockerError` | re-check `docker inspect`: exited → `graded`, failed (the agent killed PID 1 just before handing back); otherwise `infra_error` |
 
 Consequence: drop `--rm` from `docker run` so a dead container can still be
 inspected. `stop()` still removes it. Expired containers are found by label
@@ -46,6 +47,7 @@ for a future `harness cleanup`.
 - **`Limits.max_turns` = 20** (new): the recording session raises `TurnLimit` past it; the runner then grades what the agent did.
 - **Model-call timeout:** 120 s per call (`MODEL_TIMEOUT_S`); mini retries failed calls itself.
 - **`Unsupported`:** mini raises it for any non-`Text` content.
-- **Any other exception** from the agent or harness (e.g. a model API auth error) → `infra_error` with the traceback.
+- **`AgentLimitation`** (`agents/base.py`): the agent itself can't go on. mini raises it for litellm `ContextWindowExceededError` / `ContentPolicyViolationError`; the runner ends the turns and grades the world as it is (like a timeout), reason in `agent_exit_status`.
+- **Any other exception** from the agent or harness (e.g. a model API auth error, provider down, rate limit after mini's retries) → `infra_error` with the traceback. All error paths: `errors.md`.
 - **Container `lifetime_s`** = trial timeout + 600 s grading margin.
 - **Score checks:** a non-JSON `Score.value`, or one `score_to_float` can't convert → `grader_error`.
