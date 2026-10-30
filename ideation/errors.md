@@ -10,10 +10,11 @@ Update this whenever error handling changes.
 ```mermaid
 flowchart TB
   setup["worker (first to claim runs.setup_claimed_by): Benchmark.setup(tasks) builds the images, once per run"]
-  setup -->|"raises"| abort["run failed; every trial done as infra_error, error = the setup failure (not retried)"]
+  setup -->|"raises"| abort["run failed (traceback + build log in runs/run/setup.log); every trial done as infra_error (not retried)"]
+  setup -->|"setup worker's lease expires"| setup
   setup --> claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
-  claim --> startenv["run_trial: DockerEnvironment.start()"]
-  claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost)"]
+  claim --> startenv["run_trial: DockerEnvironment.start() (attempt row + folder attempt-id created with the claim)"]
+  claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
   startenv -->|"DockerError: missing image, docker run fails, Docker down"| IE1
   startenv --> turns["benchmark.run_agent(task, session, env)"]
 
@@ -52,7 +53,7 @@ flowchart TB
   IE3 --> retry
   IE4 --> retry
   lost --> retry
-  retry -->|"yes: new attempt after 5 s x attempt number"| startenv
+  retry -->|"yes: back to pending, available_at = now + 5 s x attempt number"| claim
   retry -->|"no"| final["trial ends infra_error"]
 
   subgraph legend["Legend"]
@@ -109,5 +110,9 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
 - **Worker lost.** A worker renews its trial's lease every 30 s. If it is
   killed (or hangs) the lease expires after 120 s; the next worker to look
   closes the open attempt as `infra_error` ("worker lost") and re-queues the
-  trial (or ends it `infra_error` after 3 attempts). A late write from the lost
-  worker is ignored (its updates require that it still holds the claim).
+  trial (or ends it `infra_error` after 3 attempts). The lost attempt counts
+  toward the 3, so a trial that kills its worker every time still ends. A late
+  write from the lost worker is discarded: finishing an attempt is fenced on
+  `claimed_by` + `attempt_count` (`database.md` #19). The heartbeat retries a
+  renewal that hit "database is locked". Setup has the same lease: a dead
+  setup worker's run is re-claimed by another worker.
