@@ -12,15 +12,14 @@ def test_adapt_drafts_with_the_skill_then_validates(monkeypatch):
     calls = []
 
     def fake_run(argv, **kwargs):
-        calls.append(argv)
+        calls.append((argv, kwargs.get("input")))
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
     result = CliRunner().invoke(cli, ["adapt", "benchmarks/bash-operations", "--tasks", "2", "--name", "bash-copy"])
     assert result.exit_code == 0, result.output
-    draft, validate = calls
+    (draft, prompt), (validate, _) = calls
     assert draft[:2] == ["claude", "-p"]
-    prompt = draft[2]
     assert cli_module.SKILL.read_text() in prompt and "`benchmarks/bash-operations`" in prompt and "2 simple task(s)" in prompt
     assert draft[draft.index("--permission-mode") + 1] == "acceptEdits"
     tools = draft[draft.index("--allowedTools") + 1:draft.index("--disallowedTools")]

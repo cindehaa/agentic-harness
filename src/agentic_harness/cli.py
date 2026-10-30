@@ -237,12 +237,13 @@ def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None
     prompt = (f"{SKILL.read_text()}\n\n---\n\nAdd an adapter for the benchmark in `{folder}`, registered as "
               f"`{name}`. Adapt only {n_tasks} simple task(s) (few dependencies, quick to build and grade); "
               f"name them in the adapter. Follow the skill above exactly, and iterate until "
-              f"`.venv/bin/harness validate --benchmark {name}` passes. Do not commit.")
-    argv = ["claude", "-p", prompt, "--permission-mode", "acceptEdits", "--allowedTools", *ADAPT_TOOLS,
+              f"`.venv/bin/harness validate --benchmark {name}` passes. Do not commit. You run headless: nobody "
+              f"can answer questions, so make the most faithful choice and list it in your report.")
+    argv = ["claude", "-p", "--permission-mode", "acceptEdits", "--allowedTools", *ADAPT_TOOLS,
             "--disallowedTools", "WebFetch", "WebSearch", "--max-budget-usd", str(max_budget_usd),
             *(["--model", model] if model else [])]
     click.echo(f"Drafting the {name} adapter with Claude Code (budget ${max_budget_usd:.2f})...", err=True)
-    drafted = subprocess.run(argv, cwd=REPO_ROOT, stdin=subprocess.DEVNULL)
+    drafted = subprocess.run(argv, cwd=REPO_ROOT, input=prompt, text=True)  # on stdin: the skill starts with "---", an option to argv
     if drafted.returncode != 0:
         raise click.ClickException(f"Claude Code exited {drafted.returncode}")
     click.echo(f"\nValidating {name}...")
