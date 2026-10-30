@@ -216,6 +216,43 @@ def _verdict(check) -> str:
     return "-" if check.ok is None else ("ok" if check.ok else "FAIL")
 
 
+SKILL = REPO_ROOT / ".claude" / "skills" / "add-benchmark" / "SKILL.md"
+# What the drafting agent may do without asking: read anything, edit files in this repo (acceptEdits stays inside the
+# working directory), and run only validate, the tests and read-only docker/listing commands. No git, no web.
+ADAPT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash(.venv/bin/harness validate:*)",
+               "Bash(.venv/bin/python -m pytest:*)", "Bash(docker image inspect:*)", "Bash(docker images:*)", "Bash(ls:*)"]
+
+
+@cli.command()
+@click.argument("benchmark_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--tasks", "n_tasks", default=3, show_default=True, help="How many (simple) tasks to adapt")
+@click.option("--name", default=None, help="Registry name for the benchmark (default: the folder's name)")
+@click.option("--model", default=None, help="Model for Claude Code (default: its own)")
+@click.option("--max-budget-usd", default=3.0, show_default=True, help="Claude Code's spend limit")
+def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None, max_budget_usd: float):
+    """Draft an adapter for BENCHMARK_DIR with Claude Code (headless, following the add-benchmark skill), then run
+    `harness validate` on it. The draft needs human review before its scores are trusted."""
+    name = name or benchmark_dir.resolve().name
+    folder = benchmark_dir.resolve().relative_to(REPO_ROOT)  # inside this repo: the agent may edit only here
+    prompt = (f"{SKILL.read_text()}\n\n---\n\nAdd an adapter for the benchmark in `{folder}`, registered as "
+              f"`{name}`. Adapt only {n_tasks} simple task(s) (few dependencies, quick to build and grade); "
+              f"name them in the adapter. Follow the skill above exactly, and iterate until "
+              f"`.venv/bin/harness validate --benchmark {name}` passes. Do not commit.")
+    argv = ["claude", "-p", prompt, "--permission-mode", "acceptEdits", "--allowedTools", *ADAPT_TOOLS,
+            "--disallowedTools", "WebFetch", "WebSearch", "--max-budget-usd", str(max_budget_usd),
+            *(["--model", model] if model else [])]
+    click.echo(f"Drafting the {name} adapter with Claude Code (budget ${max_budget_usd:.2f})...", err=True)
+    drafted = subprocess.run(argv, cwd=REPO_ROOT, stdin=subprocess.DEVNULL)
+    if drafted.returncode != 0:
+        raise click.ClickException(f"Claude Code exited {drafted.returncode}")
+    click.echo(f"\nValidating {name}...")
+    # a new process: this one imported the benchmark registry before the adapter existed
+    checked = subprocess.run([str(REPO_ROOT / ".venv" / "bin" / "harness"), "validate", "--benchmark", name], cwd=REPO_ROOT)
+    click.echo(f"\nDraft {'PASSES' if checked.returncode == 0 else 'FAILS'} validate. Review the diff (git diff, "
+               f"git status) before trusting its scores: a drafted adapter needs human review.")
+    raise SystemExit(checked.returncode)
+
+
 @cli.command()
 @click.option("--concurrency", default=1, show_default=True, help="Trials (containers) run at the same time")
 @click.option("--exit-when-idle", is_flag=True, help="Stop once no submitted run is left unfinished")
