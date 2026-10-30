@@ -127,6 +127,7 @@ def test_provider_auth_error_is_infra_error_with_traceback(tmp_path):
     outcome = run_trial(bench, ScriptedAgent(act), TASK, Limits(), tmp_path, DockerEnvironment)
     assert outcome.status == "infra_error"
     assert "Traceback" in outcome.error and "AuthenticationError" in outcome.error
+    assert not outcome.retryable  # another attempt would fail the same way
 
 
 @pytest.mark.parametrize("value", [{"passed": True}, object()])  # no float conversion; not JSON

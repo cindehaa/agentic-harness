@@ -8,11 +8,11 @@ import sys
 import time
 
 import pytest
-from litellm.exceptions import AuthenticationError, ContextWindowExceededError
+from litellm.exceptions import AuthenticationError, ContextWindowExceededError, InternalServerError
 from minisweagent.exceptions import LimitsExceeded, Submitted
 from minisweagent.models.test_models import DeterministicToolcallModel, make_toolcall_output
 
-from agentic_harness.agents import AgentLimitation, Unsupported, resolve_agent
+from agentic_harness.agents import AgentLimitation, PreflightError, TransientError, Unsupported, resolve_agent
 from agentic_harness.agents.mini_swe_agent import ContainerEnv, MiniAgent, MiniSweAgent, MiniSweSession, TimeLimit
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, Message, Text
@@ -140,6 +140,22 @@ def test_auth_error_is_not_an_agent_limitation(tmp_path):
     session = failing_session(AuthenticationError("bad key", llm_provider="anthropic", model="fake"), tmp_path)
     with pytest.raises(AuthenticationError):  # the runner turns it into infra_error
         session.send(Message("user", (Text("go"),)))
+
+
+def test_overloaded_provider_is_transient(tmp_path):
+    session = failing_session(InternalServerError("Overloaded", llm_provider="anthropic", model="fake"), tmp_path)
+    with pytest.raises(TransientError):  # the runner makes it a retryable infra_error
+        session.send(Message("user", (Text("go"),)))
+
+
+def test_preflight_checks_the_model_and_its_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    MiniSweAgent("anthropic/claude-haiku-5-5").preflight()
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    with pytest.raises(PreflightError, match="ANTHROPIC_API_KEY"):
+        MiniSweAgent("anthropic/claude-haiku-5-5").preflight()
+    with pytest.raises(PreflightError, match="not one litellm knows"):
+        MiniSweAgent("no-such-provider/model").preflight()
 
 
 def test_resolve_agent_by_name_or_path():

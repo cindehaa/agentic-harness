@@ -3,7 +3,7 @@
 import importlib
 from pathlib import Path
 
-from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported
+from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, PreflightError, TransientError, Unsupported
 
 # registry: name -> "module:Class", imported only when the agent is used (so `harness status` never loads litellm)
 AGENTS: dict[str, str] = {
@@ -20,4 +20,6 @@ def resolve_agent(name_or_path: str) -> type[Agent]:
     return getattr(importlib.import_module(module), cls)
 
 
-__all__ = ["AGENTS", "Agent", "AgentLimitation", "AgentSession", "Unsupported", "resolve_agent"]
+__all__ = [
+    "AGENTS", "Agent", "AgentLimitation", "AgentSession", "PreflightError", "TransientError", "Unsupported", "resolve_agent",
+]

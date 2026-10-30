@@ -14,6 +14,9 @@ flowchart TB
   setup["worker (first to claim runs.setup_claimed_by): Benchmark.setup(tasks) builds the images, once per run"]
   setup -->|"raises"| abort["run failed (traceback + build log in runs/run/setup.log); every trial done as infra_error (not retried)"]
   setup -->|"setup worker's lease expires"| setup
+  preflight["worker start (and harness run at submit): Agent.preflight() for every unfinished run: model known to litellm, its API key set; no tokens spent"]
+  preflight -->|"PreflightError"| refuse["worker refuses to start, names the run; nothing claimed"]
+  preflight --> setup
   setup --> claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
   claim --> startenv["run_trial: env_factory(image, lifetime_s, limits).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
   claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
@@ -25,7 +28,8 @@ flowchart TB
   turns -->|"TurnLimit: more than max_turns messages"| check
   turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError"| check
   turns -->|"EnvironmentLost"| check
-  turns -->|"any other exception: auth, permission, bad request, provider down, rate limit after mini's retries, adapter or benchmark bug"| IE2["infra_error (traceback saved)"]
+  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
+  turns -->|"any other exception: auth, permission, bad request, adapter or benchmark bug"| IE2["infra_error, NOT retryable: fails fast, logged as an error (traceback saved)"]
 
   check{"after the turn: env.state() (Docker: docker inspect)"}
   check -->|"None (vanished, Docker unreachable)"| IE3
@@ -55,7 +59,8 @@ flowchart TB
   IE3["infra_error (container lost)"]
 
   IE1 --> retry{"fewer than 3 attempts?"}
-  IE2 --> retry
+  IE2 --> final
+  IE5 --> retry
   IE3 --> retry
   IE4 --> retry
   lost --> retry
@@ -79,7 +84,7 @@ flowchart TB
 
   class G,GF,lg graded
   class GE,lge gradererr
-  class IE1,IE2,IE3,IE4,lost,final,abort,lie infraerr
+  class IE1,IE2,IE3,IE4,IE5,lost,final,abort,refuse,lie infraerr
   class UN,lun unsupported
   class lpl planned
 ```
@@ -90,7 +95,7 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
 |---|---|---|---|
 | `graded` | yes (its `score_float`) | no | nobody's: the agent's result, including failures it caused (killed its container, hit a limit, context full, model refused) |
 | `grader_error` | no; reported prominently (count + list) | no | most likely the grader or the benchmark adapter |
-| `infra_error` | no | yes, up to 3 attempts in total (backoff 5 s × attempt number); a setup failure is not retried | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
+| `infra_error` | no | only if `retryable` (2026-10-29 audit): environment lost / Docker errors, network, provider 5xx / overloaded / rate limit, grader-dep install, container lost or lifetime expired, worker lost: up to 3 attempts in total (backoff 5 s × attempt number). Not retried (fail fast, logged as an error): auth / permission, bad request / misconfiguration, any unexpected exception in harness or adapter code; a setup failure | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
 | `unsupported` | no; reported separately | no | a capability gap: the agent can't take this task's content |
 
 ## Notes
@@ -102,8 +107,10 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   original exception after logging an `exit` message whose `exit_status` is the
   class name. `ContentPolicyViolationError` is not on the abort list, so mini
   retries it before it reaches us. Our adapter turns the two limitation errors
-  into `AgentLimitation`; everything else passes through to the runner's
-  catch-all (`infra_error` with the traceback).
+  into `AgentLimitation` and the transient ones (connection, timeout, rate limit,
+  overloaded, 5xx) into `TransientError` (retryable `infra_error`); everything
+  else passes through to the runner's catch-all (`infra_error`, not retryable,
+  with the traceback).
 - **Grader deps need the network.** bash-operations installs `python3` with
   `apk` at grade time. If that install fails (e.g. no network) the adapter
   raises `GraderSetupError` → `infra_error`, retried: the infrastructure

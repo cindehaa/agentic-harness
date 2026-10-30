@@ -17,6 +17,17 @@ class AgentLimitation(Exception):
     is graded as it is, like a timeout. Not for our own setup or provider failures (those are infra_error)."""
 
 
+class TransientError(Exception):
+    """A temporary failure outside the agent: the model provider is overloaded, failing (5xx) or rate limiting, or the
+    network is down -> infra_error, retried. Adapters raise it from their own client's errors (after the agent's own
+    retries); anything else they let through (auth, bad request, a bug) is infra_error and not retried."""
+
+
+class PreflightError(Exception):
+    """The agent can't run at all (unknown model, missing API key): checked before a run is submitted or a worker
+    starts, so it fails once, loudly, instead of in every trial."""
+
+
 class AgentSession(ABC):
     """One live conversation with an agent, as a benchmark sees it.
 
@@ -42,3 +53,6 @@ class Agent(ABC):
     def start(self, env: Environment, artifacts_dir: Path, limits: Limits) -> AgentSession:
         """A new session that acts only through `env`, saves its own files (e.g. a trajectory) in `artifacts_dir`,
         and stops itself within `limits`."""
+
+    def preflight(self) -> None:
+        """Raise PreflightError if this agent can't run at all. Must be cheap and spend no model tokens."""

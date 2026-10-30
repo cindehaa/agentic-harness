@@ -315,6 +315,13 @@ class Store:
         row = self._one("SELECT AVG(score_float), COUNT(*) FROM trials WHERE run_id = ? AND outcome = 'graded'", (run_id,))
         return row[0], row[1]
 
+    def unfinished_runs(self, run_id: str | None = None) -> list[sqlite3.Row]:
+        """Runs (or this run) still waiting for setup or running."""
+        return self.db.execute(
+            "SELECT * FROM runs WHERE status IN ('pending', 'running') AND (? IS NULL OR id = ?) ORDER BY created_at",
+            (run_id, run_id),
+        ).fetchall()
+
     def unfinished(self, run_id: str | None = None) -> bool:
         """Is any run (or this one) still waiting for setup or running?"""
         return self._one(

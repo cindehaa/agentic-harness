@@ -12,7 +12,7 @@ from pathlib import Path
 import click
 
 from agentic_harness import worker as worker_module
-from agentic_harness.agents import resolve_agent
+from agentic_harness.agents import PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
 from agentic_harness.paths import DB_PATH, REPO_ROOT
 from agentic_harness.store import SchemaMismatch, Store
@@ -89,7 +89,10 @@ def worker(concurrency: int, exit_when_idle: bool):
     _store().close()  # fail early on a database from another schema version
     _log_to_stderr()
     click.echo(f"Worker started: {concurrency} at a time, database {DB_PATH}", err=True)
-    worker_module.work(DB_PATH, concurrency, exit_when_idle)
+    try:
+        worker_module.work(DB_PATH, concurrency, exit_when_idle)
+    except PreflightError as e:
+        raise click.ClickException(f"pre-flight check failed, nothing claimed: {e}") from None
 
 
 def _store() -> Store:

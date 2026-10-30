@@ -13,10 +13,10 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
-from agentic_harness.agents import resolve_agent
+from agentic_harness.agents import PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS
 from agentic_harness.environments import DockerEnvironment
 from agentic_harness.redact import redact
@@ -26,7 +26,7 @@ from agentic_harness.types import Limits
 
 LEASE_S = 120  # a claim lapses this long after its last renewal
 RENEW_EVERY_S = 30
-MAX_ATTEMPTS = 3  # attempts per trial, counting lost workers; only infra_error is retried
+MAX_ATTEMPTS = 3  # attempts per trial, counting lost workers; only a retryable infra_error is retried
 RETRY_BACKOFF_S = 5  # a retry waits this times the attempt number
 IDLE_SLEEP_S = 2  # how long a worker with nothing to do waits before looking again
 ENVIRONMENT = DockerEnvironment  # the EnvironmentFactory every trial runs in; the one place the worker picks a backend
@@ -37,6 +37,7 @@ log = logging.getLogger("harness.worker")
 def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_id: str | None = None) -> None:
     """Run `concurrency` workers until interrupted or, with exit_when_idle, until no run is left unfinished.
     With run_id, work only on that run (what `harness run --wait` does)."""
+    preflight(db_path, run_id)
     prefix = f"{socket.gethostname()}-{os.getpid()}"
     threads = [
         threading.Thread(target=_loop, args=(db_path, f"{prefix}-{i}", exit_when_idle, run_id), name=f"worker-{i}", daemon=True)
@@ -47,6 +48,18 @@ def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_
     for t in threads:
         while t.is_alive():
             t.join(0.5)  # short joins keep Ctrl-C working; a killed worker's leases lapse and its trials are reclaimed
+
+
+def preflight(db_path: Path, run_id: str | None = None) -> None:
+    """Before claiming anything: every agent + model the unfinished runs (or this run) need can run at all. Raises
+    PreflightError naming the run, so a missing key fails once, loudly, not as an infra_error in every trial."""
+    with closing(Store(db_path)) as store:
+        runs = store.unfinished_runs(run_id)
+    for run in runs:
+        try:
+            resolve_agent(run["agent"])(run["model"]).preflight()
+        except PreflightError as e:
+            raise PreflightError(f"run {run['id']} ({run['agent']}, {run['model']}): {e}") from None
 
 
 def _loop(db_path: Path, worker: str, exit_when_idle: bool, run_id: str | None) -> None:
@@ -114,7 +127,9 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim) -> None:
     log.info("run %s: %s attempt %s", claim.run_id, claim.task_id, claim.n)
     with _heartbeat(db_path, lambda s: s.renew_lease(claim, worker, LEASE_S)):
         outcome = run_trial(benchmark, agent, task, limits, claim.artifacts_dir, ENVIRONMENT, on_turn_end=load_events)
-    retry = outcome.status == "infra_error" and claim.n < MAX_ATTEMPTS
+    retry = outcome.status == "infra_error" and outcome.retryable and claim.n < MAX_ATTEMPTS
+    if outcome.status == "infra_error" and not outcome.retryable:  # auth, bad request, a bug: fail fast, loudly
+        log.error("%s attempt %s: infra_error, not retried: %s", claim.task_id, claim.n, (outcome.error or "").strip().rsplit("\n", 1)[-1])
     try:
         store.finish_attempt(claim, worker, outcome, retry_at=time.time() + RETRY_BACKOFF_S * claim.n if retry else None)
     except LostClaim:

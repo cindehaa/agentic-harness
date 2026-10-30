@@ -3,8 +3,10 @@ so any backend (here an in-memory fake) can stand in for Docker."""
 
 from collections.abc import Callable
 
-from agentic_harness.agents import Agent, AgentSession
-from agentic_harness.benchmarks import Benchmark
+import pytest
+
+from agentic_harness.agents import Agent, AgentSession, TransientError
+from agentic_harness.benchmarks import Benchmark, GraderSetupError
 from agentic_harness.environments import Environment, EnvironmentLost, EnvironmentState, ExecResult
 from agentic_harness.runner import run_trial
 from agentic_harness.types import Limits, Message, Score, Task, Text
@@ -138,3 +140,33 @@ def test_out_of_memory_under_our_limit_is_graded_fail(tmp_path):
 def test_limits_reach_the_environment(tmp_path):
     _, env = run(write_ok, tmp_path, Limits(memory="1g", cpus=0.5))
     assert (env.limits.memory, env.limits.cpus) == ("1g", 0.5)
+
+
+def raises(error: Exception) -> Callable[[FakeEnvironment], None]:
+    def act(env: FakeEnvironment) -> None:
+        raise error
+
+    return act
+
+
+@pytest.mark.parametrize("error, retryable", [
+    (TransientError("provider overloaded"), True),
+    (ConnectionError("network down"), True),
+    (EnvironmentLost("backend unreachable"), True),
+    (PermissionError("403 from the provider"), False),  # e.g. auth: another attempt fails the same way
+    (KeyError("a bug in an adapter"), False),
+])
+def test_which_infra_errors_are_retryable(tmp_path, error, retryable):
+    outcome, _ = run(raises(error), tmp_path)
+    assert (outcome.status, outcome.retryable) == ("infra_error", retryable)
+
+
+def test_grader_setup_failure_and_lost_container_are_retryable(tmp_path):
+    class NoNetwork(OneMessage):
+        def grade(self, task, env, transcript):
+            raise GraderSetupError("apk add failed")
+
+    outcome = run_trial(NoNetwork(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, Factory())
+    assert (outcome.status, outcome.retryable) == ("infra_error", True)
+    outcome, _ = run(die(), tmp_path)
+    assert (outcome.status, outcome.retryable) == ("infra_error", True)

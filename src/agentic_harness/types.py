@@ -88,6 +88,7 @@ class Outcome:
     score: Score | None = None
     score_float: float | None = None  # what accuracy averages; from Benchmark.score_to_float
     error: str | None = None  # why it isn't graded (or the traceback)
+    retryable: bool = False  # infra_error only: a transient failure (Docker, network, provider overloaded) worth another attempt
     agent_exit_status: str | None = None  # the agent's own reason for stopping, e.g. "Submitted", "TimeLimit"
     cost_usd: float = 0.0
     duration_s: float = 0.0

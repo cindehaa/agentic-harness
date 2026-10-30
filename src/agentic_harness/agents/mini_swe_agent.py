@@ -8,13 +8,24 @@ from pathlib import Path
 
 os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")  # mini prints a banner on import otherwise
 
-from litellm.exceptions import ContentPolicyViolationError, ContextWindowExceededError  # noqa: E402
+import litellm  # noqa: E402
+from litellm.exceptions import (  # noqa: E402
+    APIConnectionError,
+    BadGatewayError,
+    ContentPolicyViolationError,
+    ContextWindowExceededError,
+    InternalServerError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from minisweagent.agents.default import DefaultAgent  # noqa: E402
 from minisweagent.config import get_config_from_spec  # noqa: E402
 from minisweagent.exceptions import InterruptAgentFlow, LimitsExceeded, Submitted  # noqa: E402
 from minisweagent.models import get_model  # noqa: E402
 
-from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported  # noqa: E402
+from agentic_harness.agents.base import (  # noqa: E402
+    Agent, AgentLimitation, AgentSession, PreflightError, TransientError, Unsupported,
+)
 from agentic_harness.environments.base import Environment  # noqa: E402
 from agentic_harness.types import Limits, Message, Text  # noqa: E402
 
@@ -22,6 +33,9 @@ MODEL_TIMEOUT_S = 120  # one model call (litellm `timeout`); mini retries failed
 # litellm errors that mean the model itself can't go on (not our setup or the provider): grade the world as it is.
 # mini re-raises them as they are (after logging an "exit" message whose exit_status is the class name).
 LIMITATIONS = (ContextWindowExceededError, ContentPolicyViolationError)
+# litellm errors that are temporary and not the agent's doing (network down incl. timeouts, rate limited, overloaded
+# = InternalServerError, 5xx), still failing after mini's own retries: infra_error, retried
+TRANSIENT = (APIConnectionError, RateLimitError, InternalServerError, ServiceUnavailableError, BadGatewayError)
 
 
 class TimeLimit(LimitsExceeded):
@@ -109,6 +123,8 @@ class MiniSweSession(AgentSession):
             info = self.agent.resume(text) if self.agent.messages else self.agent.run(text)
         except LIMITATIONS as e:
             raise AgentLimitation(f"{type(e).__name__}: {e}") from e
+        except TRANSIENT as e:
+            raise TransientError(f"{type(e).__name__}: {e}") from e
         finally:  # recorded even if the agent crashed
             self.exit_status = self.agent.messages[-1].get("extra", {}).get("exit_status") if self.agent.messages else None
             self.cost_usd = self.agent.cost
@@ -121,6 +137,16 @@ class MiniSweAgent(Agent):
 
     def __init__(self, model: str | None = None) -> None:
         self.model = model or os.environ["MSWEA_MODEL_NAME"]
+
+    def preflight(self) -> None:
+        """The model is one litellm knows, and its provider's API key is set. No auth call: that would spend tokens."""
+        try:
+            litellm.get_llm_provider(self.model)
+        except Exception as e:
+            raise PreflightError(f"model {self.model!r} is not one litellm knows: {e}") from None
+        missing = litellm.validate_environment(self.model)["missing_keys"]
+        if missing:
+            raise PreflightError(f"model {self.model!r} needs {', '.join(missing)} (set it in .env)")
 
     def start(self, env: Environment, artifacts_dir: Path, limits: Limits) -> MiniSweSession:
         config = get_config_from_spec("mini.yaml")

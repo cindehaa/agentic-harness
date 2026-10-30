@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from agentic_harness import cli as cli_module
 from agentic_harness import worker
-from agentic_harness.agents import AGENTS, Agent, AgentSession
+from agentic_harness.agents import AGENTS, Agent, AgentSession, PreflightError, TransientError
 from agentic_harness.benchmarks import BENCHMARKS, BashOperations
 from agentic_harness.cli import cli
 from agentic_harness.store import Store
@@ -77,7 +77,7 @@ class Crashing(Oracle):
     name = "crashing"
 
     def act(self, env, text):
-        raise RuntimeError("provider down")  # -> infra_error
+        raise TransientError("provider down")  # -> infra_error, retryable
 
 
 class FlakyOnce(Oracle):
@@ -85,8 +85,22 @@ class FlakyOnce(Oracle):
 
     def act(self, env, text):
         if type(self).calls == 1:
-            raise RuntimeError("provider blip")
+            raise TransientError("provider blip")
         super().act(env, text)
+
+
+class Buggy(Oracle):
+    name = "buggy"
+
+    def act(self, env, text):
+        raise RuntimeError("adapter bug")  # -> infra_error, not retryable
+
+
+class NoKey(Oracle):
+    name = "no-key"
+
+    def preflight(self):
+        raise PreflightError("needs ANTHROPIC_API_KEY")
 
 
 @pytest.fixture
@@ -96,7 +110,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "RETRY_BACKOFF_S", 0)
     for bench in (LocalGrade, BrokenSetup):
         monkeypatch.setitem(BENCHMARKS, bench.name, bench)
-    for agent in (Oracle, Crashing, FlakyOnce):
+    for agent in (Oracle, Crashing, FlakyOnce, Buggy, NoKey):
         monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")  # registry entries are "module:Class"
         agent.calls = 0
     LocalGrade.setups = 0
@@ -144,6 +158,23 @@ def test_infra_error_is_retried_up_to_three_attempts(db):
     attempts = store.attempts(run_id)
     assert [a["outcome"] for a in attempts] == ["infra_error"] * 3 and "provider down" in attempts[0]["error"]
     assert len({a["artifacts_dir"] for a in attempts}) == 3  # each attempt has its own folder
+
+
+def test_non_retryable_infra_error_fails_fast(db):
+    run_id = submit("buggy", task_ids="bash-001")
+    work()
+    store = Store(db)
+    trial = store.trials(run_id)[0]
+    assert (trial["state"], trial["outcome"], trial["attempt_count"]) == ("done", "infra_error", 1)
+    assert "adapter bug" in store.attempts(run_id)[0]["error"]
+
+
+def test_worker_preflight_failure_claims_nothing(db):
+    store = Store(db)
+    store.create_run("r1", "local-bash", "no-key", "fake-model", {}, {"limits": {}}, ["bash-001"])
+    result = CliRunner().invoke(cli, ["worker", "--exit-when-idle"])
+    assert result.exit_code != 0 and "pre-flight check failed" in result.output and "needs ANTHROPIC_API_KEY" in result.output
+    assert store.run("r1")["setup_claimed_by"] is None and store.trials("r1")[0]["state"] == "pending"
 
 
 def test_a_retry_that_succeeds_is_graded(db):

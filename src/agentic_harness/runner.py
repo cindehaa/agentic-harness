@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported
+from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, TransientError, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
 from agentic_harness.environments.base import Environment, EnvironmentFactory, EnvironmentLost
 from agentic_harness.redact import redact, redact_file
@@ -74,11 +74,13 @@ def run_trial(
             if outcome is None:
                 outcome = _grade(benchmark, task, env, session)
     except EnvironmentLost as e:
-        outcome = Outcome("infra_error", error=f"{type(e).__name__}: {e}")
+        outcome = Outcome("infra_error", error=f"{type(e).__name__}: {e}", retryable=True)
     except Unsupported as e:
         outcome = Outcome("unsupported", error=str(e))
-    except Exception:
-        outcome = Outcome("infra_error", error=traceback.format_exc())  # a harness or agent-adapter crash
+    except (TransientError, ConnectionError, TimeoutError):  # provider overloaded or rate limited, network down
+        outcome = Outcome("infra_error", error=traceback.format_exc(), retryable=True)
+    except Exception:  # auth, bad request, a harness or adapter bug: another attempt would fail the same way
+        outcome = Outcome("infra_error", error=traceback.format_exc())
     if session is not None:
         outcome = replace(
             outcome, agent_exit_status=session.inner.exit_status, cost_usd=session.inner.cost_usd, turns=session.turns
@@ -114,11 +116,11 @@ def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
     """Rule 6, from env.state(): None if the container still runs, else how the trial ends."""
     state = env.state()
     if state is None:  # gone, or Docker unreachable
-        return Outcome("infra_error", error="container lost: gone, or Docker unreachable")
+        return Outcome("infra_error", error="container lost: gone, or Docker unreachable", retryable=True)
     if state.running:
         return None
     if state.exit_code == 0 and not state.oom_killed:  # the keep-alive ended on its own: its lifetime ran out, ours
-        return Outcome("infra_error", error="container lifetime expired")
+        return Outcome("infra_error", error="container lifetime expired", retryable=True)
     # killed from inside, or over the memory limit we set (Limits.memory): the agent's doing
     why = "container ran out of memory during agent turn" if state.oom_killed else "container died during agent turn"
     score = Score(False, why, {"state": asdict(state)})
@@ -130,7 +132,7 @@ def _grade(benchmark: Benchmark, task: Task, env: Environment, session: Recordin
         env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         score = benchmark.grade(task, env, tuple(session.transcript))
     except GraderSetupError as e:  # e.g. no network to install the grader's deps: infra, retried
-        return Outcome("infra_error", error=f"GraderSetupError: {e}")
+        return Outcome("infra_error", error=f"GraderSetupError: {e}", retryable=True)
     except GraderError as e:
         return Outcome("grader_error", error=str(e))
     except EnvironmentLost:
