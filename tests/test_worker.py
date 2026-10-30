@@ -182,6 +182,7 @@ def test_run_wait_runs_only_its_own_run(db):
     other = submit("oracle", task_ids="bash-002")
     result = CliRunner().invoke(cli, ["run", "--agent", "oracle", "--benchmark", "local-bash", "--task_ids", "bash-001", "--wait"])
     assert result.exit_code == 0, result.output
+    assert "Accuracy: 1.00 (n=1 graded)" in result.output  # it prints the results
     run_id = result.output.split()[2].rstrip(":")
     store = Store(db)
     assert store.run(run_id)["status"] == "done"

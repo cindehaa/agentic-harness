@@ -75,7 +75,10 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
         return
     _log_to_stderr()
     worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id)
-    click.echo(f"Run {run_id} finished: harness results --run_id {run_id}")
+    click.echo()
+    click.get_current_context().invoke(results, run_id=run_id, format="table")
+    click.echo()
+    click.get_current_context().invoke(results, run_id=run_id, format="summary")
 
 
 @cli.command()
@@ -133,18 +136,25 @@ def _dataset_hash(bench: Benchmark) -> str:
 
 
 @cli.command()
-@click.option(
-    "--run_id",
-    required=True,
-    help="The unique identifier for the benchmark run",
-)
-def status(run_id: str):
-    """Check the status of a benchmark run."""
-    click.echo(f"Checking status for run: {run_id}")
-
-    # TODO: Implement status checking logic
-
-    click.echo("Status: Not implemented yet")
+@click.option("--run_id", default=None, help="Show this run's trials (default: list active and recent runs)")
+@click.option("--all", "show_all", is_flag=True, help="List every run, not only active ones and those finished in the last hour")
+def status(run_id: str | None, show_all: bool):
+    """Check the status of benchmark runs, or of one run's trials."""
+    store = _store()
+    if run_id is None:
+        runs = store.runs(finished_since=None if show_all else time.time() - 3600)
+        if not runs:
+            click.echo("No active or recent runs (--all lists every run)")
+            return
+        _table(("RUN", "BENCHMARK", "AGENT", "PROGRESS", "STARTED"),
+               [(r["id"], r["benchmark"], r["agent"], _progress(r, r["done"], r["total"]), _time(r["created_at"])) for r in runs])
+        return
+    run = _find_run(store, run_id)
+    trials = store.trials(run_id)
+    click.echo(f"Run {run_id}: {run['benchmark']} · {run['agent']} ({run['model']}), "
+               f"{_progress(run, sum(t['state'] == 'done' for t in trials), len(trials))}\n")
+    _table(("TASK", "STATE", "OUTCOME", "SCORE", "ATTEMPTS"),
+           [(t["task_id"], t["state"], t["outcome"] or "", _score(t["score_value"]), str(t["attempt_count"])) for t in trials])
 
 
 @cli.command()
@@ -160,13 +170,79 @@ def status(run_id: str):
     help="Output format for results (default: json)",
 )
 def results(run_id: str, format: str):
-    """Get results from a completed run."""
-    click.echo(f"Retrieving results for run: {run_id}")
-    click.echo(f"Format: {format}")
+    """Get results from a run (a run still in progress shows what is done so far)."""
+    store = _store()
+    run = _find_run(store, run_id)
+    trials = store.trials(run_id)
+    accuracy, graded = store.accuracy(run_id)
+    excluded = {s: [t["task_id"] for t in trials if t["outcome"] == s] for s in EXCLUDED}
+    if format == "json":
+        attempts = store.attempts(run_id)
+        report = {
+            "run": {**dict(run), "versions": json.loads(run["versions"]), "config": json.loads(run["config"])},
+            "accuracy": accuracy,
+            "graded": graded,
+            "excluded": excluded,
+            "cost_usd": sum(t["cost_usd"] for t in trials),
+            "trials": [
+                {**dict(t), "score_value": _parse(t["score_value"]),
+                 "attempts": [{**dict(a), "score": _parse(a["score"])} for a in attempts if a["trial_id"] == t["id"]]}
+                for t in trials
+            ],
+        }
+        click.echo(json.dumps(report, indent=2))
+    elif format == "table":
+        _table(("TASK", "OUTCOME", "SCORE", "COST", "TIME", "ATTEMPTS"),
+               [(t["task_id"], t["outcome"] or t["state"], _score(t["score_value"]), f"${t['cost_usd']:.4f}",
+                 f"{t['duration_s']:.1f}s", str(t["attempt_count"])) for t in trials])
+    else:
+        done = sum(t["state"] == "done" for t in trials)
+        click.echo(f"{run['benchmark']} · {run['agent']} ({run['model']})   run {run_id}")
+        if done < len(trials):
+            click.echo(f"In progress: {_progress(run, done, len(trials))}")
+        click.echo("Accuracy: " + ("n/a" if accuracy is None else f"{accuracy:.2f}") + f" (n={graded} graded)")
+        click.echo("Excluded: " + " · ".join(f"{s} {len(ids)}" for s, ids in excluded.items()))
+        for s, ids in excluded.items():
+            if ids:
+                click.echo(f"  {s}: {', '.join(ids)}")
+        wall = f", {run['finished_at'] - run['created_at']:.1f}s wall" if run["finished_at"] else ""
+        click.echo(f"Cost: ${sum(t['cost_usd'] for t in trials):.4f} · Time: {sum(t['duration_s'] for t in trials):.1f}s in trials{wall}")
 
-    # TODO: Implement results retrieval logic
 
-    click.echo("Results: Not implemented yet")
+EXCLUDED = ("grader_error", "infra_error", "unsupported")  # outcomes left out of accuracy, always reported
+
+
+def _find_run(store: Store, run_id: str):
+    run = store.run(run_id)
+    if run is None:
+        raise click.ClickException(f"no run {run_id!r} (harness status --all lists every run)")
+    return run
+
+
+def _progress(run, done: int, total: int) -> str:
+    if run["status"] == "failed":
+        return "setup failed"
+    if run["status"] == "pending":
+        return "setting up" if run["setup_claimed_by"] else "queued"
+    return f"{done}/{total} done"
+
+
+def _score(score_value: str | None) -> str:
+    return "" if score_value is None else str(json.loads(score_value))
+
+
+def _parse(value: str | None):
+    return None if value is None else json.loads(value)
+
+
+def _time(timestamp: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+
+
+def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+    widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *rows)]
+    for row in (headers, *rows):
+        click.echo("  ".join(str(cell).ljust(width) for cell, width in zip(row, widths)).rstrip())
 
 
 def main():
