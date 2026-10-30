@@ -92,7 +92,9 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
         click.echo("Start a worker to run it: harness worker")
         return
     _log_to_stderr()
-    worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id)
+    if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id):
+        click.echo(f"Interrupted: run {run_id} stays queued; `harness worker` finishes it", err=True)
+        raise SystemExit(130)  # the shell's code for "stopped by Ctrl-C"
     click.echo()
     click.get_current_context().invoke(results, run_id=run_id, format="table")
     click.echo()
@@ -103,14 +105,17 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
 @click.option("--concurrency", default=1, show_default=True, help="Trials (containers) run at the same time")
 @click.option("--exit-when-idle", is_flag=True, help="Stop once no submitted run is left unfinished")
 def worker(concurrency: int, exit_when_idle: bool):
-    """Take trials from the queue and run them, until Ctrl-C (or idle, with --exit-when-idle)."""
+    """Take trials from the queue and run them, until Ctrl-C (or idle, with --exit-when-idle). Ctrl-C stops the trials
+    in flight and puts them back in the queue; a second Ctrl-C exits at once."""
     _store().close()  # fail early on a database from another schema version
     _log_to_stderr()
     click.echo(f"Worker started: {concurrency} at a time, database {DB_PATH}", err=True)
     try:
-        worker_module.work(DB_PATH, concurrency, exit_when_idle)
+        stopped = worker_module.work(DB_PATH, concurrency, exit_when_idle)
     except PreflightError as e:
         raise click.ClickException(f"pre-flight check failed, nothing claimed: {e}") from None
+    if stopped:
+        click.echo("Worker stopped", err=True)
 
 
 def _store() -> Store:

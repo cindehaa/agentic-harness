@@ -165,6 +165,14 @@ class Store:
         )
         return cursor.rowcount == 1
 
+    def release_setup(self, run_id: str, worker: str) -> None:
+        """Give up a setup this worker holds (it was stopped): the next worker to look claims it at once."""
+        self.db.execute(
+            "UPDATE runs SET setup_claimed_by = NULL, setup_lease_until = NULL"
+            " WHERE id = ? AND setup_claimed_by = ? AND status = 'pending'",
+            (run_id, worker),
+        )
+
     def finish_setup(self, run_id: str, worker: str, error: str | None = None) -> None:
         """Setup worked: the run's trials become claimable. Setup failed: the run fails and every trial ends infra_error.
         Raises LostClaim (and writes nothing) if `worker` no longer holds the setup."""

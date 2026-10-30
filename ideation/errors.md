@@ -24,6 +24,7 @@ flowchart TB
   prep -->|"DockerError (build failed, Docker down)"| IE1
   prep --> startenv["env_factory(image, lifetime_s, limits).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
   claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
+  claim -->|"Ctrl-C / SIGTERM to the worker (harness worker, run --wait)"| intr["worker stops claiming, stops the trial's world (sidecars, volume), closes the attempt as infra_error (worker interrupted), retryable: back to pending at once, counts as an attempt; setup it held is released; a second signal exits at once (leases lapse: worker lost)"]
   startenv -->|"EnvironmentLost (DockerError): missing image, docker run fails, Docker down"| IE1
   startenv --> mcp["start each of benchmark.mcp_servers(task) as a network-only sidecar; ready = port LISTEN"]
   mcp -->|"EnvironmentLost: image missing, not listening within 60 s (error has its logs)"| IE1
@@ -72,6 +73,7 @@ flowchart TB
   IE5 --> retry
   IE3 --> retry
   lost --> retry
+  intr --> claim
   retry -->|"yes: back to pending, available_at = now + 5 s x attempt number"| claim
   retry -->|"no"| final["trial ends infra_error"]
 
@@ -92,7 +94,7 @@ flowchart TB
 
   class G,GF,lg graded
   class GE,lge gradererr
-  class IE1,IE2,IE3,IE5,lost,final,abort,refuse,lie infraerr
+  class IE1,IE2,IE3,IE5,lost,intr,final,abort,refuse,lie infraerr
   class UN,lun unsupported
   class lpl planned
 ```
@@ -133,6 +135,17 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
   agent's scaffolding, part of what is measured; we don't change it
   (`agents-and-runner.md`). Our retries are whole attempts, for `infra_error` only.
+- **Worker interrupted** (Ctrl-C or SIGTERM to `harness worker` / `run --wait`).
+  The worker stops claiming, stops the worlds of its trials in flight (with their
+  sidecars and volumes), closes each open attempt as a retryable `infra_error`
+  ("worker interrupted") and puts the trial back to `pending` at once, so another
+  worker takes it; a setup it held is released the same way. The interrupted
+  attempt counts toward the 3 (attempt numbers are never reused). A trial thread
+  that finishes afterwards no longer holds its claim and its result is discarded;
+  a result it reached after the signal is ignored anyway, since Ctrl-C also
+  reaches its `docker` commands. Then the worker's row is deleted and it exits 0
+  (`run --wait`: 130, the run stays queued). A second signal exits at once: the
+  leases then lapse and the trials come back as "worker lost".
 - **Worker lost.** A worker renews its trial's lease every 30 s. If it is
   killed (or hangs) the lease expires after 120 s; the next worker to look
   closes the open attempt as `infra_error` ("worker lost") and re-queues the

@@ -3,7 +3,11 @@
 Grading reads hello.txt directly (a one-line grader), so these tests don't depend on evaluate.py."""
 
 import json
+import os
+import signal
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -95,6 +99,13 @@ class Buggy(Oracle):
         raise RuntimeError("adapter bug")  # -> infra_error, not retryable
 
 
+class Sleeper(Oracle):
+    name = "sleeper"
+
+    def act(self, env, text):
+        env.exec("sleep 300", timeout=None)  # until its world is stopped
+
+
 class NoKey(Oracle):
     name = "no-key"
 
@@ -109,7 +120,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "RETRY_BACKOFF_S", 0)
     for bench in (LocalGrade, BrokenSetup):
         monkeypatch.setitem(BENCHMARKS, bench.name, bench)
-    for agent in (Oracle, Crashing, FlakyOnce, Buggy, NoKey):
+    for agent in (Oracle, Crashing, FlakyOnce, Buggy, Sleeper, NoKey):
         monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")  # registry entries are "module:Class"
         agent.calls = 0
     LocalGrade.setups = 0
@@ -266,3 +277,67 @@ def test_a_worker_is_listed_while_it_runs_and_removed_after(db, monkeypatch):
     work(concurrency=1)
     assert seen and all(n == 1 for n in seen)
     assert Store(db).live_workers(0) == 0
+
+
+def _labelled(kind: str) -> list[str]:
+    return subprocess.run(["docker", kind, "ls", "-q", *(["-a"] if kind == "container" else []), "--filter", "label=agentic-harness=1"],
+                          capture_output=True, text=True).stdout.split()
+
+
+def _signal_when_running(sig: signal.Signals, containers: int) -> None:
+    """From another thread: once `containers` trial worlds exist (and their agents had a moment to start), signal
+    this process, as Ctrl-C (SIGINT) or `kill` (SIGTERM) would."""
+    def run():
+        deadline = time.monotonic() + 60
+        while len(_labelled("container")) < containers and time.monotonic() < deadline:
+            time.sleep(0.2)
+        time.sleep(1)
+        os.kill(os.getpid(), sig)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def test_ctrl_c_stops_the_worker_and_puts_its_trials_back_in_the_queue(db):
+    run_id = submit("sleeper")
+    _signal_when_running(signal.SIGINT, containers=2)
+    began = time.monotonic()
+    result = CliRunner().invoke(cli, ["worker", "--concurrency", "2"])  # no --exit-when-idle: only the signal stops it
+    assert result.exit_code == 0 and "Worker stopped" in result.output, result.output
+    assert time.monotonic() - began < 60  # not the agents' 300 s
+    store = Store(db)
+    assert [(t["state"], t["attempt_count"]) for t in store.trials(run_id)] == [("pending", 1)] * 2
+    assert [(a["outcome"], a["error"]) for a in store.attempts(run_id)] == [("infra_error", "worker interrupted")] * 2
+    assert store.live_workers(0) == 0  # its row is gone
+    assert _labelled("container") == [] and _labelled("volume") == []
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler  # put back
+
+
+def test_sigterm_stops_run_wait_and_another_worker_finishes_the_run(db, monkeypatch):
+    _signal_when_running(signal.SIGTERM, containers=1)
+    result = CliRunner().invoke(cli, ["run", "--agent", "sleeper", "--model", "fake-model", "--benchmark", "local-bash",
+                                      "--task_ids", "bash-001", "--wait"])
+    assert result.exit_code == 130 and "stays queued" in result.output, result.output
+    run_id = result.output.split()[2].rstrip(":")
+    monkeypatch.setattr(Sleeper, "act", Oracle.act)  # the next worker's agent finishes
+    work()
+    store = Store(db)
+    trial = store.trials(run_id)[0]
+    assert (trial["outcome"], trial["attempt_count"]) == ("graded", 2)
+    assert [a["error"] for a in store.attempts(run_id)] == ["worker interrupted", None]
+
+
+def test_a_second_signal_forces_the_exit():
+    stop = worker.Stop()
+    stop.handle(signal.SIGINT, None)
+    assert stop.requested.is_set()
+    with pytest.raises(KeyboardInterrupt):
+        stop.handle(signal.SIGINT, None)
+
+
+def test_an_interrupted_setup_is_released_for_another_worker(db):
+    store = Store(db)
+    store.create_run("r1", "local-bash", "oracle", "fake-model", {}, {"limits": {}}, ["bash-001"])
+    stop = worker.Stop()
+    stop.track_setup(store.claim_setup("w1", 120)["id"], "w1")
+    stop.hand_back(store)
+    assert store.run("r1")["setup_claimed_by"] is None
+    assert store.claim_setup("w2", 120)["id"] == "r1"  # at once, not after the lease
