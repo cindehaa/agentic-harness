@@ -14,15 +14,9 @@ from agentic_harness.types import Message, Text
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
 
-# A correct solution.py per task, written from each prompt and its test_code
-ORACLES = {
-    "py-001": "def add():\n    return 2 + 2\n",
-    "py-002": "def fibonacci(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
-    "py-003": "def get_nth(lst, n):\n    return lst[n] if 0 <= n < len(lst) else None\n",  # tests want None for -1, not lst[-1]
-}
-
 bench = PythonTasks()
 TASKS = {t.id: t for t in bench.tasks()}
+ORACLES = {t.id: bench.reference_solution(t).files["solution.py"] for t in TASKS.values()}  # ours: it ships none
 
 
 @pytest.fixture(scope="module", autouse=True)

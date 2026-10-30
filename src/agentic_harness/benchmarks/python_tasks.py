@@ -8,10 +8,17 @@ from agentic_harness.agents.base import AgentSession
 from agentic_harness.benchmarks.base import Benchmark, GraderError, content_hash
 from agentic_harness.environments import Environment, build_image, ensure_image
 from agentic_harness.paths import REPO_ROOT
-from agentic_harness.types import Message, Score, Task, Text, Transcript
+from agentic_harness.types import Message, ReferenceSolution, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "python-tasks"
 GRADE_TIMEOUT = 120  # seconds; grade.py stops pytest at 30s itself, the rest is python startup + slack
+
+# The benchmark ships no solutions: ours, a solution.py written from each prompt and its test_code
+SOLUTIONS = {
+    "py-001": "def add():\n    return 2 + 2\n",
+    "py-002": "def fibonacci(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
+    "py-003": "def get_nth(lst, n):\n    return lst[n] if 0 <= n < len(lst) else None\n",  # tests want None for -1, not lst[-1]
+}
 
 
 @dataclass(frozen=True)
@@ -55,6 +62,10 @@ class PythonTasks(Benchmark[PythonTask]):
 
     def run_agent(self, task: PythonTask, agent: AgentSession, env: Environment) -> None:
         agent.send(Message("user", (Text(task.prompt),)))
+
+    def reference_solution(self, task: PythonTask) -> ReferenceSolution | None:
+        code = SOLUTIONS.get(task.id)
+        return ReferenceSolution("harness-written", files={"solution.py": code}) if code else None
 
     def grade(self, task: PythonTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
         grader.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, only in the grader

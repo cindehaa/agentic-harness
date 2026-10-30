@@ -8,10 +8,19 @@ from agentic_harness.agents.base import AgentSession
 from agentic_harness.benchmarks.base import Benchmark, GraderError, content_hash
 from agentic_harness.environments import Environment, build_image, ensure_image
 from agentic_harness.paths import REPO_ROOT
-from agentic_harness.types import Message, Score, Task, Text, Transcript
+from agentic_harness.types import Message, ReferenceSolution, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "bash-operations"
 GRADER_IMAGE = "python:3.11-slim"  # evaluate.py needs python; the agent's world (alpine) has none, and never gets it
+
+# The benchmark ships no solutions: ours, written from each problem statement and its verification spec
+SOLUTIONS = {
+    "bash-001": "echo 'Hello World' > hello.txt",
+    "bash-002": "mkdir test_dir && touch test_dir/file1.txt test_dir/file2.txt test_dir/file3.txt",
+    "bash-003": "grep -c '' input.txt > count.txt",  # not `wc -l`: input.txt has no trailing newline, so wc says 4
+    "bash-004": "ls *.txt > txt_files.txt",
+    "bash-005": "seq 1 10 > numbers.txt",
+}
 
 
 @dataclass(frozen=True)
@@ -61,6 +70,10 @@ class BashOperations(Benchmark[BashTask]):
 
     def run_agent(self, task: BashTask, agent: AgentSession, env: Environment) -> None:
         agent.send(Message("user", (Text(task.problem_statement),)))
+
+    def reference_solution(self, task: BashTask) -> ReferenceSolution | None:
+        script = SOLUTIONS.get(task.id)
+        return ReferenceSolution("harness-written", script=script) if script else None
 
     def grader_image(self, task: BashTask) -> str:
         return GRADER_IMAGE

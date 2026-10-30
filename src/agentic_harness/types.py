@@ -76,6 +76,18 @@ class McpServer:
 
 
 @dataclass(frozen=True)
+class ReferenceSolution:
+    """A known-good answer to one task: what `harness validate`'s oracle agent applies, in the world, instead of an
+    agent's work. If the adapter is wired right, the grader then passes it."""
+
+    # who wrote it: the benchmark itself (independent of the adapter), or us (it checks the wiring, not the benchmark)
+    source: Literal["benchmark-provided", "harness-written"]
+    files: dict[str, str] = field(default_factory=dict)  # written into the world first: path -> text
+    script: str = ""  # then run in the world through `sh -c`
+    cwd: str | None = None  # where the script runs; None: the world's working directory
+
+
+@dataclass(frozen=True)
 class Limits:
     """What one trial may spend."""
 

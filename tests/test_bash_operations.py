@@ -14,17 +14,9 @@ from agentic_harness.types import Message, Text
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
 
-# A correct shell solution per task, written from each problem statement and its verification spec
-ORACLES = {
-    "bash-001": "echo 'Hello World' > hello.txt",
-    "bash-002": "mkdir test_dir && touch test_dir/file1.txt test_dir/file2.txt test_dir/file3.txt",
-    "bash-003": "grep -c '' input.txt > count.txt",  # not `wc -l`: input.txt has no trailing newline, so wc says 4
-    "bash-004": "ls *.txt > txt_files.txt",
-    "bash-005": "seq 1 10 > numbers.txt",
-}
-
 bench = BashOperations()
 TASKS = {t.id: t for t in bench.tasks()}
+ORACLES = {t.id: bench.reference_solution(t).script for t in TASKS.values()}  # ours (harness-written): it ships none
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -117,3 +109,7 @@ def test_no_leftover_containers_or_volumes():
     for cmd in (["ps", "-a"], ["volume", "ls"]):
         listed = subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
         assert listed == ""
+
+
+def test_reference_solutions_are_labelled_ours():
+    assert {bench.reference_solution(t).source for t in TASKS.values()} == {"harness-written"}
