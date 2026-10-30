@@ -3,12 +3,14 @@ its own evaluate.py judges, and the agent hears only the dataset's problem_state
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from agentic_harness.agents.base import AgentSession
 from agentic_harness.benchmarks.base import Benchmark, GraderError, content_hash
 from agentic_harness.environments import Environment, build_image, ensure_image
+from agentic_harness.original import OriginalAgentWorld, run_script
 from agentic_harness.paths import REPO_ROOT
-from agentic_harness.types import Message, ReferenceSolution, Score, Task, Text, Transcript
+from agentic_harness.types import Message, OriginalResult, ReferenceSolution, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "bash-operations"
 GRADER_IMAGE = "python:3.11-slim"  # evaluate.py needs python; the agent's world (alpine) has none, and never gets it
@@ -81,10 +83,28 @@ class BashOperations(Benchmark[BashTask]):
     def grade(self, task: BashTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
         grader.upload(ROOT, "/grader")  # the benchmark's own evaluate.py + dataset.json, only in the grader
         r = grader.exec(["python", "/grader/evaluate.py", "--workspace-dir", "/workspace", "--task", task.id])
-        # evaluate.py exits 1 on a failed task, so judge by its JSON, not its exit code
-        try:
-            result = json.loads(r.stdout)
-            passed = result["passed"]
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            raise GraderError(f"unreadable grader output ({e}): stdout={r.stdout!r} stderr={r.stderr!r}") from None
-        return Score(value=passed, explanation=str(result.get("details")), metadata={"grader": result, "stderr": r.stderr})
+        return _score(r.stdout, r.stderr)
+
+    def original_workflow(self, task: BashTask, agent_name: str, model: str, out_dir: Path) -> OriginalResult:
+        """examples/run_bash_example.sh in Docker: setup.py, the agent on the dataset's image (alpine) with the
+        workspace bind-mounted, evaluate.py. The scripts run in python:3.11-slim, not on the host's python."""
+        workspace = out_dir / "workspace"
+        workspace.mkdir(parents=True)
+        scripts = {ROOT: "/bench:ro", workspace: "/workspace"}
+        setup = run_script(GRADER_IMAGE, scripts, ["python", "/bench/setup.py", "--workspace-dir", "/workspace", "--task", task.id])
+        if setup.returncode != 0:
+            raise RuntimeError(f"setup.py failed: {setup.stderr}")
+        with OriginalAgentWorld(agent_name, model, task.base_image, {workspace: "/workspace"}, "/workspace", out_dir) as world:
+            world.run_agent(task.problem_statement)
+        r = run_script(GRADER_IMAGE, scripts, ["python", "/bench/evaluate.py", "--workspace-dir", "/workspace", "--task", task.id])
+        return OriginalResult(_score(r.stdout, r.stderr), world.cost, world.exit_status)
+
+
+def _score(stdout: str, stderr: str) -> Score:
+    """evaluate.py's verdict. It exits 1 on a failed task, so judge by its JSON, not its exit code."""
+    try:
+        result = json.loads(stdout)
+        passed = result["passed"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise GraderError(f"unreadable grader output ({e}): stdout={stdout!r} stderr={stderr!r}") from None
+    return Score(value=passed, explanation=str(result.get("details")), metadata={"grader": result, "stderr": stderr})

@@ -8,7 +8,7 @@ from typing import Generic, TypeVar
 
 from agentic_harness.agents.base import AgentCapabilities, AgentSession
 from agentic_harness.environments.base import Environment
-from agentic_harness.types import McpServer, ReferenceSolution, Score, Task, Transcript, score_to_float
+from agentic_harness.types import McpServer, OriginalResult, ReferenceSolution, Score, Task, Transcript, score_to_float
 
 TaskT = TypeVar("TaskT", bound=Task)  # each adapter's own Task subclass
 
@@ -58,6 +58,12 @@ class Benchmark(ABC, Generic[TaskT]):
         """A known-good answer `harness validate` applies to check the grader passes it. Use the benchmark's own
         (source "benchmark-provided") when it ships one. Default: none (validate then runs only the do-nothing check)."""
         return None
+
+    def original_workflow(self, task: TaskT, agent_name: str, model: str, out_dir: Path) -> OriginalResult:
+        """Run `task` the benchmark's original way, for `harness parity`: its own setup and grader scripts unchanged,
+        the agent in its own Docker mode (agentic_harness.original) on the image the benchmark declares. Files go in
+        `out_dir`. Raise for an infrastructure failure (that run is then left out). Default: not available."""
+        raise NotImplementedError(f"{self.name} declares no original workflow")
 
     def version(self) -> str | None:
         """A content hash of everything that builds the tasks' images, recorded in runs.versions. Adapters also put

@@ -88,6 +88,15 @@ class ReferenceSolution:
 
 
 @dataclass(frozen=True)
+class OriginalResult:
+    """One task run the benchmark's original way (Benchmark.original_workflow), for `harness parity`."""
+
+    score: Score
+    cost_usd: float = 0.0
+    agent_exit_status: str | None = None
+
+
+@dataclass(frozen=True)
 class Limits:
     """What one trial may spend."""
 

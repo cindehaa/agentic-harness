@@ -3,12 +3,14 @@ its own grade.py judges, and the agent hears only the dataset's prompt."""
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from agentic_harness.agents.base import AgentSession
 from agentic_harness.benchmarks.base import Benchmark, GraderError, content_hash
 from agentic_harness.environments import Environment, build_image, ensure_image
+from agentic_harness.original import OriginalAgentWorld
 from agentic_harness.paths import REPO_ROOT
-from agentic_harness.types import Message, ReferenceSolution, Score, Task, Text, Transcript
+from agentic_harness.types import Message, OriginalResult, ReferenceSolution, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "python-tasks"
 GRADE_TIMEOUT = 120  # seconds; grade.py stops pytest at 30s itself, the rest is python startup + slack
@@ -70,10 +72,29 @@ class PythonTasks(Benchmark[PythonTask]):
     def grade(self, task: PythonTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
         grader.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, only in the grader
         r = grader.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=GRADE_TIMEOUT)
-        # grade.py always exits 0, so judge only by its JSON
-        try:
-            result = json.loads(r.stdout)
-            passed = result["passed"]
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            raise GraderError(f"unreadable grader output ({e}): stdout={r.stdout!r} stderr={r.stderr!r}") from None
-        return Score(value=passed, explanation=str(result.get("details")), metadata={"grader": result, "stderr": r.stderr})
+        return _score(r.stdout, r.stderr)
+
+    def original_workflow(self, task: PythonTask, agent_name: str, model: str, out_dir: Path) -> OriginalResult:
+        """examples/run_python_example.sh in Docker: prepare.py (incl. its pip install), the agent and grade.py all in
+        one container of the dataset's image, the workspace bind-mounted; the scripts are copied in only to run."""
+        workspace = out_dir / "workspace"
+        workspace.mkdir(parents=True)
+        with OriginalAgentWorld(agent_name, model, task.base_image, {workspace: "/workspace"}, "/workspace", out_dir) as world:
+            world.copy_in(ROOT, "/tmp/bench")
+            prepare = world.exec(["sh", "-c", f"python /tmp/bench/prepare.py {task.id} --workspace /workspace && rm -rf /tmp/bench"])
+            if prepare.returncode != 0:
+                raise RuntimeError(f"prepare.py failed: {prepare.stderr}")
+            world.run_agent(task.prompt)
+            world.copy_in(ROOT, "/tmp/bench")
+            r = world.exec(["python", "/tmp/bench/grade.py", task.id, "--workspace", "/workspace"])
+        return OriginalResult(_score(r.stdout, r.stderr), world.cost, world.exit_status)
+
+
+def _score(stdout: str, stderr: str) -> Score:
+    """grade.py's verdict. It always exits 0, so judge only by its JSON."""
+    try:
+        result = json.loads(stdout)
+        passed = result["passed"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise GraderError(f"unreadable grader output ({e}): stdout={stdout!r} stderr={stderr!r}") from None
+    return Score(value=passed, explanation=str(result.get("details")), metadata={"grader": result, "stderr": stderr})
