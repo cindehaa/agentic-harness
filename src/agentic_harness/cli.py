@@ -1,6 +1,8 @@
 """CLI for the agentic harness system."""
 
+import hashlib
 import json
+import logging
 import subprocess
 import time
 import uuid
@@ -9,11 +11,12 @@ from pathlib import Path
 
 import click
 
+from agentic_harness import worker as worker_module
 from agentic_harness.agents import resolve_agent
-from agentic_harness.benchmarks import BENCHMARKS
-from agentic_harness.paths import REPO_ROOT
-from agentic_harness.runner import run_trial
-from agentic_harness.types import Limits, Outcome, Task
+from agentic_harness.benchmarks import BENCHMARKS, Benchmark
+from agentic_harness.paths import DB_PATH, REPO_ROOT
+from agentic_harness.store import SchemaMismatch, Store
+from agentic_harness.types import Limits, Task
 
 
 @click.group()
@@ -43,8 +46,10 @@ def cli():
     default=None,
     help="Model for the agent (default: MSWEA_MODEL_NAME)",
 )
-def run(agent: str, benchmark: str, task_ids: str | None, model: str | None):
-    """Run an agent against a benchmark: one trial at a time, in this process (the queue comes in Phase 5)."""
+@click.option("--wait", is_flag=True, help="Run the trials here (an inline worker) and print the results")
+@click.option("--concurrency", default=1, show_default=True, help="With --wait: trials run at the same time")
+def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int):
+    """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
     if benchmark not in BENCHMARKS:
         raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
     try:
@@ -55,30 +60,55 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None):
     the_agent = agent_class(model)
     tasks = _select(bench.tasks(), task_ids)
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-    run_dir = REPO_ROOT / "runs" / run_id
-    limits = Limits()
-    click.echo(f"Run {run_id}: {the_agent.name} ({the_agent.model}) on {benchmark}, {len(tasks)} task(s)")
-
-    bench.setup(tasks)  # build the task images once, before any trial
-    results = []
-    for task in tasks:
-        outcome = run_trial(bench, the_agent, task, limits, run_dir / task.id / "attempt-1")
-        click.echo(f"  {task.id}: {outcome.status}")
-        results.append((task.id, outcome))
-
-    summary = {
-        "run_id": run_id,
-        "benchmark": benchmark,
-        "agent": the_agent.name,
+    versions = {
+        "harness": _git_sha(REPO_ROOT),
+        "agent": _git_sha(REPO_ROOT / "agents" / the_agent.name),
+        "dataset": _dataset_hash(bench),
         "model": the_agent.model,
-        "versions": {"harness": _git_sha(REPO_ROOT), "agent": _git_sha(REPO_ROOT / "agents" / the_agent.name)},
-        "limits": asdict(limits),
-        **_accuracy(results),
-        "trials": [{"task_id": task_id, **asdict(outcome)} for task_id, outcome in results],
     }
-    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
-    _print_table(results, summary)
-    click.echo(f"Saved to {run_dir}")
+    store = _store()
+    store.create_run(run_id, benchmark, the_agent.name, the_agent.model, versions, {"limits": asdict(Limits())},
+                     [t.id for t in tasks])
+    click.echo(f"Submitted run {run_id}: {the_agent.name} ({the_agent.model}) on {benchmark}, {len(tasks)} task(s)")
+    if not wait:
+        click.echo("Start a worker to run it: harness worker")
+        return
+    _log_to_stderr()
+    worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id)
+    click.echo(f"Run {run_id} finished: harness results --run_id {run_id}")
+
+
+@cli.command()
+@click.option("--concurrency", default=1, show_default=True, help="Trials (containers) run at the same time")
+@click.option("--exit-when-idle", is_flag=True, help="Stop once no submitted run is left unfinished")
+def worker(concurrency: int, exit_when_idle: bool):
+    """Take trials from the queue and run them, until Ctrl-C (or idle, with --exit-when-idle)."""
+    _store().close()  # fail early on a database from another schema version
+    _log_to_stderr()
+    click.echo(f"Worker started: {concurrency} at a time, database {DB_PATH}", err=True)
+    worker_module.work(DB_PATH, concurrency, exit_when_idle)
+
+
+def _store() -> Store:
+    try:
+        return Store(DB_PATH)
+    except SchemaMismatch as e:
+        raise click.ClickException(str(e)) from None
+
+
+class _EchoHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        click.echo(self.format(record), err=True)  # click finds the current stderr each time
+
+
+def _log_to_stderr() -> None:
+    """Show the workers' progress lines ("harness.*" loggers) on stderr."""
+    logger = logging.getLogger("harness")
+    if not logger.handlers:
+        handler = _EchoHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(threadName)s %(message)s", "%H:%M:%S"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
 
 
 def _select(tasks: list[Task], task_ids: str | None) -> list[Task]:
@@ -91,35 +121,15 @@ def _select(tasks: list[Task], task_ids: str | None) -> list[Task]:
     return [t for t in tasks if t.id in wanted]
 
 
-def _accuracy(results: list[tuple[str, Outcome]]) -> dict:
-    """Accuracy = mean score_float over graded trials only; the other statuses are listed, not counted."""
-    graded = [o.score_float for _, o in results if o.status == "graded"]
-    excluded = {}
-    for task_id, o in results:
-        if o.status != "graded":
-            excluded.setdefault(o.status, []).append(task_id)
-    return {
-        "accuracy": sum(graded) / len(graded) if graded else None,
-        "graded": len(graded),
-        "excluded": excluded,
-        "total_cost_usd": sum(o.cost_usd for _, o in results),
-    }
-
-
-def _print_table(results: list[tuple[str, Outcome]], summary: dict) -> None:
-    click.echo(f"\n{'task':<12}{'status':<14}{'score':<8}{'cost':>9}{'seconds':>9}")
-    for task_id, o in results:
-        score = "" if o.score is None else str(o.score.value)
-        click.echo(f"{task_id:<12}{o.status:<14}{score:<8}{f'${o.cost_usd:.4f}':>9}{o.duration_s:>9.1f}")
-    accuracy = "n/a" if summary["accuracy"] is None else f"{summary['accuracy']:.2f}"
-    click.echo(f"\nAccuracy: {accuracy} over {summary['graded']} graded trial(s); total cost ${summary['total_cost_usd']:.4f}")
-    for status, task_ids in summary["excluded"].items():
-        click.echo(f"{status} ({len(task_ids)}, not in accuracy): {', '.join(task_ids)}")
-
-
 def _git_sha(path: Path) -> str | None:
     result = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True)
     return result.stdout.strip() or None
+
+
+def _dataset_hash(bench: Benchmark) -> str:
+    """Every task's fields (statements, images, ...): changes whenever the benchmark's data does."""
+    tasks = json.dumps([asdict(t) for t in bench.tasks()], sort_keys=True, default=str)
+    return hashlib.sha256(tasks.encode()).hexdigest()[:16]
 
 
 @cli.command()

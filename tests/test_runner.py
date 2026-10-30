@@ -78,8 +78,8 @@ def test_oracle_agent_is_graded_true(tmp_path):
     assert saved["status"] == "graded" and saved["score"]["value"] is True
     transcript = json.loads((tmp_path / "transcript.json").read_text())
     assert [m["role"] for m in transcript] == ["user", "agent"]
-    events = json.loads((tmp_path / "events.json").read_text())
-    assert [(e["kind"], e["turn"]) for e in events] == [("message_sent", 1), ("message_received", 1)]
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [(0, "message_sent", 1), (1, "message_received", 1)]
 
 
 def test_empty_agent_is_graded_false(tmp_path):
@@ -132,6 +132,21 @@ def test_provider_auth_error_is_infra_error_with_traceback(tmp_path):
 def test_unusable_score_value_is_grader_error(tmp_path, value):
     outcome = run_trial(FixedGrader(value), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path)
     assert outcome.status == "grader_error" and "unusable score value" in outcome.error
+
+
+def test_events_are_appended_as_they_happen_and_everything_is_redacted(tmp_path, monkeypatch):
+    monkeypatch.setattr("agentic_harness.redact._secrets", lambda: ("Hello World",))  # pretend it's a secret
+    turns_ended = []
+    outcome = run_trial(FixedGrader(True), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path,
+                        on_turn_end=lambda: turns_ended.append(1))
+    assert outcome.status == "graded" and turns_ended == [1]
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [(0, "message_sent", 1), (1, "message_received", 1)]
+    for name in ("events.jsonl", "transcript.json", "outcome.json"):
+        text = (tmp_path / name).read_text()
+        assert "Hello World" not in text
+    assert "***" in (tmp_path / "transcript.json").read_text()
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_grader_crash_is_grader_error(tmp_path):

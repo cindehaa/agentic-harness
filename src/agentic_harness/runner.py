@@ -1,14 +1,17 @@
 """The trial runner: one attempt at one task, start to finish (`ideation/agents-and-runner.md`)."""
 
 import json
+import os
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
 from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
 from agentic_harness.environments.docker import DockerEnvironment, DockerError
+from agentic_harness.redact import redact, redact_file
 from agentic_harness.types import Limits, Message, Outcome, Score, Task
 
 GRADE_MARGIN_S = 600  # the container outlives the trial deadline by this much, so grading has time to finish
@@ -19,14 +22,19 @@ class TurnLimit(Exception):
 
 
 class RecordingSession(AgentSession):
-    """What the benchmark is handed: forwards to the agent's session, records both sides, and caps the turns."""
+    """What the benchmark is handed: forwards to the agent's session, records both sides, and caps the turns.
 
-    def __init__(self, inner: AgentSession, max_turns: int) -> None:
+    Each event is appended to events.jsonl (redacted) as it happens, so a crash loses nothing already recorded;
+    `on_turn_end` runs after every turn (the worker loads the file into the events table then)."""
+
+    def __init__(self, inner: AgentSession, max_turns: int, events_file: Path, on_turn_end: Callable[[], None]) -> None:
         self.inner = inner
         self.max_turns = max_turns
+        self.events_file = events_file
+        self.on_turn_end = on_turn_end
         self.turns = 0
+        self.seq = 0
         self.transcript: list[Message] = []
-        self.events: list[dict] = []  # agent-neutral trace; the events table in Phase 4
 
     def send(self, message: Message) -> Message:
         if self.turns >= self.max_turns:
@@ -35,22 +43,30 @@ class RecordingSession(AgentSession):
         self._record("message_sent", message)
         reply = self.inner.send(message)
         self._record("message_received", reply)
+        self.on_turn_end()
         return reply
 
     def _record(self, kind: str, message: Message) -> None:
         self.transcript.append(message)
-        self.events.append({"seq": len(self.events), "turn": self.turns, "kind": kind, "payload": asdict(message), "ts": time.time()})
+        event = {"seq": self.seq, "turn": self.turns, "kind": kind, "payload": asdict(message), "ts": time.time()}
+        with self.events_file.open("a") as f:
+            f.write(redact(json.dumps(event, default=str)) + "\n")
+        self.seq += 1
 
 
-def run_trial(benchmark: Benchmark, agent: Agent, task: Task, limits: Limits, attempt_dir: Path) -> Outcome:
-    """Run one attempt and write outcome.json, transcript.json and events.json into attempt_dir. Never raises
-    (except KeyboardInterrupt): every failure becomes an Outcome."""
+def run_trial(
+    benchmark: Benchmark, agent: Agent, task: Task, limits: Limits, attempt_dir: Path,
+    on_turn_end: Callable[[], None] = lambda: None,
+) -> Outcome:
+    """Run one attempt: events.jsonl as it goes, then outcome.json and transcript.json, all in attempt_dir, all
+    redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome."""
     attempt_dir.mkdir(parents=True, exist_ok=True)
     began = time.monotonic()
     session: RecordingSession | None = None
     try:
         with DockerEnvironment(task.image, lifetime_s=int(limits.trial_timeout_s + GRADE_MARGIN_S)) as env:
-            session = RecordingSession(agent.start(env, attempt_dir, limits), limits.max_turns)
+            inner = agent.start(env, attempt_dir, limits)
+            session = RecordingSession(inner, limits.max_turns, attempt_dir / "events.jsonl", on_turn_end)
             outcome = _agent_turns(benchmark, task, env, session)
             if outcome is None:
                 outcome = _grade(benchmark, task, env, session)
@@ -64,10 +80,12 @@ def run_trial(benchmark: Benchmark, agent: Agent, task: Task, limits: Limits, at
         outcome = replace(
             outcome, agent_exit_status=session.inner.exit_status, cost_usd=session.inner.cost_usd, turns=session.turns
         )
-    outcome = replace(outcome, duration_s=round(time.monotonic() - began, 3))
+    outcome = replace(outcome, duration_s=round(time.monotonic() - began, 3), error=outcome.error and redact(outcome.error))
+    for path in attempt_dir.rglob("*"):  # files the agent wrote itself, e.g. mini's trajectory.json
+        if path.is_file():
+            redact_file(path)
     _write(attempt_dir / "outcome.json", asdict(outcome))
     _write(attempt_dir / "transcript.json", [asdict(m) for m in session.transcript] if session else [])
-    _write(attempt_dir / "events.json", session.events if session else [])
     return outcome
 
 
@@ -121,4 +139,7 @@ def _grade(benchmark: Benchmark, task: Task, env: DockerEnvironment, session: Re
 
 
 def _write(path: Path, data) -> None:
-    path.write_text(json.dumps(data, indent=2, default=str))  # default=str: a stray object never blocks the write
+    """Redacted and atomic: a reader (or a crash) never sees half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(redact(json.dumps(data, indent=2, default=str)))  # default=str: a stray object never blocks the write
+    os.replace(tmp, path)
