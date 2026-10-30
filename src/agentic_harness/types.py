@@ -74,6 +74,10 @@ class Limits:
     max_steps: int = 50  # model calls per trial
     command_timeout_s: float = 60  # one agent command
     max_turns: int = 20  # benchmark -> agent messages per trial (a looping benchmark can't run forever)
+    # per container (docker run --memory / --cpus / --pids-limit); going over the memory limit fails the trial
+    memory: str = "2g"
+    cpus: float = 1.0
+    pids_limit: int = 512  # processes; stops a fork bomb from taking the host down
 
 
 @dataclass(frozen=True)

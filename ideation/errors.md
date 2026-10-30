@@ -28,8 +28,9 @@ flowchart TB
   turns -->|"any other exception: auth, permission, bad request, provider down, rate limit after mini's retries, adapter or benchmark bug"| IE2["infra_error (traceback saved)"]
 
   check{"after the turn: env.state() (Docker: docker inspect)"}
-  check -->|"None (vanished, Docker unreachable) or OOMKilled"| IE3
-  check -->|"exited, exit code 0: the keep-alive's lifetime (3 x trial timeout + 600 s) ran out"| IE3
+  check -->|"None (vanished, Docker unreachable)"| IE3
+  check -->|"exited, OOMKilled: over our --memory limit (Limits.memory, 2g)"| GF
+  check -->|"exited, exit code 0, not OOMKilled: the keep-alive's lifetime (3 x trial timeout + 600 s) ran out"| IE3
   check -->|"exited, non-zero exit code: something inside killed the main process"| GF
   check -->|"Running, but the turn raised EnvironmentLost"| IE3
   check -->|"Running"| kill["env.kill_agent_processes()"]
@@ -37,7 +38,8 @@ flowchart TB
   kill --> grade["benchmark.grade(task, env, transcript)"]
   kill -->|"EnvironmentLost"| recheck
   grade -->|"EnvironmentLost"| recheck{"env.state() again (the agent may have killed PID 1 just before handing back)"}
-  recheck -->|"None or OOMKilled"| IE3
+  recheck -->|"None"| IE3
+  recheck -->|"exited, OOMKilled"| GF
   recheck -->|"exited, exit code 0"| IE3
   recheck -->|"exited, non-zero"| GF
   recheck -->|"Running"| IE3
@@ -48,7 +50,7 @@ flowchart TB
   usable -->|"no: TypeError, ValueError"| GE
   usable -->|"yes"| G["graded (its score)"]
 
-  GF["graded: Score(False, container died during agent turn)"]
+  GF["graded: Score(False, container died / ran out of memory during agent turn), score_float 0"]
   IE1["infra_error"]
   IE3["infra_error (container lost)"]
 

@@ -113,14 +113,15 @@ def _agent_turns(benchmark: Benchmark, task: Task, env: Environment, session: Re
 def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
     """Rule 6, from env.state(): None if the container still runs, else how the trial ends."""
     state = env.state()
-    if state is None or state.oom_killed:  # gone, Docker unreachable, or out of memory (no limit of ours yet)
-        return Outcome("infra_error", error=f"container lost: {state}")
+    if state is None:  # gone, or Docker unreachable
+        return Outcome("infra_error", error="container lost: gone, or Docker unreachable")
     if state.running:
         return None
-    if state.exit_code == 0:  # the keep-alive ended on its own: its lifetime ran out, which is ours to size
+    if state.exit_code == 0 and not state.oom_killed:  # the keep-alive ended on its own: its lifetime ran out, ours
         return Outcome("infra_error", error="container lifetime expired")
-    # something inside killed the main process (non-zero exit): the agent's doing
-    score = Score(False, "container died during agent turn", {"state": asdict(state)})
+    # killed from inside, or over the memory limit we set (Limits.memory): the agent's doing
+    why = "container ran out of memory during agent turn" if state.oom_killed else "container died during agent turn"
+    score = Score(False, why, {"state": asdict(state)})
     return Outcome("graded", score, benchmark.score_to_float(score))
 
 

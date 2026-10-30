@@ -20,7 +20,7 @@
 | Evidence from `docker inspect` | Outcome |
 |---|---|
 | Docker unreachable, or container vanished | `infra_error` |
-| `OOMKilled: true` | `infra_error` for now (no per-container memory limit yet). Revisit when limits exist: then exceeding our limit is the agent's failure |
+| `OOMKilled: true` | `graded`, failed ("container ran out of memory during agent turn"): every container has our `--memory` limit (`Limits.memory`, default 2g), so going over it is the agent's doing (2026-10-29 audit; was `infra_error` while there was no limit) |
 | Exited with code 0: the keep-alive `sleep` ended on its own, i.e. its lifetime ran out (2026-10-29 audit) | `infra_error` (we sized it) |
 | Exited with a non-zero code (a process inside killed the main process) | `graded`, failed ("container died during agent turn") |
 | Container died before the agent's turn | `infra_error` |

@@ -53,7 +53,7 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | 3 | Main process is `sleep <lifetime_s>` (default 7200) | Keeps the container alive; self-destruct timer if the harness dies |
 | 4 | Every container gets `--label agentic-harness=1` and name `harness-<8 hex>` | Leftovers are easy to find and remove |
 | 5 | `/workspace` is the working directory (`-w`, created at start) and `exec`'s default cwd | One predictable place for task files |
-| 6 | No CPU/memory limits yet | Not needed until we run many trials at once |
+| 6 | Per-container limits from `Limits` (2026-10-29 audit): `--memory` (2g), `--cpus` (1.0), `--pids-limit` (512) | Many trials run at once; one agent must not starve the others or fork-bomb the host. OOM-killed under our limit = the agent's failure (`graded`) |
 | 7 | `DockerError` (→ `infra_error`) only when the container is verifiably gone (`_alive()` check); anything the agent can cause (bad cwd, OCI exec error, a printed fake docker message) stays a normal command failure | Prevents gaming failures into excluded trials |
 | 8 | No `--rm` (2026-10-29): a container that dies mid-trial stays until `stop()` removes it, so `state()` (`docker inspect`: `Status`, `Running`, `ExitCode`, `OOMKilled`; None = gone or Docker unreachable) can tell the runner why it died | Rule 6 in `agents-and-runner.md` needs the evidence |
 | 9 | `kill_agent_processes()` kills every process except PID 1 (the init) and the main `sleep` (its PID is read from `/proc/1/task/1/children` at start), via one pass over `/proc` | A plain `kill -9 -1` also kills the sleep, and `--init` exits when its child does: the container dies before grading (found while building it) |
@@ -69,7 +69,7 @@ the process inside the container. Leftover processes are killed before grading
 - DockerError (→ infra_error) only when the container is verifiably gone; anything the agent can cause stays a normal command failure (prevents gaming failures into excluded trials). Remaining hole: if the agent itself kills the container, that still reads as infra (planned fix in Phase 3, below).
 
 **Phase 3** (decided 2026-10-29, `agents-and-runner.md`; `--rm` dropped and `state()` added, decisions 8-9 above):
-- Drop `--rm` from `docker run` so a container that dies during the agent's turn can be `docker inspect`ed: vanished / Docker unreachable / `OOMKilled` → `infra_error`; exited otherwise → `graded`, failed. `stop()` still removes the container; expired containers are found by label for a future `harness cleanup`.
+- Drop `--rm` from `docker run` so a container that dies during the agent's turn can be `docker inspect`ed: vanished / Docker unreachable → `infra_error`; exited non-zero or `OOMKilled` → `graded`, failed; exited 0 (lifetime ran out) → `infra_error` (2026-10-29 audit). `stop()` still removes the container; expired containers are found by label for a future `harness cleanup`.
 - `lifetime_s` = 3 × trial timeout + 600 s margin (2026-10-29 audit; was timeout + margin) instead of the fixed 7200 s default. A keep-alive that exits with code 0 ran out of lifetime → `infra_error`.
 
 Dropped: `LocalEnvironment` (2026-10-29) — Docker starts in ~1s, and a fake local world behaves differently from real containers (e.g. has python where alpine doesn't, needs `/workspace` path mapping) and is extra code to explain.

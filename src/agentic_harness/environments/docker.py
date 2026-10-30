@@ -28,7 +28,7 @@ class DockerEnvironment(Environment):
 
     def __init__(self, image: str, lifetime_s: int = 7200, limits: Limits = Limits(), workdir: str = "/workspace") -> None:
         super().__init__(image)
-        self.limits = limits  # the trial's Limits; taken so the class itself is an EnvironmentFactory
+        self.limits = limits  # memory, cpus, pids_limit become docker run flags
         self.lifetime_s = lifetime_s  # the container's main process is `sleep lifetime_s`: a self-destruct timer if the harness dies
         self.workdir = workdir  # default cwd for exec; relative paths resolve here
         self.container_id: str | None = None
@@ -42,6 +42,7 @@ class DockerEnvironment(Environment):
             # --entrypoint: images with their own ENTRYPOINT would otherwise wrap our sleep.
             result = _docker(
                 "run", "-d", "--init", "--label", LABEL, "--name", name, "-w", self.workdir,
+                "--memory", self.limits.memory, "--cpus", str(self.limits.cpus), "--pids-limit", str(self.limits.pids_limit),
                 "--entrypoint", "sleep", self.image, str(self.lifetime_s),
                 timeout=START_TIMEOUT,
             )

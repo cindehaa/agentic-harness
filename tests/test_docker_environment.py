@@ -1,5 +1,6 @@
 """DockerEnvironment against a real Docker daemon (skipped if Docker isn't running)."""
 
+import json
 import subprocess
 import time
 
@@ -7,6 +8,7 @@ import pytest
 
 from agentic_harness.environments import DockerEnvironment, EnvironmentLost, EnvironmentState
 from agentic_harness.environments.docker import MAX_OUTPUT, DockerError
+from agentic_harness.types import Limits
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -219,3 +221,10 @@ def test_state_after_lifetime_expires_is_exit_code_0():
         while env.state().running:
             time.sleep(0.2)
         assert env.state().exit_code == 0  # how the runner tells "lifetime ran out" from "killed"
+
+
+def test_resource_limits_are_applied():
+    with DockerEnvironment(IMAGE, limits=Limits(memory="256m", cpus=0.5, pids_limit=64)) as env:
+        host = json.loads(subprocess.run(["docker", "inspect", "-f", "{{json .HostConfig}}", env.container_id],
+                                         capture_output=True, check=True).stdout)
+    assert (host["Memory"], host["NanoCpus"], host["PidsLimit"]) == (256 * 2**20, 500_000_000, 64)

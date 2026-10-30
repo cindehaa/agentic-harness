@@ -127,3 +127,14 @@ def test_keep_alive_ending_normally_is_infra_error(tmp_path):
 def test_container_lifetime_is_several_times_the_trial_timeout(tmp_path):
     _, env = run(write_ok, tmp_path, Limits(trial_timeout_s=100))
     assert env.lifetime_s >= 3 * 100
+
+
+def test_out_of_memory_under_our_limit_is_graded_fail(tmp_path):
+    outcome, _ = run(die(running=False, exit_code=137, oom_killed=True), tmp_path)
+    assert (outcome.status, outcome.score.value) == ("graded", False)
+    assert outcome.score.explanation == "container ran out of memory during agent turn"
+
+
+def test_limits_reach_the_environment(tmp_path):
+    _, env = run(write_ok, tmp_path, Limits(memory="1g", cpus=0.5))
+    assert (env.limits.memory, env.limits.cpus) == ("1g", 0.5)
