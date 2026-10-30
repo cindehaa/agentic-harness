@@ -146,7 +146,7 @@ def test_submit_returns_at_once_and_a_worker_runs_the_trials(db):
     files = {p.name for p in Path(attempt["artifacts_dir"]).iterdir()}
     assert files == {"events.jsonl", "outcome.json", "transcript.json"}
     kinds = store.db.execute("SELECT kind FROM events WHERE attempt_id = ? ORDER BY seq", (attempt["id"],)).fetchall()
-    assert [k[0] for k in kinds] == ["message_sent", "message_received"]
+    assert [k[0] for k in kinds] == ["message_sent", "command", "message_received"]  # the agent's exec is traced
 
 
 def test_infra_error_is_retried_up_to_three_attempts(db):

@@ -8,11 +8,12 @@ from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, TransientError, Unsupported
+from agentic_harness.agents.base import Agent, AgentLimitation, TransientError, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
 from agentic_harness.environments.base import Environment, EnvironmentFactory, EnvironmentLost
+from agentic_harness.recording import EventLog, RecordingEnvironment, RecordingSession, TurnLimit
 from agentic_harness.redact import redact, redact_file
-from agentic_harness.types import Limits, Message, Outcome, Score, Task
+from agentic_harness.types import Limits, Outcome, Score, Task
 
 # The container's keep-alive runs this long: generous, so it never ends before the trial does (if it does, that is
 # infra_error, not the agent's doing). It is still a self-destruct timer if the harness dies.
@@ -20,56 +21,22 @@ LIFETIME_FACTOR = 3  # times the trial timeout
 GRADE_MARGIN_S = 600  # plus time for grading to finish
 
 
-class TurnLimit(Exception):
-    """The benchmark tried to send more than limits.max_turns messages."""
-
-
-class RecordingSession(AgentSession):
-    """What the benchmark is handed: forwards to the agent's session, records both sides, and caps the turns.
-
-    Each event is appended to events.jsonl (redacted) as it happens, so a crash loses nothing already recorded;
-    `on_turn_end` runs after every turn (the worker loads the file into the events table then)."""
-
-    def __init__(self, inner: AgentSession, max_turns: int, events_file: Path, on_turn_end: Callable[[], None]) -> None:
-        self.inner = inner
-        self.max_turns = max_turns
-        self.events_file = events_file
-        self.on_turn_end = on_turn_end
-        self.turns = 0
-        self.seq = 0
-        self.transcript: list[Message] = []
-
-    def send(self, message: Message) -> Message:
-        if self.turns >= self.max_turns:
-            raise TurnLimit(f"more than {self.max_turns} turns")
-        self.turns += 1
-        self._record("message_sent", message)
-        reply = self.inner.send(message)
-        self._record("message_received", reply)
-        self.on_turn_end()
-        return reply
-
-    def _record(self, kind: str, message: Message) -> None:
-        self.transcript.append(message)
-        event = {"seq": self.seq, "turn": self.turns, "kind": kind, "payload": asdict(message), "ts": time.time()}
-        with self.events_file.open("a") as f:
-            f.write(redact(json.dumps(event, default=str)) + "\n")
-        self.seq += 1
-
-
 def run_trial(
     benchmark: Benchmark, agent: Agent, task: Task, limits: Limits, attempt_dir: Path, env_factory: EnvironmentFactory,
     on_turn_end: Callable[[], None] = lambda: None,
 ) -> Outcome:
     """Run one attempt in a world from `env_factory`: events.jsonl as it goes, then outcome.json and transcript.json,
-    all in attempt_dir, all redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome."""
+    all in attempt_dir, all redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome.
+
+    The agent gets the world wrapped in a RecordingEnvironment (its commands are traced); the benchmark gets it bare."""
     attempt_dir.mkdir(parents=True, exist_ok=True)
     began = time.monotonic()
     session: RecordingSession | None = None
     try:
         with env_factory(task.image, int(LIFETIME_FACTOR * limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
-            inner = agent.start(env, attempt_dir, limits)
-            session = RecordingSession(inner, limits.max_turns, attempt_dir / "events.jsonl", on_turn_end)
+            log = EventLog(attempt_dir / "events.jsonl")
+            inner = agent.start(RecordingEnvironment(env, log), attempt_dir, limits)
+            session = RecordingSession(inner, limits.max_turns, log, on_turn_end)
             outcome = _agent_turns(benchmark, task, env, session)
             if outcome is None:
                 outcome = _grade(benchmark, task, env, session)

@@ -80,7 +80,9 @@ def test_oracle_agent_is_graded_true(tmp_path):
     transcript = json.loads((tmp_path / "transcript.json").read_text())
     assert [m["role"] for m in transcript] == ["user", "agent"]
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [(0, "message_sent", 1), (1, "message_received", 1)]
+    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [(0, "message_sent", 1), (1, "command", 1), (2, "message_received", 1)]
+    command = events[1]["payload"]
+    assert (command["command"], command["exit_code"], command["truncated"]) == ("echo 'Hello World' > hello.txt", 0, False)
 
 
 def test_empty_agent_is_graded_false(tmp_path):

@@ -14,7 +14,7 @@ benchmarks and agents only get a handle.
 |---|---|
 | Trial runner | `start` / `stop` (via `with env:`) |
 | Benchmark (`run_agent`, `grade`) | `write_file`, `read_file`, `upload`, `download`, `exec` |
-| Agent adapter | `exec` |
+| Agent adapter | `exec`, through a `RecordingEnvironment` that traces every command into `events.jsonl` (2026-10-29 audit) |
 
 ## Decisions
 

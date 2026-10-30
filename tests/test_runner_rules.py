@@ -1,6 +1,7 @@
 """run_trial's rules against a fake Environment: no Docker, no model. The runner only knows the Environment port,
 so any backend (here an in-memory fake) can stand in for Docker."""
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -63,7 +64,7 @@ class OneMessage(Benchmark[Task]):
 class ScriptedAgent(Agent):
     name = "scripted"
 
-    def __init__(self, act: Callable[[FakeEnvironment], None]) -> None:
+    def __init__(self, act: Callable[[Environment], None]) -> None:
         self.act = act
 
     def start(self, env, artifacts_dir, limits) -> AgentSession:
@@ -77,13 +78,17 @@ class ScriptedAgent(Agent):
         return Session()
 
 
-def write_ok(env: FakeEnvironment) -> None:
+def write_ok(env: Environment) -> None:
     env.write_file("answer.txt", "ok")
 
 
-def die(**state) -> Callable[[FakeEnvironment], None]:
-    def act(env: FakeEnvironment) -> None:
-        env.state_now = EnvironmentState(**state) if state else None
+def fake(env: Environment) -> FakeEnvironment:
+    return env.env  # the agent is handed a RecordingEnvironment; the fake is behind it
+
+
+def die(**state) -> Callable[[Environment], None]:
+    def act(env: Environment) -> None:
+        fake(env).state_now = EnvironmentState(**state) if state else None
 
     return act
 
@@ -113,7 +118,7 @@ def test_vanished_container_is_infra_error(tmp_path):
 
 def test_environment_lost_while_still_running_is_infra_error(tmp_path):
     def act(env):
-        env.lose_on_exec = True
+        fake(env).lose_on_exec = True
         env.exec("true")
 
     outcome, env = run(act, tmp_path)
@@ -142,8 +147,8 @@ def test_limits_reach_the_environment(tmp_path):
     assert (env.limits.memory, env.limits.cpus) == ("1g", 0.5)
 
 
-def raises(error: Exception) -> Callable[[FakeEnvironment], None]:
-    def act(env: FakeEnvironment) -> None:
+def raises(error: Exception) -> Callable[[Environment], None]:
+    def act(env: Environment) -> None:
         raise error
 
     return act
@@ -170,3 +175,16 @@ def test_grader_setup_failure_and_lost_container_are_retryable(tmp_path):
     assert (outcome.status, outcome.retryable) == ("infra_error", True)
     outcome, _ = run(die(), tmp_path)
     assert (outcome.status, outcome.retryable) == ("infra_error", True)
+
+
+def test_agent_commands_are_traced_by_turn_and_redacted(tmp_path, monkeypatch):
+    monkeypatch.setattr("agentic_harness.redact._secrets", lambda: ("sk-secret-value",))
+
+    def act(env):
+        env.exec("echo sk-secret-value")
+
+    run(act, tmp_path)
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert [(e["seq"], e["turn"], e["kind"]) for e in events] == [(0, 1, "message_sent"), (1, 1, "command"), (2, 1, "message_received")]
+    command = events[1]["payload"]
+    assert command["command"] == "echo ***" and command["exit_code"] == 0 and command["duration_s"] >= 0
