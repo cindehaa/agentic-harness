@@ -282,3 +282,32 @@ def test_exec_env_values_never_reach_the_trace(tmp_path):
     command = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()][1]["payload"]
     assert (command["env"], command["user"]) == ({"SOME_TOKEN": "***"}, "agent")
     assert "not-in-dotenv-123" not in (tmp_path / "events.jsonl").read_text()
+
+
+def test_the_world_starts_from_the_image_the_agent_prepares(tmp_path):
+    class InWorldAgent(ScriptedAgent):
+        def prepare_image(self, task_image):
+            return task_image + "-with-agent"
+
+    factory = Factory()
+    run_trial(OneMessage(), InWorldAgent(write_ok), TASK, Limits(), tmp_path, factory)
+    assert factory.env.image == "fake:image-with-agent"
+    assert factory.env.attached[0].image == "fake:image"  # the grader still starts from the task's own image
+
+
+def test_events_the_agent_recorded_itself_are_traced_even_when_it_raises(tmp_path):
+    class SelfTracing(ScriptedAgent):
+        def start(self, env, artifacts_dir, limits, mcp_servers=()):
+            class Session(AgentSession):
+                def send(self, message):
+                    raise TransientError("overloaded")
+
+                def new_events(self):
+                    return [("tool_call", {"name": "Bash"})]
+
+            return Session()
+
+    outcome = run_trial(OneMessage(), SelfTracing(write_ok), TASK, Limits(), tmp_path, Factory())
+    assert outcome.status == "infra_error"
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert [(e["turn"], e["kind"]) for e in events] == [(1, "message_sent"), (1, "tool_call")]

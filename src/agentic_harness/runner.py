@@ -35,7 +35,7 @@ def run_trial(
     try:
         if missing := agent.capabilities.missing(benchmark.requirements(task)):  # the one compatibility check
             raise Unsupported(f"{agent.name} can't do what this task needs: {', '.join(missing)}")
-        with env_factory(task.image, int(LIFETIME_FACTOR * limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
+        with env_factory(agent.prepare_image(task.image), int(LIFETIME_FACTOR * limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
             log = EventLog(attempt_dir / "events.jsonl")
             servers = tuple(benchmark.mcp_servers(task))
             for s in servers:  # network only: the agent reaches the server, never its files or processes; stopped with env

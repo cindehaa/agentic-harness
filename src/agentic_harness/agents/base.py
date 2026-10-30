@@ -67,6 +67,12 @@ class AgentSession(ABC):
         """Stats so far, including after a crash. A session that tracks nothing reports zeros."""
         return AgentStats()
 
+    def new_events(self) -> list[tuple[str, dict]]:
+        """Trace events (kind, payload) the agent recorded itself since the last call, e.g. the tool calls of an agent
+        that runs inside the world, whose commands never pass through our exec. The harness writes them to the trace
+        after each turn. Default: none (the recording environment already traces every command)."""
+        return []
+
 
 class Agent(ABC):
     """An agent the harness can run. One instance per run; start() gives each trial a fresh session."""
@@ -83,6 +89,12 @@ class Agent(ABC):
         """A new session that acts only through `env`, saves its own files (e.g. a trajectory) in `artifacts_dir`,
         and stops itself within `limits`. `mcp_servers` are already running, reachable at their `url` from inside
         `env` (only an agent with capabilities.mcp gets any)."""
+
+    def prepare_image(self, task_image: str) -> str:
+        """The image a trial's world starts from. Default: the task's own. An agent that must run inside the world
+        (e.g. Claude Code) returns a derived image: the task's image plus the agent's own program, built once and
+        cached. The runner calls it right before starting the world; graders still use their own image."""
+        return task_image
 
     def preflight(self) -> None:
         """Raise PreflightError if this agent can't run at all. Must be cheap and spend no model tokens."""

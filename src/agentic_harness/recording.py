@@ -56,7 +56,11 @@ class RecordingSession(AgentSession):
         self.turns += 1
         self.log.turn = self.turns
         self._record("message_sent", message)
-        reply = self.inner.send(message)
+        try:
+            reply = self.inner.send(message)
+        finally:  # also when the agent raised: what it did is still traced
+            for kind, payload in self.inner.new_events():
+                self.log.write(kind, payload)
         self._record("message_received", reply)
         self.on_turn_end()
         return reply

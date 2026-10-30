@@ -263,6 +263,12 @@ def _end_reason(state: dict) -> EndReason:
     return EndReason.EXPIRED if state["ExitCode"] == 0 else EndReason.KILLED
 
 
+def image_id(image: str) -> str | None:
+    """The local image's content ID (changes whenever it is rebuilt), or None if it isn't local."""
+    result = _docker("image", "inspect", "-f", "{{.Id}}", image, check=False)
+    return _decode(result.stdout).strip() if result.returncode == 0 else None
+
+
 def ensure_image(image: str) -> None:
     """Pull `image` unless it is already local, so later trials need no network to start it (e.g. a grader image)."""
     if _docker("image", "inspect", image, check=False).returncode != 0:
