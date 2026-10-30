@@ -49,7 +49,25 @@ harness worker     Take trials from the queue and run them
 harness status     Active and recent runs, or one run's trials
 harness results    Accuracy, per-trial table, or full JSON for a run
 harness dashboard  Live web view of runs, trials and traces (read-only)
+harness validate   Check an adapter's wiring with no real agent: doing nothing must fail, the reference solution must pass
+harness parity     Score an agent N times through the harness and N times the benchmark's original way; ranges must overlap
+harness adapt      Draft an adapter for a benchmark folder with Claude Code (add-benchmark skill), then validate it
 ```
+
+### Checking an adapter
+
+```bash
+harness validate --benchmark bash-operations             # per-task table; exit 1 if any check fails
+harness parity --benchmark bash-operations --agent mini-swe-agent --runs 3   # writes runs/parity/<benchmark>-<ts>/parity.json
+harness adapt benchmarks/terminal-bench --tasks 3 --model sonnet             # drafts src/agentic_harness/benchmarks/<name>.py + tests
+```
+
+`validate` labels each reference solution: **benchmark-provided** (shipped by the benchmark, an independent
+check) or **harness-written** (ours, it checks the wiring only). `parity`'s original side runs the benchmark's
+own scripts unchanged and the agent in its own Docker mode (mini-swe-agent's `DockerEnvironment`), so the only
+difference is our harness. **Adapters drafted by `harness adapt` (or the
+[`add-benchmark` skill](.claude/skills/add-benchmark/SKILL.md)) need human review** before their scores are
+trusted, even when `validate` passes.
 
 ### One command: submit and wait
 
@@ -274,6 +292,11 @@ in [`benchmarks/__init__.py`](src/agentic_harness/benchmarks/__init__.py).
 | `grader_image(task)` | no | the grader's image; default `task.image` |
 | `version()` | no | content hash of what builds the images; put it in image tags |
 | `score_to_float(score)` | no | override the Inspect-style default (`True`/`"C"` → 1, `"P"` → 0.5, ...) |
+| `reference_solution(task)` | no | a known-good answer for `harness validate` (`ReferenceSolution`; the benchmark's own if it ships one) |
+| `original_workflow(task, agent, model, out_dir)` | no | the benchmark's original way to run a task, for `harness parity` |
+
+The full rules (and a Claude Code skill that follows them) are in
+[`.claude/skills/add-benchmark/SKILL.md`](.claude/skills/add-benchmark/SKILL.md); iterate until `harness validate` passes.
 
 **An agent**: subclass `Agent` and `AgentSession` (see
 [`agents/mini_swe_agent.py`](src/agentic_harness/agents/mini_swe_agent.py)) and add `"name": "module:Class"` to
@@ -296,17 +319,20 @@ world is then graded as is), and `TransientError` for provider or network blips 
 ```
 .
 ├── src/agentic_harness/
-│   ├── cli.py                 # harness run / worker / status / results / dashboard
+│   ├── cli.py                 # harness run / worker / status / results / dashboard / validate / parity / adapt
 │   ├── dashboard.py           # read-only web server for dashboard/ (127.0.0.1, SQLite opened read-only)
 │   ├── worker.py              # worker threads: claim, setup, attempt, lease heartbeat
 │   ├── store.py               # SQLite schema and every query (handwritten SQL)
 │   ├── runner.py              # run_trial: one attempt, start to finish
 │   ├── recording.py           # RecordingSession / RecordingEnvironment → events.jsonl
 │   ├── redact.py              # secret redaction
-│   ├── types.py               # Task, Message, Score, Limits, Outcome
+│   ├── types.py               # Task, Message, Score, Limits, Outcome, ReferenceSolution
+│   ├── validate.py            # harness validate: null + oracle checks through run_trial
+│   ├── parity.py, original.py # harness parity: statistics; the original way (agent's own Docker mode)
 │   ├── benchmarks/            # Benchmark ABC, bash_operations.py, python_tasks.py, registry
-│   ├── agents/                # Agent / AgentSession ABCs, mini_swe_agent.py, registry
+│   ├── agents/                # Agent / AgentSession ABCs, mini_swe_agent.py, fake.py (null/oracle), registry
 │   └── environments/          # Environment ABC, docker.py
+├── .claude/skills/add-benchmark/  # the adapter rules, as a Claude Code skill (harness adapt uses it)
 ├── dashboard/                 # the dashboard page: React + htm from a CDN, no build step
 ├── benchmarks/                # bash-operations, python-tasks (+ opt-in upstream submodules)
 ├── agents/mini-swe-agent/     # submodule
