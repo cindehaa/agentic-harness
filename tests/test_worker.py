@@ -97,7 +97,7 @@ def db(tmp_path, monkeypatch):
     for bench in (LocalGrade, BrokenSetup):
         monkeypatch.setitem(BENCHMARKS, bench.name, bench)
     for agent in (Oracle, Crashing, FlakyOnce):
-        monkeypatch.setitem(AGENTS, agent.name, agent)
+        monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")  # registry entries are "module:Class"
         agent.calls = 0
     LocalGrade.setups = 0
     return tmp_path / "harness.db"

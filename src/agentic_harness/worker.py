@@ -16,7 +16,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
-from agentic_harness.agents import AGENTS
+from agentic_harness.agents import resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS
 from agentic_harness.redact import redact
 from agentic_harness.runner import run_trial
@@ -99,7 +99,7 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim) -> None:
     """One attempt at a trial; then, in one transaction, its outcome and the trial's next state (done, or re-queued)."""
     run = store.run(claim.run_id)
     benchmark = BENCHMARKS[run["benchmark"]]()
-    agent = AGENTS[run["agent"]](run["model"])
+    agent = resolve_agent(run["agent"])(run["model"])
     task = next(t for t in benchmark.tasks() if t.id == claim.task_id)
     limits = Limits(**json.loads(run["config"])["limits"])
 

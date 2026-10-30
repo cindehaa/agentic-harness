@@ -3,6 +3,8 @@ plus one live test against a real model and container (only with RUN_LIVE=1 and 
 
 import json
 import os
+import subprocess
+import sys
 import time
 
 import pytest
@@ -10,8 +12,8 @@ from litellm.exceptions import AuthenticationError, ContextWindowExceededError
 from minisweagent.exceptions import LimitsExceeded, Submitted
 from minisweagent.models.test_models import DeterministicToolcallModel, make_toolcall_output
 
-from agentic_harness.agents import AgentLimitation, MiniSweAgent, Unsupported, resolve_agent
-from agentic_harness.agents.mini_swe_agent import ContainerEnv, MiniAgent, MiniSweSession, TimeLimit
+from agentic_harness.agents import AgentLimitation, Unsupported, resolve_agent
+from agentic_harness.agents.mini_swe_agent import ContainerEnv, MiniAgent, MiniSweAgent, MiniSweSession, TimeLimit
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, Message, Text
 
@@ -143,6 +145,12 @@ def test_resolve_agent_by_name_or_path():
     assert resolve_agent("agents/mini-swe-agent") is MiniSweAgent
     with pytest.raises(ValueError):
         resolve_agent("nope")
+
+
+def test_cli_store_and_benchmarks_do_not_import_litellm():
+    # a fresh interpreter: this test process has already imported mini (and litellm) above
+    code = "import sys, agentic_harness.cli, agentic_harness.store, agentic_harness.benchmarks; print('litellm' in sys.modules)"
+    assert subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip() == "False"
 
 
 @pytest.mark.live
