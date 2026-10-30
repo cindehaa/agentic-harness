@@ -3,15 +3,17 @@
 **Last updated:** 2026-10-29
 
 A living doc: every place a trial can fail, and which outcome it ends in.
-Conditions are the code's own (`runner.py`, `agents/mini_swe_agent.py`,
-`environments/docker.py`). Outcome statuses: `task-input.md` → Outcome model.
+Conditions are the code's own (`runner.py`, `worker.py`, `store.py`,
+`agents/mini_swe_agent.py`, `environments/docker.py`). Outcome statuses: `task-input.md` → Outcome model.
 Update this whenever error handling changes.
 
 ```mermaid
 flowchart TB
-  setup["harness run: Benchmark.setup(tasks) builds the images, once per run"]
-  setup -->|"raises"| abort["harness run stops before any trial (no outcomes)"]
-  setup --> startenv["run_trial: DockerEnvironment.start()"]
+  setup["worker (first to claim runs.setup_claimed_by): Benchmark.setup(tasks) builds the images, once per run"]
+  setup -->|"raises"| abort["run failed; every trial done as infra_error, error = the setup failure (not retried)"]
+  setup --> claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
+  claim --> startenv["run_trial: DockerEnvironment.start()"]
+  claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost)"]
   startenv -->|"DockerError: missing image, docker run fails, Docker down"| IE1
   startenv --> turns["benchmark.run_agent(task, session, env)"]
 
@@ -34,7 +36,8 @@ flowchart TB
   recheck -->|"None or OOMKilled"| IE3
   recheck -->|"exited"| GF
   recheck -->|"Running"| IE3
-  grade -->|"GraderError: grader crashed, grader deps install failed, unparseable output"| GE["grader_error"]
+  grade -->|"GraderSetupError: installing the grader's deps failed (e.g. apk add, no network)"| IE4["infra_error (grader setup)"]
+  grade -->|"GraderError: grader crashed, unparseable output"| GE["grader_error"]
   grade -->|"any other exception"| IE2
   grade -->|"Score"| usable{"json.dumps(value) and score_to_float(score) succeed?"}
   usable -->|"no: TypeError, ValueError"| GE
@@ -44,10 +47,13 @@ flowchart TB
   IE1["infra_error"]
   IE3["infra_error (container lost)"]
 
-  IE1 -.-> retry["retry as a new attempt (Phase 5, max attempts TBD)"]
-  IE2 -.-> retry
-  IE3 -.-> retry
-  retry -.-> startenv
+  IE1 --> retry{"fewer than 3 attempts?"}
+  IE2 --> retry
+  IE3 --> retry
+  IE4 --> retry
+  lost --> retry
+  retry -->|"yes: new attempt after 5 s x attempt number"| startenv
+  retry -->|"no"| final["trial ends infra_error"]
 
   subgraph legend["Legend"]
     direction LR
@@ -66,18 +72,18 @@ flowchart TB
 
   class G,GF,lg graded
   class GE,lge gradererr
-  class IE1,IE2,IE3,lie infraerr
+  class IE1,IE2,IE3,IE4,lost,final,abort,lie infraerr
   class UN,lun unsupported
-  class retry,lpl planned
+  class lpl planned
 ```
 
-Dashed arrows and the dashed gray node are planned (Phase 5), not built.
+Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
 
 | Outcome | Counts toward accuracy? | Retried? | Whose fault |
 |---|---|---|---|
 | `graded` | yes (its `score_float`) | no | nobody's: the agent's result, including failures it caused (killed its container, hit a limit, context full, model refused) |
 | `grader_error` | no; reported prominently (count + list) | no | most likely the grader or the benchmark adapter |
-| `infra_error` | no | yes (Phase 5, planned; max attempts TBD) | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
+| `infra_error` | no | yes, up to 3 attempts in total (backoff 5 s × attempt number); a setup failure is not retried | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
 | `unsupported` | no; reported separately | no | a capability gap: the agent can't take this task's content |
 
 ## Notes
@@ -92,4 +98,16 @@ Dashed arrows and the dashed gray node are planned (Phase 5), not built.
   into `AgentLimitation`; everything else passes through to the runner's
   catch-all (`infra_error` with the traceback).
 - **Grader deps need the network.** bash-operations installs `python3` with
-  `apk` at grade time; with no network that is a `GraderError` → `grader_error`.
+  `apk` at grade time. If that install fails (e.g. no network) the adapter
+  raises `GraderSetupError` → `infra_error`, retried: the infrastructure
+  failed, not the grader (fix A, 2026-10-29). Phase 6 option B removes the
+  network need (`environment-and-grading.md`, known gaps).
+- **mini's own retries are left alone.** mini retries failed model calls
+  itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
+  agent's scaffolding, part of what is measured; we don't change it
+  (`agents-and-runner.md`). Our retries are whole attempts, for `infra_error` only.
+- **Worker lost.** A worker renews its trial's lease every 30 s. If it is
+  killed (or hangs) the lease expires after 120 s; the next worker to look
+  closes the open attempt as `infra_error` ("worker lost") and re-queues the
+  trial (or ends it `infra_error` after 3 attempts). A late write from the lost
+  worker is ignored (its updates require that it still holds the claim).

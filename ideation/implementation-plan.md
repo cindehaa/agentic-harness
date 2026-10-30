@@ -63,38 +63,33 @@ Decided 2026-10-29; details and alternatives in `agents-and-runner.md`. Ownershi
 - **DECIDED (2026-10-29):** `--agent agents/mini-swe-agent` resolves via the `AGENTS` registry by basename; model from `--model` or `.env`; agent name, model and submodule SHA recorded per run.
 **Explain-back:** Walk through one trial line by line. What happens on agent timeout? Where does the trajectory end up? Why does mini run on the host? When is a dead container the agent's fault?
 
-## Phase 4 — Persistence + status/results
+## Phase 4+5 — Database + queue + workers + status/results (merged 2026-10-29)
+
+Merged because `harness run` now always goes through the queue (decisions 9–18 in `database.md`).
+Ownership: Claude drafts everything; you review line by line (claim query, leases, retry policy closely).
 
 | Piece | Owner |
 |---|---|
-| SQLite schema (`runs/harness.db`, WAL): runs, trials, attempts, events; no artifacts table (files live in `attempts.artifacts_dir`). Decided 2026-10-29, see `database.md` | You (design), Claude (DDL) |
-| Recorder: phase events, grade results, artifact paths | Claude |
-| Trajectory → normalized events for mini-swe-agent | Claude |
-| `harness status` / `harness results --format json|table|summary` (accuracy, errors separated) | Claude |
-| Score → number: Inspect-style default, `Benchmark.score_to_float(score)` override | You |
+| `store.py`: plain `sqlite3`, handwritten SQL; `runs/harness.db`, WAL, `busy_timeout`; schema per `database.md` + `schema_version` (mismatch → refuse, delete the file) | Claude |
+| `harness run` inserts the run + trials and returns the run id; `--wait` runs an inline worker and prints results | Claude |
+| Atomic claim (`BEGIN IMMEDIATE` + `UPDATE ... WHERE id=(SELECT ... LIMIT 1) RETURNING *`), 120 s lease renewed every 30 s, expired lease → stale attempt `infra_error` ("worker lost"), trial re-queued | Claude, you review closely |
+| Queue-mode setup: first worker claims `runs.setup_claimed_by`, runs `setup()`, sets run `running`; setup failure → run `failed`, trials `infra_error` | Claude |
+| `harness worker --concurrency N [--exit-when-idle]`: N threads, one trial (one container) each | Claude, you review closely |
+| Retry policy: `infra_error` retried up to 3 attempts, short backoff; others final | Claude, you review closely |
+| Events appended to `events.jsonl` as they happen, loaded into `events` after each turn; secrets redacted (`redact.py`) | Claude |
+| `harness status` (active + last hour, `--all`; `--run_id` per trial) / `harness results --format summary|table|json` | Claude |
+| Score → number: Inspect-style default, `Benchmark.score_to_float(score)` override (built in Phase 3) | You |
 
-**Done when:** a completed run can be inspected entirely from the DB + files after the process exits.
+**Done when:** a completed run can be inspected entirely from the DB + files after the process exits; submit 3 runs back to back, start 2 workers, all finish; `kill -9` a worker mid-trial and its trial is reclaimed and completes.
 
-- **DECIDED (2026-10-29):** schema and its eight decisions in `database.md`. `status` = trial counts by state and outcome; `results` = mean `score_float` over `graded` trials, `grader_error` / `infra_error` / `unsupported` listed separately.
-
-- **OPEN:** `harness status --run_id X` shows one run, and bare `harness status` lists active runs (the brief says "viewing active runs").
-- **DECIDED (2026-10-29):** `grader_error` is excluded from accuracy and reported prominently (count + list), because a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare. Accuracy = mean over `graded` trials only; `grader_error`, `infra_error`, `unsupported` each reported separately.
+- **DECIDED (2026-10-29):** schema and its decisions in `database.md`. Accuracy = mean `score_float` over `graded` trials; `grader_error`, `infra_error`, `unsupported` each reported separately (always shown, even 0).
+- **DECIDED (2026-10-29), was OPEN:** bare `harness status` lists active runs + runs finished in the last hour (`--all` for every run); `harness status --run_id X` shows one run's trials.
+- **DECIDED (2026-10-29):** `grader_error` is excluded from accuracy and reported prominently (count + list), because a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare.
 - **DECIDED (2026-10-29):** `error` is renamed `infra_error`; statuses are `graded`, `grader_error`, `infra_error`, `unsupported`.
-**Explain-back:** Why an attempts table? What's in the DB vs on disk, and why? How is accuracy computed when some trials errored?
-
-## Phase 5 — Queue + workers (Part 2)
-
-| Piece | Owner |
-|---|---|
-| `harness run` enqueues and returns a run_id immediately | Claude |
-| Atomic claim query + leases/heartbeat | You |
-| `harness worker --concurrency N` (process pool / threads) | Claude, you review closely |
-| Retry policy: retry only `infra_error`; `graded` / `grader_error` / `unsupported` are final; max attempts, backoff | You |
-
-**Done when:** submit 3 runs back to back, start 2 workers, all finish; `kill -9` a worker mid-trial and its trial gets re-queued and completes.
-
-- **DECIDED (2026-10-29):** who calls `Benchmark.setup()` in queue mode: the first worker to claim `runs.setup_claimed_by` runs it, then sets the run's status to `running`; trials are claimable only after that. The queue lives in `trials` (`state`, `claimed_by`, `lease_until`), no separate jobs table (`database.md`).
-**Explain-back:** How do two workers never grab the same trial? What bounds concurrency? What happens to a trial whose worker died?
+- **DECIDED (2026-10-29):** who calls `Benchmark.setup()` in queue mode: the first worker to claim `runs.setup_claimed_by`; trials are claimable only after the run is `running`. The queue lives in `trials`, no jobs table.
+- **DECIDED (2026-10-29):** a failed grader-dependency install (e.g. `apk add` with no network) is infrastructure, not the grader: `GraderSetupError` → `infra_error`, retried (`errors.md`).
+- **DECIDED (2026-10-29):** threads, not processes, for `--concurrency` (I/O-bound; `database.md` #15).
+**Explain-back:** Why an attempts table? What's in the DB vs on disk, and why? How is accuracy computed when some trials errored? How do two workers never grab the same trial? What bounds concurrency? What happens to a trial whose worker died? Why threads?
 
 ## Phase 6 — Hardening
 
@@ -108,6 +103,7 @@ Decided 2026-10-29; details and alternatives in `agents-and-runner.md`. Ownershi
 - Claude Code agent adapter (installed in container, `claude -p --output-format stream-json`). See also `adapters.md`.
 - `harness validate --benchmark X` with `NullAgent` / `OracleAgent` (reuses Phase 1 oracle solutions).
 - "Add a benchmark" Claude Code skill gated on `harness validate`.
+- A GUI for the CLI (idea, 2026-10-29): e.g. `harness status --gui` serving a local live dashboard of runs/trials from `runs/harness.db`, or a terminal UI (live-updating `status`).
 
 ## Phase 8 — Deliverables
 

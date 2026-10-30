@@ -1,7 +1,8 @@
-# The database (Phase 4/5)
+# The database (Phase 4+5)
 
-**Status:** Decided 2026-10-29. Code not written yet (Phase 4: schema +
-`status` / `results`; Phase 5: queue + workers).
+**Status:** Decided 2026-10-29. Phases 4 and 5 merged (2026-10-29): the
+database, the queue, the workers and `status` / `results` are built together
+in `store.py`, `worker.py` and `cli.py`.
 
 One SQLite file, `runs/harness.db`, in WAL mode (readers don't block the one
 writer, so `status` works while workers run). Only the harness writes it.
@@ -9,13 +10,16 @@ writer, so `status` works while workers run). Only the harness writes it.
 ## Tables
 
 ```
-runs(id, benchmark, agent, model, versions json, config json, status, setup_claimed_by, created_at)
+runs(id, benchmark, agent, model, versions json, config json, status, setup_claimed_by, created_at, finished_at)
 trials(id, run_id, task_id, state, claimed_by, lease_until, attempt_count, outcome, score_value json, score_float)
 attempts(id, trial_id, n, outcome, score json, exit_status, error, cost_usd, duration_s, artifacts_dir)
 events(id, attempt_id, seq, turn, kind, payload json, ts)
 ```
 
+- `runs.status` is `pending` (waiting for setup) | `running` (setup done, trials claimable) | `done` (every trial done) | `failed` (setup failed).
+- `runs.finished_at` (added 2026-10-29): when the run became `done` or `failed`; `harness status` lists runs finished in the last hour.
 - `trials.state` is `pending` | `running` | `done`.
+- A `schema_version` table holds one number. Tables are created with `CREATE TABLE IF NOT EXISTS` on startup; if the stored version differs from the code's, the harness refuses to start and says to delete `runs/harness.db` (no migrations).
 - `trials.outcome` / `attempts.outcome` is one of the four statuses: `graded`, `grader_error`, `infra_error`, `unsupported`.
 - No `benchmarks` or `agents` tables: the registries live in code (`BENCHMARKS`, `AGENTS`).
 
@@ -32,9 +36,31 @@ events(id, attempt_id, seq, turn, kind, payload json, ts)
 | 7 | `runs.versions` = harness commit, agent submodule commit, benchmark dataset hash, model. `runs.config` = limits and settings | Enough to reproduce or explain a run | Not recording versions (can't tell why two runs differ) |
 | 8 | SQLite + WAL for one machine. Postgres only if workers span machines (talking point, not built) | No server to run; SQLite's locking is enough for one machine's workers | Postgres now (a server for a single-machine take-home) |
 
+## Merged Phase 4+5 decisions (2026-10-29)
+
+| # | Decision | Why | Rejected |
+|---|---|---|---|
+| 9 | Phases 4 and 5 merged: `harness run` inserts the run and its trials and returns the run id at once; `harness worker --concurrency N` claims and runs trials; `harness run --wait` submits, runs an inline worker for that run, and prints its results | One code path for every trial (always through the queue); `--wait` keeps the one-command flow | A synchronous `run` plus a separate queued path (two ways to run a trial) |
+| 10 | Plain `sqlite3` with handwritten SQL, all in one `store.py` (no ORM). WAL mode + `busy_timeout`, so readers never block and a busy writer waits instead of failing | Every query is visible and explainable; four tables don't need an ORM | SQLAlchemy Core + Alembic + Postgres: the scale-up path (talking point), not built |
+| 11 | Atomic claim: `BEGIN IMMEDIATE`, then `UPDATE trials SET state='running', claimed_by=?, lease_until=? WHERE id=(SELECT ... WHERE state='pending' AND the run is 'running' ORDER BY ... LIMIT 1) RETURNING *` | `BEGIN IMMEDIATE` takes SQLite's write lock first, so two workers can't pick the same row | Select, then update (two workers can select the same row in between) |
+| 12 | Leases: a claim holds the trial for 120 s; a background thread renews it every 30 s while the trial runs. An expired lease is reclaimed by any worker: the stale attempt is closed as `infra_error` ("worker lost") and the trial goes back to `pending` (or ends `infra_error` after 3 attempts) | A killed worker's trial is re-run without a human | No leases (a dead worker's trial stays `running` forever) |
+| 13 | Queue-mode setup: the first worker to see a `pending` run claims `runs.setup_claimed_by` atomically, runs `Benchmark.setup(tasks)`, then sets the run `running`. If setup raises: run `failed`, every trial `done` with outcome `infra_error` (one attempt row each, error = the setup failure) | Setup runs once per run; a broken setup ends the run visibly instead of leaving it queued | Retrying setup (a broken Dockerfile fails the same way every time) |
+| 14 | Auto-retry: `infra_error` is retried up to 3 attempts in total, with a short backoff (5 s × attempt number), by the worker that holds the claim. `graded`, `grader_error`, `unsupported` are never retried. After 3 failed attempts the trial ends `infra_error` | Infra failures are usually transient (Docker hiccup, provider blip); the other outcomes would repeat | Retrying every non-`graded` outcome (re-runs real grader bugs and agent limits) |
+| 15 | `--concurrency N` = N worker **threads** in one process, each running one trial (one container) at a time | Trials spend their time waiting on `docker` subprocesses and model HTTP calls, so the GIL doesn't matter; threads share the loaded registries and need no pickling | Processes (more isolation, but nothing CPU-bound to gain) |
+| 16 | Writes: run/trial/attempt rows are written as their state changes (so `status` is live). Trace events are appended to `<attempt_dir>/events.jsonl` as they happen and loaded into `events` at the end of each turn (option C). A worker crash loses nothing already appended. Large files stay in `attempts.artifacts_dir` | Appending a line is cheap and durable; one DB write per turn instead of per event | Writing every event to the DB (a write per event); loading only at the end (a crash loses the trace from the DB) |
+| 17 | Secret redaction: before transcripts, events or files are written, every `.env` value whose key contains `KEY` / `TOKEN` / `SECRET` / `PASSWORD` and is ≥ 8 characters is replaced with `***` (`redact.py`) | Logs and the DB are safe to share | Redacting only at read time (the secret is already on disk) |
+| 18 | `runs.versions` = harness git commit, agent submodule commit, benchmark dataset hash (sha256 of every task's fields), model. `runs.config` = the limits | Enough to reproduce or explain a run | — |
+
 ## Reading it back
 
-- **`harness status`** = counts of trials by `state` and by `outcome`.
-- **`harness results`** = accuracy = mean `score_float` over `graded` trials;
-  `grader_error`, `infra_error` and `unsupported` trials are listed separately
-  (see the Outcome model in `task-input.md`).
+- **`harness status`** (no id): active runs plus runs finished in the last
+  hour (`--all` for every run): `RUN, BENCHMARK, AGENT, PROGRESS, STARTED`;
+  PROGRESS is e.g. `3/5 done`, `setting up`, `queued`, `setup failed`.
+- **`harness status --run_id X`**: one row per trial: `TASK, STATE, OUTCOME, SCORE, ATTEMPTS`.
+- **`harness results --run_id X --format summary|table|json`**:
+  - `summary` = benchmark · agent (model); accuracy = mean `score_float` over
+    `graded` trials (n graded); the excluded counts `grader_error · infra_error
+    · unsupported` always shown, even when 0 (with their task ids); cost; time.
+  - `table` = one row per trial: task, outcome, score, cost, time, attempts.
+  - `json` = everything: run (versions, config), trials with raw
+    `score_value`, and their attempts.

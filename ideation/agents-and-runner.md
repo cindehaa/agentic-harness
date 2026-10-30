@@ -51,3 +51,11 @@ for a future `harness cleanup`.
 - **Any other exception** from the agent or harness (e.g. a model API auth error, provider down, rate limit after mini's retries) → `infra_error` with the traceback. All error paths: `errors.md`.
 - **Container `lifetime_s`** = trial timeout + 600 s grading margin.
 - **Score checks:** a non-JSON `Score.value`, or one `score_to_float` can't convert → `grader_error`.
+
+## mini's own retry policy is left alone (2026-10-29)
+
+mini retries failed model calls itself (e.g. `ContentPolicyViolationError` up
+to 10 times, everything not on its abort list). That is the agent's own
+scaffolding, part of what a benchmark measures about the agent, so we do not
+change it. The harness's retries are separate: a whole new attempt, only for
+`infra_error` (`database.md` #14, `errors.md`).

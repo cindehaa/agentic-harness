@@ -1,9 +1,9 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 3 built: `harness run` runs end to end (live, Haiku: bash-operations 4/5, python-tasks 3/3, $0.005 total). Awaiting Cindy's line-by-line review.
+**Now:** Phase 4+5 (merged 2026-10-29: database + queue + workers + status/results) decided (`database.md` #9–18); being built.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
-**Next:** Phase 4: SQLite schema (`database.md`), recorder, `harness status` / `results`.
+**Next:** Phase 6: hardening (incl. baking grader deps into the image, option B).
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
@@ -81,7 +81,7 @@ flowchart TB
     runsync["harness run (sync)"]
   end
 
-  subgraph P4["Phase 4: persistence + status/results"]
+  subgraph P4["Phase 4+5 (merged): persistence + status/results"]
     direction TB
     subgraph DB["SQLite"]
       direction LR
@@ -93,16 +93,17 @@ flowchart TB
     files["Artifacts on disk"]
     status["harness status"]
     results["harness results"]
-    q_status["OPEN: harness status: one run (--run_id) vs list active runs"]
+    q_status["Decided: harness status = active + last hour (--all); --run_id = per-trial table"]
   end
 
-  subgraph P5["Phase 5: queue + workers"]
+  subgraph P5["Phase 4+5 (merged): queue + workers"]
     direction TB
     enqueue["harness run enqueues"]
     claim["Atomic claim + lease"]
     worker["harness worker --concurrency N"]
     retry["Retry policy: retry infra_error only"]
-    d5_setup["Decided: first worker claims runs.setup_claimed_by, runs setup(), sets run running; trials claimable only then"]
+    d5_setup["Decided: first worker claims runs.setup_claimed_by, runs setup(), sets run running; trials claimable only then; setup failure → run failed, trials infra_error"]
+    d45["Decided 2026-10-29 (database.md #9–18): run returns id (--wait = inline worker); sqlite3 + handwritten SQL in store.py; BEGIN IMMEDIATE claim; 120 s lease renewed every 30 s; infra_error retried up to 3 attempts; worker threads; events.jsonl → events per turn; secret redaction; GraderSetupError → infra_error"]
   end
 
   subgraph P6["Phase 6: hardening"]
@@ -193,6 +194,8 @@ flowchart TB
   dockenv --> norm
   q_status -.-> status
   d5_setup -.-> enqueue
+  d45 -.-> claim
+  d45 -.-> worker
   d4_schema -.-> DB
   d_logs -.-> files
   d_deps -.-> grade
@@ -215,10 +218,9 @@ flowchart TB
   class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr,d_integ done
   class d3_reg,d3_host,d3_multi,d3_reply,d3_lim,d3_dead,d3_files,d3_errs done
   class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
-  class q_status open
-  class d4_schema,d5_setup done
+  class q_status,d4_schema,d5_setup,d45 done
   class reg,bashad,pyad,oracle done
   class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync done
-  class truns,ttrials,tatt,tev,traj,files,status,results next
-  class tasks,hcleanup,fb,enqueue,claim,worker,retry,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class truns,ttrials,tatt,tev,traj,files,status,results,enqueue,claim,worker,retry wip
+  class tasks,hcleanup,fb,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
