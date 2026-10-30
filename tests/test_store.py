@@ -166,3 +166,14 @@ def test_secret_values_from_env_file(tmp_path):
     secrets = secret_values(env)
     assert secrets == ("sk-ant-12345678", "hunter2hunter2")  # longest first
     assert redact("key sk-ant-12345678 and hunter2hunter2, model anthropic/claude", secrets) == "key *** and ***, model anthropic/claude"
+
+
+def test_recorded_spend_is_never_erased_by_an_outcome_without_it(store):
+    from agentic_harness.agents import AgentStats
+
+    submit(store, task_ids=("t1",))
+    claim = store.claim_trial("w", 120)
+    store.record_spend(claim.attempt_id, AgentStats(None, 0.05, 4, 900, 60))  # at a turn's end
+    store.finish_attempt(claim, "w", Outcome("infra_error", error="worker interrupted"))  # carries no stats
+    a = store.attempts("run-1")[0]
+    assert (a["cost_usd"], a["model_calls"], a["input_tokens"], a["output_tokens"]) == (0.05, 4, 900, 60)

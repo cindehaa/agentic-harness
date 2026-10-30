@@ -239,11 +239,12 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
     task = next(t for t in benchmark.tasks() if t.id == claim.task_id)
     limits = Limits(**json.loads(run["config"])["limits"])
 
-    def load_events(stats: AgentStats) -> None:  # after each turn; a failure here only delays them to the attempt's end
+    def turn_ended(stats: AgentStats) -> None:  # live spend and trace; a failure here only delays them to the attempt's end
         try:
+            store.record_spend(claim.attempt_id, stats)
             store.load_events(claim.attempt_id, claim.artifacts_dir / "events.jsonl")
         except sqlite3.Error as e:
-            log.warning("%s attempt %s: loading events failed (%s); retried at the end", claim.task_id, claim.n, e)
+            log.warning("%s attempt %s: recording the turn failed (%s); retried at the end", claim.task_id, claim.n, e)
 
     def environment(image: str, lifetime_s: int, limits: Limits) -> Environment:  # ENVIRONMENT, known to Stop
         if stop.requested.is_set():
@@ -254,7 +255,10 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
 
     log.info("run %s: %s attempt %s", claim.run_id, claim.task_id, claim.n)
     with _heartbeat(db_path, lambda s: s.renew_lease(claim, worker, LEASE_S)):
-        outcome = run_trial(benchmark, agent, task, limits, claim.artifacts_dir, environment, on_turn_end=load_events)
+        outcome = run_trial(benchmark, agent, task, limits, claim.artifacts_dir, environment, on_turn_end=turn_ended)
+    # first, and whatever happens next (interrupted, claim lost): money spent counts toward the run's budget
+    store.record_spend(claim.attempt_id, AgentStats(None, outcome.cost_usd, outcome.model_calls, outcome.input_tokens,
+                                                    outcome.output_tokens))
     if stop.requested.is_set():  # Ctrl-C also reaches our `docker exec`s: whatever this attempt ended as, it's not its own
         _interrupted(store, claim, worker)
         return

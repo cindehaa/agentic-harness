@@ -10,9 +10,10 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from agentic_harness.agents.base import AgentStats
 from agentic_harness.types import Outcome
 
-SCHEMA_VERSION = 3  # bump on any schema change; an old harness.db is then refused, not migrated
+SCHEMA_VERSION = 4  # bump on any schema change; an old harness.db is then refused, not migrated
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -25,6 +26,8 @@ CREATE TABLE IF NOT EXISTS runs (
     status TEXT NOT NULL,       -- pending (waiting for setup) | running | done | failed (setup failed)
     setup_claimed_by TEXT,
     setup_lease_until REAL,     -- the setup claim lapses after this (time.time()) unless renewed
+    setup_started_at REAL,      -- the latest setup claim
+    setup_finished_at REAL,     -- the trials became claimable (or the run failed)
     created_at REAL NOT NULL,
     finished_at REAL
 );
@@ -50,11 +53,21 @@ CREATE TABLE IF NOT EXISTS attempts (
     score TEXT,                 -- json Score
     exit_status TEXT,
     error TEXT,
-    cost_usd REAL,
+    cost_usd REAL,              -- what the agent spent; recorded at each turn's end, so also for a crashed attempt
+    model_calls INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
     duration_s REAL,
     artifacts_dir TEXT,
-    started_at REAL,            -- claimed (time.time()); NULL for a setup failure's attempt
-    finished_at REAL,
+    -- phase boundaries (time.time()); NULL for a phase the attempt never reached, and for a setup failure's attempt
+    queued_at REAL,             -- its trial became claimable (setup done, or a retry's backoff over)
+    started_at REAL,            -- claimed
+    env_ready_at REAL,          -- world and sidecars up
+    agent_start_at REAL,
+    agent_end_at REAL,
+    grade_start_at REAL,
+    grade_end_at REAL,
+    finished_at REAL,           -- outcome recorded
     UNIQUE (trial_id, n)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -148,13 +161,13 @@ class Store:
         now = time.time()
         with self._transaction():
             return self._one(
-                """UPDATE runs SET setup_claimed_by = ?, setup_lease_until = ?
+                """UPDATE runs SET setup_claimed_by = ?, setup_lease_until = ?, setup_started_at = ?
                    WHERE id = (SELECT id FROM runs
                                WHERE status = 'pending' AND (setup_claimed_by IS NULL OR setup_lease_until < ?)
                                  AND (? IS NULL OR id = ?)
                                ORDER BY created_at LIMIT 1)
                    RETURNING *""",
-                (worker, now + lease_s, now, run_id, run_id),
+                (worker, now + lease_s, now, now, run_id, run_id),
             )
 
     def renew_setup_lease(self, run_id: str, worker: str, lease_s: float) -> bool:
@@ -177,9 +190,11 @@ class Store:
         """Setup worked: the run's trials become claimable. Setup failed: the run fails and every trial ends infra_error.
         Raises LostClaim (and writes nothing) if `worker` no longer holds the setup."""
         with self._transaction():
+            now = time.time()
             cursor = self.db.execute(
-                "UPDATE runs SET status = ?, finished_at = ? WHERE id = ? AND setup_claimed_by = ? AND status = 'pending'",
-                ("running" if error is None else "failed", None if error is None else time.time(), run_id, worker),
+                "UPDATE runs SET status = ?, setup_finished_at = ?, finished_at = ?"
+                " WHERE id = ? AND setup_claimed_by = ? AND status = 'pending'",
+                ("running" if error is None else "failed", now, None if error is None else now, run_id, worker),
             )
             if cursor.rowcount == 0:
                 raise LostClaim(f"setup of {run_id}")
@@ -205,13 +220,15 @@ class Store:
                                WHERE t.state = 'pending' AND t.available_at <= ? AND r.status = 'running'
                                  AND (? IS NULL OR r.id = ?)
                                ORDER BY r.created_at, t.id LIMIT 1)
-                   RETURNING id, run_id, task_id, attempt_count""",
+                   RETURNING id, run_id, task_id, attempt_count, available_at""",
                 (worker, now + lease_s, now, run_id, run_id),
             )
             if trial is None:
                 return None
-            attempt_id = self.db.execute(
-                "INSERT INTO attempts (trial_id, n, started_at) VALUES (?, ?, ?)", (trial["id"], trial["attempt_count"], now)
+            attempt_id = self.db.execute(  # claimable from the later of: setup done, the retry backoff over
+                "INSERT INTO attempts (trial_id, n, queued_at, started_at)"
+                " SELECT ?, ?, MAX(COALESCE(setup_finished_at, created_at), ?), ? FROM runs WHERE id = ?",
+                (trial["id"], trial["attempt_count"], trial["available_at"], now, trial["run_id"]),
             ).lastrowid
             artifacts_dir = self.runs_dir / trial["run_id"] / trial["task_id"] / f"attempt-{attempt_id}"
             self.db.execute("UPDATE attempts SET artifacts_dir = ? WHERE id = ?", (str(artifacts_dir), attempt_id))
@@ -256,13 +273,31 @@ class Store:
             if owned is None:
                 raise LostClaim(f"trial {claim.trial_id} attempt {claim.n}")
             self._load_events(claim.attempt_id, claim.artifacts_dir / "events.jsonl")
+            phases = outcome.phases
             self.db.execute(
-                "UPDATE attempts SET outcome = ?, score = ?, exit_status = ?, error = ?, cost_usd = ?, duration_s = ?,"
-                " finished_at = ? WHERE id = ?",
+                "UPDATE attempts SET outcome = ?, score = ?, exit_status = ?, error = ?, duration_s = ?, env_ready_at = ?,"
+                " agent_start_at = ?, agent_end_at = ?, grade_start_at = ?, grade_end_at = ?, finished_at = ? WHERE id = ?",
                 (outcome.status, _json(outcome.score and asdict(outcome.score)), outcome.agent_exit_status, outcome.error,
-                 outcome.cost_usd, outcome.duration_s, time.time(), claim.attempt_id),
+                 outcome.duration_s, phases.get("env_ready"), phases.get("agent_start"), phases.get("agent_end"),
+                 phases.get("grade_start"), phases.get("grade_end"), time.time(), claim.attempt_id),
             )
+            self._record_spend(claim.attempt_id, outcome.cost_usd, outcome.model_calls, outcome.input_tokens,
+                               outcome.output_tokens)
             self._end_or_requeue(claim.trial_id, claim.run_id, outcome, retry_at)
+
+    def record_spend(self, attempt_id: int, stats: AgentStats) -> None:
+        """What the attempt's agent has spent so far. Not fenced: an attempt row belongs to one attempt, and money a
+        worker spent before losing its claim was still spent."""
+        self._record_spend(attempt_id, stats.cost_usd, stats.model_calls, stats.input_tokens, stats.output_tokens)
+
+    def _record_spend(self, attempt_id: int, cost_usd: float, model_calls: int, input_tokens: int, output_tokens: int) -> None:
+        # MAX: spend only grows, so an outcome without stats (e.g. "worker interrupted") never erases what was recorded
+        self.db.execute(
+            "UPDATE attempts SET cost_usd = MAX(COALESCE(cost_usd, 0), ?), model_calls = MAX(COALESCE(model_calls, 0), ?),"
+            " input_tokens = MAX(COALESCE(input_tokens, 0), ?), output_tokens = MAX(COALESCE(output_tokens, 0), ?)"
+            " WHERE id = ?",
+            (cost_usd, model_calls, input_tokens, output_tokens, attempt_id),
+        )
 
     def _end_or_requeue(self, trial_id: int, run_id: str, outcome: Outcome, retry_at: float | None) -> None:
         if retry_at is not None:

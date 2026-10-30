@@ -67,7 +67,7 @@ class Oracle(Agent):
                 return Message("agent", (Text("done"),))
 
             def stats(self) -> AgentStats:
-                return AgentStats("Submitted", 0.01)
+                return AgentStats("Submitted", 0.01, 3, 1000, 50)
 
         return Session()
 
@@ -306,6 +306,7 @@ def test_ctrl_c_stops_the_worker_and_puts_its_trials_back_in_the_queue(db):
     store = Store(db)
     assert [(t["state"], t["attempt_count"]) for t in store.trials(run_id)] == [("pending", 1)] * 2
     assert [(a["outcome"], a["error"]) for a in store.attempts(run_id)] == [("infra_error", "worker interrupted")] * 2
+    assert [a["cost_usd"] for a in store.attempts(run_id)] == [0.01] * 2  # spent before the stop: still counted
     assert store.live_workers(0) == 0  # its row is gone
     assert _labelled("container") == [] and _labelled("volume") == []
     assert signal.getsignal(signal.SIGINT) is signal.default_int_handler  # put back
@@ -341,3 +342,38 @@ def test_an_interrupted_setup_is_released_for_another_worker(db):
     stop.hand_back(store)
     assert store.run("r1")["setup_claimed_by"] is None
     assert store.claim_setup("w2", 120)["id"] == "r1"  # at once, not after the lease
+
+
+PHASES = ("queued_at", "started_at", "env_ready_at", "agent_start_at", "agent_end_at", "grade_start_at", "grade_end_at",
+          "finished_at")
+
+
+def test_attempts_record_spend_and_phase_timestamps_in_order(db):
+    run_id = submit("oracle")
+    work()
+    store = Store(db)
+    run = store.run(run_id)
+    assert run["created_at"] <= run["setup_started_at"] <= run["setup_finished_at"]
+    for a in store.attempts(run_id):
+        times = [a[p] for p in PHASES]
+        assert None not in times and times == sorted(times), dict(a)
+        assert a["queued_at"] == run["setup_finished_at"]  # a first attempt is claimable once setup is done
+        assert (a["cost_usd"], a["model_calls"], a["input_tokens"], a["output_tokens"]) == (0.01, 3, 1000, 50)
+
+
+def test_a_failed_attempts_spend_is_recorded(db):
+    run_id = submit("crashing", task_ids="bash-001")
+    work()
+    attempts = Store(db).attempts(run_id)
+    assert [(a["outcome"], a["cost_usd"]) for a in attempts] == [("infra_error", 0.01)] * 3
+    assert all(a["agent_end_at"] and a["grade_start_at"] is None for a in attempts)  # never graded
+    assert Store(db).trials(run_id)[0]["cost_usd"] == pytest.approx(0.03)
+
+
+def test_a_retrys_queue_wait_starts_when_its_backoff_ends(db, monkeypatch):
+    monkeypatch.setattr(worker, "RETRY_BACKOFF_S", 0.5)
+    run_id = submit("flaky-once", task_ids="bash-001")
+    work()
+    first, second = Store(db).attempts(run_id)
+    assert second["queued_at"] == pytest.approx(first["finished_at"] + 0.5, abs=0.1)
+    assert second["queued_at"] <= second["started_at"]
