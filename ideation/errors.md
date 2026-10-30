@@ -11,7 +11,7 @@ Update this whenever error handling changes.
 
 ```mermaid
 flowchart TB
-  setup["worker (first to claim runs.setup_claimed_by): Benchmark.setup(tasks) builds the images, once per run"]
+  setup["worker (first to claim runs.setup_claimed_by), once per run: Benchmark.setup(tasks) pulls base images and builds the task images; then every grader / MCP-server image is pulled and the agent's derived images built (each pull bounded at 600 s)"]
   setup -->|"raises"| abort["run failed (traceback + build log in runs/run/setup.log); every trial done as infra_error (not retried)"]
   setup -->|"setup worker's lease expires"| setup
   preflight["worker start (and harness run at submit): Agent.preflight() for every unfinished run: model known to litellm, its API key set; no tokens spent"]

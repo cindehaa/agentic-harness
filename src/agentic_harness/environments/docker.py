@@ -20,6 +20,7 @@ START_TIMEOUT = 600.0  # seconds; generous because the first run may pull the im
 DOCKER_TIMEOUT = 120.0  # seconds; default for every other docker call, so a stuck daemon can't hang a worker
 CP_TIMEOUT = 600.0  # seconds; copies can be large
 BUILD_TIMEOUT = 1800.0  # seconds; builds may pull base images and run setup scripts
+PULL_TIMEOUT = 600.0  # seconds for one `docker pull`
 MAX_OUTPUT = 1_000_000  # bytes kept per stream of one exec; the rest is read and thrown away
 LABEL = "agentic-harness=1"  # on every container we start, so leftovers are easy to find
 VOLUME_RM_TRIES = 4  # removing a workspace volume; waits VOLUME_RM_DELAY_S x try number between tries
@@ -291,10 +292,14 @@ def image_id(image: str) -> str | None:
     return _decode(result.stdout).strip() if result.returncode == 0 else None
 
 
-def ensure_image(image: str) -> None:
-    """Pull `image` unless it is already local, so later trials need no network to start it (e.g. a grader image)."""
+def ensure_image(image: str, timeout: float = PULL_TIMEOUT) -> None:
+    """Pull `image` unless it is already local, so later trials need no network to start it (e.g. a grader image).
+    Bounded: a first pull can hang silently (e.g. in a sandboxed shell), and setup must fail, not wait forever."""
     if _docker("image", "inspect", image, check=False).returncode != 0:
-        _docker("pull", image, timeout=BUILD_TIMEOUT)
+        try:
+            _docker("pull", image, timeout=timeout)
+        except DockerError as e:
+            raise DockerError(f"{e} while pulling {image} (try `docker pull {image}` by hand)") from None
 
 
 def _docker(

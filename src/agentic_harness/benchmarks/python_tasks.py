@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from agentic_harness.agents.base import AgentSession
 from agentic_harness.benchmarks.base import Benchmark, GraderError, content_hash
-from agentic_harness.environments import Environment, build_image
+from agentic_harness.environments import Environment, build_image, ensure_image
 from agentic_harness.paths import REPO_ROOT
 from agentic_harness.types import Message, Score, Task, Text, Transcript
 
@@ -48,6 +48,8 @@ class PythonTasks(Benchmark[PythonTask]):
         return content_hash(ROOT, DOCKERFILE)
 
     def setup(self, tasks: list[PythonTask]) -> None:
+        for image in sorted({t.base_image for t in tasks}):  # pulled explicitly and time-bounded, not inside a build
+            ensure_image(image)
         for t in tasks:
             build_image(DOCKERFILE.format(task_id=t.id, base_image=t.base_image), context=ROOT, tag=t.image)
 

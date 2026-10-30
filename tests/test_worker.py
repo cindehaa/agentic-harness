@@ -196,6 +196,33 @@ def test_setup_failure_fails_the_run(db):
     assert Oracle.calls == 0
 
 
+def test_run_setup_makes_every_image_a_trial_starts_local(db, monkeypatch):
+    pulled, prepared = [], []
+    monkeypatch.setattr(worker, "ensure_image", pulled.append)
+    monkeypatch.setattr(Oracle, "prepare_image", lambda self, image: prepared.append(image) or image)
+    run_id = submit("oracle")
+    work()
+    assert pulled == ["python:3.11-slim"]  # the grader image, once for both tasks
+    assert prepared[:2] == [t.image for t in LocalGrade().tasks()[:2]]  # the agent's images, before any trial
+    assert Store(db).run(run_id)["status"] == "done"
+
+
+def test_an_image_that_cant_be_pulled_fails_setup(db, monkeypatch):
+    class MissingGrader(LocalGrade):
+        name = "missing-grader"
+
+        def grader_image(self, task):
+            return "harness-test/no-such-image:never"
+
+    monkeypatch.setitem(BENCHMARKS, MissingGrader.name, MissingGrader)
+    run_id = submit("oracle", benchmark="missing-grader")
+    work()
+    store = Store(db)
+    assert store.run(run_id)["status"] == "failed"
+    assert "while pulling harness-test/no-such-image:never" in store.attempts(run_id)[0]["error"]
+    assert Oracle.calls == 0
+
+
 def test_a_dead_workers_trial_is_reclaimed_and_finished(db):
     run_id = submit("oracle", task_ids="bash-001")
     store = Store(db)

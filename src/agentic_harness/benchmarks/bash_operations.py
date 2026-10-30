@@ -52,7 +52,10 @@ class BashOperations(Benchmark[BashTask]):
         return content_hash(ROOT, DOCKERFILE)
 
     def setup(self, tasks: list[BashTask]) -> None:
-        ensure_image(GRADER_IMAGE)  # pulled now, so grading needs no network
+        # Pulled now, explicitly and time-bounded: the grader's image (so grading needs no network) and every image
+        # the builds start from (the setup stage is python too)
+        for image in sorted({GRADER_IMAGE, *(t.base_image for t in tasks)}):
+            ensure_image(image)
         for t in tasks:
             build_image(DOCKERFILE.format(task_id=t.id, base_image=t.base_image), context=ROOT, tag=t.image)
 

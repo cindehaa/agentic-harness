@@ -16,13 +16,13 @@ from collections.abc import Callable
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from agentic_harness.agents import PreflightError, resolve_agent
-from agentic_harness.benchmarks import BENCHMARKS
-from agentic_harness.environments import DockerEnvironment
+from agentic_harness.agents import Agent, PreflightError, resolve_agent
+from agentic_harness.benchmarks import BENCHMARKS, Benchmark
+from agentic_harness.environments import DockerEnvironment, ensure_image
 from agentic_harness.redact import redact
 from agentic_harness.runner import run_trial
 from agentic_harness.store import Claim, LostClaim, Store
-from agentic_harness.types import Limits
+from agentic_harness.types import Limits, Task
 
 LEASE_S = 120  # a claim lapses this long after its last renewal
 RENEW_EVERY_S = 30
@@ -103,7 +103,9 @@ def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row) -> None:
     error = None
     with _heartbeat(db_path, lambda s: s.renew_setup_lease(run["id"], worker, LEASE_S)):
         try:
-            benchmark.setup([t for t in benchmark.tasks() if t.id in task_ids])
+            tasks = [t for t in benchmark.tasks() if t.id in task_ids]
+            benchmark.setup(tasks)
+            _prepare_images(benchmark, resolve_agent(run["agent"])(run["model"]), tasks)
         except Exception as e:
             log_file = store.runs_dir / run["id"] / "setup.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +117,15 @@ def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row) -> None:
         log.warning("run %s: setup lease lost; result discarded", run["id"])
         return
     log.info("run %s: %s", run["id"], "setup failed: " + error if error else "set up; trials claimable")
+
+
+def _prepare_images(benchmark: Benchmark, agent: Agent, tasks: list[Task]) -> None:
+    """Every image a trial will start, made local now, so no trial stalls on a first pull or build: graders, MCP
+    servers (pulled unless setup() built them) and the agent's own derived images (e.g. Claude Code's)."""
+    for image in sorted({benchmark.grader_image(t) for t in tasks} | {s.image for t in tasks for s in benchmark.mcp_servers(t)}):
+        ensure_image(image)
+    for t in tasks:
+        agent.prepare_image(t.image)
 
 
 def _attempt(store: Store, db_path: Path, worker: str, claim: Claim) -> None:
