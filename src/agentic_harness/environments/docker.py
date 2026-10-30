@@ -74,7 +74,7 @@ class DockerEnvironment(Environment):
             timed_out = False
         except subprocess.TimeoutExpired:
             # Killing the `docker exec` client does NOT kill the process inside the container.
-            # Leftover processes are killed before grading (`kill -9 -1`); Phase 6 may harden this.
+            # Leftover processes are killed before grading (kill_agent_processes); Phase 6 may harden this.
             proc.kill()
             proc.wait()
             timed_out = True

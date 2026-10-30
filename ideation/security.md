@@ -11,8 +11,9 @@ shared trial container.
 - The agent's commands run via `docker exec -u agent`.
 - Grader files are root-only (`chmod 700`); grading runs as root.
 - Before grading, leftover agent processes are killed: `pkill -9 -u agent`
-  when the agent runs as the unprivileged user; `kill -9 -1` when `agent_user`
-  is root (our two benchmarks).
+  when the agent runs as the unprivileged user; `Environment.kill_agent_processes()`
+  (every process except PID 1 and its main `sleep`; a plain `kill -9 -1` would
+  kill the container too) when `agent_user` is root (our two benchmarks).
 - **`docker cp` keeps the host's uid and mode bits**, so grader files uploaded
   with `Environment.upload` are not root-only by default. After upload, run an
   explicit `chown -R root:root <path>` + `chmod 700 <path>` (as root).

@@ -20,6 +20,7 @@ workers(id, started_at, heartbeat_at)
 - `runs.status` is `pending` (waiting for setup) | `running` (setup done, trials claimable) | `done` (every trial done) | `failed` (setup failed).
 - `runs.finished_at` (added 2026-10-29): when the run became `done` or `failed`; `harness status` lists runs finished in the last hour.
 - `trials.state` is `pending` | `running` | `done`.
+- Names (2026-10-29 audit): the **trace** = the agent-neutral events (`events.jsonl` on disk, the `events` table in the DB); a **trajectory** = an agent's own log in its own format (mini's `trajectory.json`), kept as a file in the attempt folder; the **transcript** = the messages only (`transcript.json`, what `grade()` sees).
 - `workers` (2026-10-29 audit, schema version 2): one row per `harness worker` process (`host-pid`), heartbeat every 30 s, deleted on exit. `harness status` adds "no worker running (start one: harness worker)" to unfinished runs when no heartbeat is newer than the 120 s lease. `done` is final: the claim query only takes `pending`.
 - `runs.setup_lease_until`, `trials.available_at` (added 2026-10-29, #19): the setup claim's lease; the earliest time a re-queued trial may be claimed (retry backoff).
 - A `schema_version` table holds one number. Tables are created with `CREATE TABLE IF NOT EXISTS` on startup; if the stored version differs from the code's, the harness refuses to start and says to delete `runs/harness.db` (no migrations).

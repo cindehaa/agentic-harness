@@ -62,8 +62,10 @@ onsite talking point.
 
 ## 3. Pre-grade step (in order)
 
-1. **Kill leftover agent processes** (as root): `kill -9 -1` when `agent_user`
-   is root (kills everything except PID 1, the `sleep`); `pkill -9 -u agent`
+1. **Kill leftover agent processes** (as root): `Environment.kill_agent_processes()`
+   when `agent_user` is root: every process except PID 1 (the init) and its main
+   `sleep` (not a plain `kill -9 -1`: that also kills the sleep, and the container
+   dies before grading; `environment.md` #9); `pkill -9 -u agent`
    when the agent runs as the unprivileged `agent` user (see `security.md`).
    Either way, nothing the agent left running can interfere with grading.
 2. **Copy the benchmark's grader files in late.** They enter the container

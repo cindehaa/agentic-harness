@@ -75,7 +75,7 @@ flowchart TB
     norm["DockerEnvironment: drop --rm, lifetime from trial limit"]
     subgraph TR["Trial runner"]
       direction LR
-      startenv["start env"] --> agentph["agent"] --> died["container died?"] --> killleft["kill leftovers"] --> grade["grade"] --> record["write outcome / transcript / trace"] --> stopenv["stop env (always)"]
+      startenv["start env"] --> agentph["agent"] --> died["container died?"] --> killleft["kill leftovers"] --> grade["grade"] --> record["write outcome / transcript (trace: events.jsonl as it happens)"] --> stopenv["stop env (always)"]
     end
     fb["Fallbacks: retry start env, timeout→grade, regrade"]
     runsync["harness run (sync)"]
@@ -89,7 +89,7 @@ flowchart TB
       tatt --> tev[("events")]
     end
     d4_schema["Decided 2026-10-29 (database.md): runs/harness.db, WAL; queue in trials; attempts never overwritten; score raw JSON + score_float; agent-neutral events by turn; files in attempts.artifacts_dir (no artifacts table); versions + config per run"]
-    traj["Trajectory → events"]
+    traj["Trace: events.jsonl → events (RecordingSession + RecordingEnvironment)"]
     files["Artifacts on disk"]
     status["harness status"]
     results["harness results"]
