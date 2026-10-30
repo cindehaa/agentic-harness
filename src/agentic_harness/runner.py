@@ -49,9 +49,9 @@ def run_trial(
     except Exception:  # auth, bad request, a harness or adapter bug: another attempt would fail the same way
         outcome = Outcome("infra_error", error=traceback.format_exc())
     if session is not None:
-        outcome = replace(
-            outcome, agent_exit_status=session.inner.exit_status, cost_usd=session.inner.cost_usd, turns=session.turns
-        )
+        stats = session.stats()
+        exit_status = stats.exit_status or session.limitation
+        outcome = replace(outcome, agent_exit_status=exit_status, cost_usd=stats.cost_usd, turns=session.turns)
     outcome = replace(outcome, duration_s=round(time.monotonic() - began, 3), error=outcome.error and redact(outcome.error))
     for path in attempt_dir.rglob("*"):  # files the agent wrote itself, e.g. mini's trajectory.json
         if path.is_file():
@@ -69,7 +69,7 @@ def _agent_turns(benchmark: Benchmark, task: Task, env: Environment, session: Re
     except TurnLimit:
         pass  # the agent's turns are over; grade what it did
     except AgentLimitation as e:  # the agent can't go on (context full, model refused): grade what it did, like a timeout
-        session.inner.exit_status = session.inner.exit_status or f"AgentLimitation: {e}"
+        session.limitation = f"AgentLimitation: {e}"
     except EnvironmentLost as e:
         lost = e  # maybe the agent killed its own container: the evidence below decides
     if died := _container_death(benchmark, env):
@@ -91,7 +91,7 @@ def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
     # killed from inside, or over the memory limit we set (Limits.memory): the agent's doing
     why = "container ran out of memory during agent turn" if state.oom_killed else "container died during agent turn"
     score = Score(False, why, {"state": asdict(state)})
-    return Outcome("graded", score, benchmark.score_to_float(score))
+    return Outcome("graded", score, 0.0)  # decided by the harness, not the grader: 0 whatever the benchmark's scale
 
 
 def _grade(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession) -> Outcome:

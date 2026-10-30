@@ -79,7 +79,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     versions = {
         "harness": _git_sha(REPO_ROOT),
-        "agent": _git_sha(REPO_ROOT / "agents" / the_agent.name),
+        "agent": the_agent.version(),
         "dataset": _dataset_hash(bench),
         "model": the_agent.model,
     }

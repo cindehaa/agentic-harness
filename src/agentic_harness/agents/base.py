@@ -1,6 +1,7 @@
 """What a benchmark sees of an agent (AgentSession), and what the harness starts one from (Agent)."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
@@ -28,20 +29,28 @@ class PreflightError(Exception):
     starts, so it fails once, loudly, instead of in every trial."""
 
 
+@dataclass(frozen=True)
+class AgentStats:
+    """What the session reports for the trial's records; benchmarks don't read it."""
+
+    exit_status: str | None = None  # the agent's own reason for stopping, e.g. mini's "Submitted"
+    cost_usd: float = 0.0
+    steps: int = 0  # model calls
+
+
 class AgentSession(ABC):
     """One live conversation with an agent, as a benchmark sees it.
 
     The harness wraps the real session to log every turn, build the transcript, and enforce limits.
     """
 
-    # Filled in by the agent adapter for the trial's records; benchmarks don't read them
-    exit_status: str | None = None  # the agent's own reason for stopping, e.g. mini's "Submitted"
-    cost_usd: float = 0.0
-    steps: int = 0  # model calls
-
     @abstractmethod
     def send(self, message: Message) -> Message:
         """Give the agent a message, block until it hands back, and return its reply."""
+
+    def stats(self) -> AgentStats:
+        """So far, including after a crash. A session that tracks nothing reports zeros."""
+        return AgentStats()
 
 
 class Agent(ABC):
@@ -60,3 +69,7 @@ class Agent(ABC):
 
     def preflight(self) -> None:
         """Raise PreflightError if this agent can't run at all. Must be cheap and spend no model tokens."""
+
+    def version(self) -> str | None:
+        """What runs.versions records for the agent, e.g. its code's git commit. None if unknown."""
+        return None

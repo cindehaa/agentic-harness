@@ -188,3 +188,12 @@ def test_agent_commands_are_traced_by_turn_and_redacted(tmp_path, monkeypatch):
     assert [(e["seq"], e["turn"], e["kind"]) for e in events] == [(0, 1, "message_sent"), (1, 1, "command"), (2, 1, "message_received")]
     command = events[1]["payload"]
     assert command["command"] == "echo ***" and command["exit_code"] == 0 and command["duration_s"] >= 0
+
+
+def test_harness_decided_failure_scores_0_without_asking_the_benchmark(tmp_path):
+    class OddScale(OneMessage):
+        def score_to_float(self, score):
+            raise AssertionError("not for a failure the harness decided")
+
+    outcome = run_trial(OddScale(), ScriptedAgent(die(running=False, exit_code=137, oom_killed=False)), TASK, Limits(), tmp_path, Factory())
+    assert (outcome.status, outcome.score_float) == ("graded", 0.0)

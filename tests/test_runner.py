@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 from litellm.exceptions import AuthenticationError
 
-from agentic_harness.agents import Agent, AgentLimitation, AgentSession
+from agentic_harness.agents import Agent, AgentLimitation, AgentSession, AgentStats
 from agentic_harness.benchmarks import BashOperations, GraderError, GraderSetupError
 from agentic_harness.environments import DockerEnvironment, Environment
 from agentic_harness.runner import run_trial
@@ -39,10 +39,15 @@ class ScriptedAgent(Agent):
         agent = self
 
         class Session(AgentSession):
+            replied = False
+
             def send(self, message: Message) -> Message:
                 agent.act(env)
-                self.exit_status, self.cost_usd = "done", 0.01
+                self.replied = True
                 return Message("agent", (Text("done"),))
+
+            def stats(self) -> AgentStats:
+                return AgentStats("done", 0.01) if self.replied else AgentStats()
 
         return Session()
 

@@ -66,6 +66,15 @@ for a future `harness cleanup`.
 - `harness run` flags for the limits: `--trial-timeout` (600 s), `--cost-limit` ($1), `--max-steps` (50),
   `--memory` (2g), `--cpus` (1.0); stored in `runs.config`. `--concurrency` stays on `harness worker` and `run --wait`.
 
+## Agent interface cleanups (2026-10-29 audit)
+
+- `Agent` has `model` (set in its constructor, from `runs.model`) and `version()` (mini: its submodule's commit),
+  so the CLI no longer assumes an agent is a submodule.
+- `AgentSession.stats() -> AgentStats(exit_status, cost_usd, steps)` replaces mutable attributes; the runner no
+  longer writes into the agent's session (an `AgentLimitation` is kept on the `RecordingSession`).
+- A failure the harness decides (container died / out of memory during the turn) gets `score_float = 0.0` directly,
+  not via `Benchmark.score_to_float`.
+
 ## mini's own retry policy is left alone (2026-10-29)
 
 mini retries failed model calls itself (e.g. `ContentPolicyViolationError` up

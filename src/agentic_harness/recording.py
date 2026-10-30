@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
-from agentic_harness.agents.base import AgentSession
+from agentic_harness.agents.base import AgentSession, AgentStats
 from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, EnvironmentState, ExecResult
 from agentic_harness.redact import redact
 from agentic_harness.types import Message
@@ -48,6 +48,8 @@ class RecordingSession(AgentSession):
         self.on_turn_end = on_turn_end
         self.turns = 0
         self.transcript: list[Message] = []
+        self.limitation: str | None = None  # set by the runner when the agent raised AgentLimitation
+
 
     def send(self, message: Message) -> Message:
         if self.turns >= self.max_turns:
@@ -59,6 +61,9 @@ class RecordingSession(AgentSession):
         self._record("message_received", reply)
         self.on_turn_end()
         return reply
+
+    def stats(self) -> AgentStats:
+        return self.inner.stats()
 
     def _record(self, kind: str, message: Message) -> None:
         self.transcript.append(message)

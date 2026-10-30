@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from agentic_harness import cli as cli_module
 from agentic_harness import worker
-from agentic_harness.agents import AGENTS, Agent, AgentSession, PreflightError, TransientError
+from agentic_harness.agents import AGENTS, Agent, AgentSession, AgentStats, PreflightError, TransientError
 from agentic_harness.benchmarks import BENCHMARKS, BashOperations
 from agentic_harness.cli import cli
 from agentic_harness.store import Store
@@ -60,8 +60,10 @@ class Oracle(Agent):
             def send(self, message: Message) -> Message:
                 type(agent).calls += 1
                 agent.act(env, message.content[0].text)
-                self.exit_status, self.cost_usd = "Submitted", 0.01
                 return Message("agent", (Text("done"),))
+
+            def stats(self) -> AgentStats:
+                return AgentStats("Submitted", 0.01)
 
         return Session()
 

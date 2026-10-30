@@ -3,6 +3,7 @@ Environment, so the API key never enters the container. Prompts and templates ar
 the `mini` CLI uses); the harness adds nothing to them."""
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -24,9 +25,10 @@ from minisweagent.exceptions import InterruptAgentFlow, LimitsExceeded, Submitte
 from minisweagent.models import get_model  # noqa: E402
 
 from agentic_harness.agents.base import (  # noqa: E402
-    Agent, AgentLimitation, AgentSession, PreflightError, TransientError, Unsupported,
+    Agent, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
 )
 from agentic_harness.environments.base import Environment  # noqa: E402
+from agentic_harness.paths import REPO_ROOT  # noqa: E402
 from agentic_harness.types import Limits, Message, Text  # noqa: E402
 
 MODEL_TIMEOUT_S = 120  # one model call (litellm `timeout`); mini retries failed calls itself
@@ -125,11 +127,12 @@ class MiniSweSession(AgentSession):
             raise AgentLimitation(f"{type(e).__name__}: {e}") from e
         except TRANSIENT as e:
             raise TransientError(f"{type(e).__name__}: {e}") from e
-        finally:  # recorded even if the agent crashed
-            self.exit_status = self.agent.messages[-1].get("extra", {}).get("exit_status") if self.agent.messages else None
-            self.cost_usd = self.agent.cost
-            self.steps = self.agent.n_calls
         return Message("agent", (Text(info.get("submission", "")),))
+
+    def stats(self) -> AgentStats:
+        # mini logs an "exit" message when it stops, even when it crashed: its exit_status is the reason
+        exit_status = self.agent.messages[-1].get("extra", {}).get("exit_status") if self.agent.messages else None
+        return AgentStats(exit_status, self.agent.cost, self.agent.n_calls)
 
 
 class MiniSweAgent(Agent):
@@ -145,6 +148,12 @@ class MiniSweAgent(Agent):
         missing = litellm.validate_environment(self.model)["missing_keys"]
         if missing:
             raise PreflightError(f"model {self.model!r} needs {', '.join(missing)} (set it in .env)")
+
+    def version(self) -> str | None:
+        """The agents/mini-swe-agent submodule's commit."""
+        result = subprocess.run(["git", "-C", str(REPO_ROOT / "agents" / "mini-swe-agent"), "rev-parse", "HEAD"],
+                                capture_output=True, text=True)
+        return result.stdout.strip() or None
 
     def start(self, env: Environment, artifacts_dir: Path, limits: Limits) -> MiniSweSession:
         config = get_config_from_spec("mini.yaml")

@@ -96,13 +96,13 @@ def test_second_send_continues_the_same_history(tmp_path):
     submit = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
     env, session = scripted_session([_bash("1", "echo a"), _bash("2", submit), _bash("3", "echo b"), _bash("4", submit)], tmp_path)
     assert session.send(Message("user", (Text("first"),))) == Message("agent", (Text(""),))
-    assert (session.exit_status, session.steps) == ("Submitted", 2)
+    assert (session.stats().exit_status, session.stats().steps) == ("Submitted", 2)
     session.send(Message("user", (Text("second"),)))
     roles = [m["role"] for m in session.agent.messages]
     # the submit's tool call got its result, then the new user message, then the agent went on
     assert roles == ["system", "user", "assistant", "tool", "assistant", "tool", "user", "assistant", "tool", "assistant", "exit"]
     assert session.agent.messages[6]["content"] == "second"
-    assert (session.exit_status, session.steps) == ("Submitted", 4)
+    assert (session.stats().exit_status, session.stats().steps) == ("Submitted", 4)
     assert json.loads((tmp_path / "trajectory.json").read_text())["info"]["exit_status"] == "Submitted"
 
 
@@ -133,7 +133,7 @@ def test_context_window_exceeded_is_an_agent_limitation(tmp_path):
     session = failing_session(ContextWindowExceededError("too long", model="fake", llm_provider="anthropic"), tmp_path)
     with pytest.raises(AgentLimitation):
         session.send(Message("user", (Text("go"),)))
-    assert session.exit_status == "ContextWindowExceededError"
+    assert session.stats().exit_status == "ContextWindowExceededError"
 
 
 def test_auth_error_is_not_an_agent_limitation(tmp_path):
@@ -184,7 +184,12 @@ def test_live_solves_bash_001(tmp_path):
         session = MiniSweAgent(os.environ["MSWEA_MODEL_NAME"]).start(env, tmp_path, Limits())
         bench.run_agent(task, session, env)
         score = bench.grade(task, env, ())
-    print(f"live cost: ${session.cost_usd:.4f}, steps: {session.steps}, exit: {session.exit_status}")
-    assert session.exit_status == "Submitted"
+    stats = session.stats()
+    print(f"live cost: ${stats.cost_usd:.4f}, steps: {stats.steps}, exit: {stats.exit_status}")
+    assert stats.exit_status == "Submitted"
     assert score.value is True, score.explanation
     assert (tmp_path / "trajectory.json").exists()
+
+
+def test_version_is_the_submodule_commit():
+    assert len(MiniSweAgent("anthropic/claude-haiku-5-5").version()) == 40
