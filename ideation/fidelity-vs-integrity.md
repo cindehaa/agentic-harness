@@ -32,8 +32,9 @@ silently.**
 - **Adapters stay faithful.** No restoring tests, no prompt changes. If a
   benchmark prevents tampering itself (e.g. late-copied tests), we keep that.
 - **Integrity evidence = the trace + the saved final workspace.** The harness
-  records both for every trial anyway: every command the agent ran (trace →
-  events) and the final workspace (Phase 4 recorder). A workspace diff against
+  records both for every trial anyway: every command the agent ran (the trace:
+  `events.jsonl` → the `events` table) and the final workspace (`workspace.tar`
+  in the attempt folder). A workspace diff against
   the task image can be computed later if needed. No special mechanism.
 - Late copy / read-only tests remain tools for benchmarks designed for our
   harness, where they are the benchmark's design rather than a change to it.

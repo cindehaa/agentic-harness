@@ -114,6 +114,30 @@ class DockerEnvironment(Environment):
         script = 'for p in /proc/[0-9]*; do p=${p#/proc/}; [ "$p" = 1 ] || [ "$p" = "$1" ] || [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; true'
         self.exec(["sh", "-c", script, "sh", self.sleep_pid])
 
+    def save_workspace(self, local: Path, max_bytes: int) -> bool:
+        """`tar` inside the container, streamed out through `docker exec` and written as is. Not download(): `docker cp`
+        unpacks onto the host, where a symlink the agent planted would point at a host path."""
+        argv = ["docker", "exec", self._id(), "tar", "-cf", "-", "-C", self.workdir, "."]
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        err = bytearray()
+        reader = _drain(proc.stderr, err)  # read alongside stdout, so many tar warnings can't block it
+        written = 0
+        with local.open("wb") as f:
+            while written < max_bytes and (chunk := proc.stdout.read1(65536)):
+                chunk = chunk[: max_bytes - written]
+                f.write(chunk)
+                written += len(chunk)
+        truncated = written >= max_bytes and bool(proc.stdout.read1(1))  # at the cap with more still coming
+        proc.kill()  # stops a cut-short tar; harmless if it already finished
+        proc.wait()
+        proc.stdout.close()
+        reader.join()
+        if not truncated and proc.returncode != 0:
+            if not self._alive():
+                raise DockerError("container is gone")
+            raise OSError(f"tar failed: {_decode(err).strip()}")  # e.g. the agent deleted the workspace
+        return truncated
+
     def write_file(self, path: str, content: str | bytes) -> None:
         data = content.encode() if isinstance(content, str) else content
         # Bytes go in via stdin; the path is passed as $1 so the shell never parses it

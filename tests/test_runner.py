@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import tarfile
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -85,9 +86,12 @@ def test_oracle_agent_is_graded_true(tmp_path):
     transcript = json.loads((tmp_path / "transcript.json").read_text())
     assert [m["role"] for m in transcript] == ["user", "agent"]
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [(0, "message_sent", 1), (1, "command", 1), (2, "message_received", 1)]
+    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [
+        (0, "message_sent", 1), (1, "command", 1), (2, "message_received", 1), (3, "workspace_saved", 1)]
     command = events[1]["payload"]
     assert (command["command"], command["exit_code"], command["truncated"]) == ("echo 'Hello World' > hello.txt", 0, False)
+    with tarfile.open(tmp_path / "workspace.tar") as tar:  # the agent's end state, saved before grading
+        assert b"Hello World" in tar.extractfile("./hello.txt").read()
 
 
 def test_empty_agent_is_graded_false(tmp_path):
@@ -150,7 +154,8 @@ def test_events_are_appended_as_they_happen_and_everything_is_redacted(tmp_path,
                         on_turn_end=lambda: turns_ended.append(1))
     assert outcome.status == "graded" and turns_ended == [1]
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [(0, "message_sent", 1), (1, "message_received", 1)]
+    assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [
+        (0, "message_sent", 1), (1, "message_received", 1), (2, "workspace_saved", 1)]
     for name in ("events.jsonl", "transcript.json", "outcome.json"):
         text = (tmp_path / name).read_text()
         assert "Hello World" not in text

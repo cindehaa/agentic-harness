@@ -39,7 +39,9 @@ flowchart TB
   check -->|"Running, but the turn raised EnvironmentLost"| IE3
   check -->|"Running"| kill["env.kill_agent_processes()"]
 
-  kill --> grade["benchmark.grade(task, env, transcript)"]
+  kill --> save["save workspace.tar (size-capped tar via exec); OSError (e.g. workspace deleted) is noted in the trace, not fatal"]
+  save --> grade["benchmark.grade(task, env, transcript)"]
+  save -->|"EnvironmentLost"| recheck
   kill -->|"EnvironmentLost"| recheck
   grade -->|"EnvironmentLost"| recheck{"env.state() again (the agent may have killed PID 1 just before handing back)"}
   recheck -->|"None"| IE3

@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import tarfile
 import time
 
 import pytest
@@ -228,3 +229,24 @@ def test_resource_limits_are_applied():
         host = json.loads(subprocess.run(["docker", "inspect", "-f", "{{json .HostConfig}}", env.container_id],
                                          capture_output=True, check=True).stdout)
     assert (host["Memory"], host["NanoCpus"], host["PidsLimit"]) == (256 * 2**20, 500_000_000, 64)
+
+
+def test_save_workspace_is_a_tar_that_keeps_symlinks_as_links(env, tmp_path):
+    env.exec("echo hi > a.txt && ln -s /etc/passwd link")
+    assert env.save_workspace(tmp_path / "w.tar", 10_000_000) is False
+    with tarfile.open(tmp_path / "w.tar") as tar:
+        members = {m.name.removeprefix("./"): m for m in tar.getmembers()}
+        assert tar.extractfile(members["a.txt"]).read() == b"hi\n"
+        assert members["link"].issym() and members["link"].linkname == "/etc/passwd"  # never followed
+
+
+def test_save_workspace_stops_at_the_cap(env, tmp_path):
+    env.exec("head -c 1000000 /dev/zero > big")
+    assert env.save_workspace(tmp_path / "w.tar", 100_000) is True
+    assert (tmp_path / "w.tar").stat().st_size == 100_000
+
+
+def test_save_workspace_of_a_deleted_workspace_is_oserror(env, tmp_path):
+    env.exec("rm -rf /workspace")
+    with pytest.raises(OSError, match="tar failed"):
+        env.save_workspace(tmp_path / "w.tar", 1000)

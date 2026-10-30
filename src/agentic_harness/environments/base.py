@@ -63,6 +63,11 @@ class Environment(ABC):
         """Kill everything the agent left running (before grading), while the world itself stays up."""
 
     @abstractmethod
+    def save_workspace(self, local: Path, max_bytes: int) -> bool:
+        """Write the working directory to `local` as a tar file, never unpacked on the host (a symlink in it can't
+        reach a host path). Stops at `max_bytes`; True if cut short. OSError if it can't be read."""
+
+    @abstractmethod
     def write_file(self, path: str, content: str | bytes) -> None:
         """Create or overwrite one small file in the world from data in memory."""
 

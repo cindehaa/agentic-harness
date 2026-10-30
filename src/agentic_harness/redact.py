@@ -35,7 +35,16 @@ def redact(text: str, secrets: tuple[str, ...] | None = None) -> str:
 
 
 def redact_file(path: Path) -> None:
-    """Redact a file in place, e.g. one the agent wrote itself (mini's trajectory). Binary files are left alone."""
+    """Redact a file in place, e.g. one the agent wrote itself (mini's trajectory). Binary files are left alone.
+    A tar file keeps its size: each secret becomes as many `*` bytes, so the archive stays readable."""
+    if path.suffix == ".tar":
+        data = path.read_bytes()
+        clean = data
+        for secret in _secrets():
+            clean = clean.replace(secret.encode(), b"*" * len(secret.encode()))
+        if clean != data:
+            path.write_bytes(clean)
+        return
     try:
         text = path.read_text()
     except UnicodeDecodeError:

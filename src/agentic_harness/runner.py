@@ -19,6 +19,7 @@ from agentic_harness.types import Limits, Outcome, Score, Task
 # infra_error, not the agent's doing). It is still a self-destruct timer if the harness dies.
 LIFETIME_FACTOR = 3  # times the trial timeout
 GRADE_MARGIN_S = 600  # plus time for grading to finish
+WORKSPACE_MAX_BYTES = 50_000_000  # the saved final workspace (workspace.tar) is cut off here
 
 
 def run_trial(
@@ -97,6 +98,7 @@ def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
 def _grade(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession) -> Outcome:
     try:
         env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
+        _save_workspace(env, session)  # the agent's end state, before the grader adds anything
         score = benchmark.grade(task, env, tuple(session.transcript))
     except GraderSetupError as e:  # e.g. no network to install the grader's deps: infra, retried
         return Outcome("infra_error", error=f"GraderSetupError: {e}", retryable=True)
@@ -112,6 +114,18 @@ def _grade(benchmark: Benchmark, task: Task, env: Environment, session: Recordin
         return Outcome("graded", score, benchmark.score_to_float(score))
     except (TypeError, ValueError) as e:
         return Outcome("grader_error", error=f"unusable score value {score.value!r}: {e}")
+
+
+def _save_workspace(env: Environment, session: RecordingSession) -> None:
+    """workspace.tar in the attempt folder (integrity evidence, `fidelity-vs-integrity.md`), noted in the trace.
+    A workspace that can't be read (e.g. the agent deleted it) is noted, not fatal: the grader decides."""
+    path = session.log.path.parent / "workspace.tar"
+    try:
+        truncated = env.save_workspace(path, WORKSPACE_MAX_BYTES)
+    except OSError as e:
+        session.log.write("workspace_saved", {"error": str(e)})
+        return
+    session.log.write("workspace_saved", {"file": path.name, "bytes": path.stat().st_size, "truncated": truncated})
 
 
 def _write(path: Path, data) -> None:

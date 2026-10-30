@@ -107,6 +107,9 @@ class RecordingEnvironment(Environment):
     def kill_agent_processes(self) -> None:
         self.env.kill_agent_processes()
 
+    def save_workspace(self, local: Path, max_bytes: int) -> bool:
+        return self.env.save_workspace(local, max_bytes)
+
     def write_file(self, path: str, content: str | bytes) -> None:
         self.env.write_file(path, content)
 

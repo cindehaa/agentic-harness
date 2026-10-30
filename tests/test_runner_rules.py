@@ -30,6 +30,12 @@ class FakeEnvironment(Environment):
     def stop(self): self.stopped = True
     def state(self): return self.state_now
     def kill_agent_processes(self): self.killed = True
+
+    def save_workspace(self, local, max_bytes):
+        if "answer.txt" not in self.files:
+            raise OSError("tar failed: no workspace")
+        local.write_bytes(b"tar of " + self.files["answer.txt"])
+        return False
     def write_file(self, path, content): self.files[path] = content.encode() if isinstance(content, str) else content
     def read_file(self, path): return self.files[path]
     def upload(self, local, remote): ...
@@ -185,7 +191,8 @@ def test_agent_commands_are_traced_by_turn_and_redacted(tmp_path, monkeypatch):
 
     run(act, tmp_path)
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    assert [(e["seq"], e["turn"], e["kind"]) for e in events] == [(0, 1, "message_sent"), (1, 1, "command"), (2, 1, "message_received")]
+    assert [(e["seq"], e["turn"], e["kind"]) for e in events] == [
+        (0, 1, "message_sent"), (1, 1, "command"), (2, 1, "message_received"), (3, 1, "workspace_saved")]
     command = events[1]["payload"]
     assert command["command"] == "echo ***" and command["exit_code"] == 0 and command["duration_s"] >= 0
 
@@ -197,3 +204,23 @@ def test_harness_decided_failure_scores_0_without_asking_the_benchmark(tmp_path)
 
     outcome = run_trial(OddScale(), ScriptedAgent(die(running=False, exit_code=137, oom_killed=False)), TASK, Limits(), tmp_path, Factory())
     assert (outcome.status, outcome.score_float) == ("graded", 0.0)
+
+
+def test_final_workspace_is_saved_before_grading_and_noted_in_the_trace(tmp_path):
+    outcome, _ = run(write_ok, tmp_path)
+    assert outcome.status == "graded" and (tmp_path / "workspace.tar").read_bytes() == b"tar of ok"
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert events[-1]["kind"] == "workspace_saved" and events[-1]["payload"] == {"file": "workspace.tar", "bytes": 9, "truncated": False}
+
+
+def test_unreadable_workspace_is_noted_not_fatal(tmp_path):
+    outcome, _ = run(lambda env: None, tmp_path)
+    assert (outcome.status, outcome.score.value) == ("graded", False)
+    last = json.loads((tmp_path / "events.jsonl").read_text().splitlines()[-1])
+    assert last["payload"] == {"error": "tar failed: no workspace"}
+
+
+def test_secrets_in_the_saved_workspace_are_masked_and_the_tar_keeps_its_size(tmp_path, monkeypatch):
+    monkeypatch.setattr("agentic_harness.redact._secrets", lambda: ("ok",))
+    run(write_ok, tmp_path)
+    assert (tmp_path / "workspace.tar").read_bytes() == b"tar of **"

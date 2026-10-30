@@ -36,6 +36,7 @@ benchmarks and agents only get a handle.
 | 9 | `EnvironmentLost` (in `base.py`) is the backend-neutral "the world is gone" error; `DockerError` subclasses it | The runner catches `EnvironmentLost` and never imports Docker |
 | 10 | The runner takes an `EnvironmentFactory` = `(image, lifetime_s, limits) -> Environment`; the worker injects `DockerEnvironment` (its constructor is one) | The runner is testable with a fake environment (`tests/test_runner_rules.py`, no Docker) |
 | 11 | `build_image(dockerfile, context, tag)` is exported by the `environments` package as the image-building port; benchmarks import it from there, never from `docker.py` | Benchmarks name images, not a container backend |
+| 12 | `save_workspace(local, max_bytes) -> truncated`: the working directory as a tar file, streamed out (Docker: `tar` via `docker exec`), capped (the runner uses 50 MB), never unpacked on the host | Integrity evidence (`fidelity-vs-integrity.md`) without `download()`'s symlink hazard |
 
 ## Prior art
 
@@ -65,7 +66,7 @@ the process inside the container. Leftover processes are killed before grading
 **Known gaps (Phase 6):**
 - A timed-out `exec` keeps running inside the container until the pre-grade `kill_agent_processes()`.
 - The first `docker pull` can hang silently in sandboxed shells → pre-pull images once per run.
-- `download()` copies symlinks as symlinks, so a link the agent planted can point at a host path when read later.
+- `download()` copies symlinks as symlinks, so a link the agent planted can point at a host path when read later. The runner saves the final workspace with `save_workspace()` (a tar, never unpacked) instead.
 - DockerError (→ infra_error) only when the container is verifiably gone; anything the agent can cause stays a normal command failure (prevents gaming failures into excluded trials). Remaining hole: if the agent itself kills the container, that still reads as infra (planned fix in Phase 3, below).
 
 **Phase 3** (decided 2026-10-29, `agents-and-runner.md`; `--rm` dropped and `state()` added, decisions 8-9 above):
