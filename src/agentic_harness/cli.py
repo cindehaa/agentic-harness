@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from agentic_harness import worker as worker_module
 from agentic_harness.agents import PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
+from agentic_harness.environments import remove_images, remove_leftovers
 from agentic_harness.paths import DB_PATH, REPO_ROOT
 from agentic_harness.store import SchemaMismatch, Store
 from agentic_harness.types import Limits, Task
@@ -116,6 +117,41 @@ def worker(concurrency: int, exit_when_idle: bool):
         raise click.ClickException(f"pre-flight check failed, nothing claimed: {e}") from None
     if stopped:
         click.echo("Worker stopped", err=True)
+
+
+@cli.command()
+@click.option("--all", "remove_all", is_flag=True, help="Also remove the containers and volumes of trials still running")
+@click.option("--images", is_flag=True,
+              help="Also remove cached harness-* images (task and agent images) no unfinished trial needs; "
+                   "they make later runs start faster")
+def cleanup(remove_all: bool, images: bool):
+    """Remove leftover containers and volumes (label agentic-harness=1) that belong to no running trial."""
+    store = _store()
+    containers, volumes, failed = remove_leftovers(set() if remove_all else store.live_attempts())
+    click.echo(f"Removed {len(containers)} container(s){_names(containers)}")
+    click.echo(f"Removed {len(volumes)} volume(s){_names(volumes)}")
+    if images:
+        tags, freed, kept = remove_images(_needed_images(store))
+        click.echo(f"Removed {len(tags)} image(s), {freed / 1e9:.2f} GB freed{_names(tags)}")
+        failed += [f"image {tag}: in use" for tag in kept]
+    for line in failed:
+        click.echo(f"Could not remove {line}", err=True)
+
+
+def _names(names: list[str]) -> str:
+    return ": " + ", ".join(names) if names else ""
+
+
+def _needed_images(store: Store) -> set[str]:
+    """Every image a trial not yet done still starts: its task's, its grader's, its MCP servers' and its agent's own."""
+    needed = set()
+    for run in store.unfinished_runs():
+        bench, agent = BENCHMARKS[run["benchmark"]](), resolve_agent(run["agent"])(run["model"])
+        waiting = {t["task_id"] for t in store.trials(run["id"]) if t["state"] != "done"}
+        for task in (t for t in bench.tasks() if t.id in waiting):
+            needed |= {task.image, bench.grader_image(task), agent.image_for(task.image)}
+            needed |= {s.image for s in bench.mcp_servers(task)}
+    return needed
 
 
 def _store() -> Store:

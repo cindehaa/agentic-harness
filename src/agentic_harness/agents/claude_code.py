@@ -202,11 +202,14 @@ class ClaudeCode(Agent):
     def version(self) -> str:
         return VERSION
 
-    def prepare_image(self, task_image: str) -> str:
+    def image_for(self, task_image: str) -> str:
         base = image_id(task_image)
-        if base is None:
+        return task_image if base is None else derived_tag(base)
+
+    def prepare_image(self, task_image: str) -> str:
+        tag = self.image_for(task_image)
+        if tag == task_image:
             return task_image  # not local: starting the world fails as usual (infra_error)
-        tag = derived_tag(base)
         with _build_lock:
             if image_id(tag) is None:
                 with tempfile.TemporaryDirectory() as empty:  # nothing is copied from the host

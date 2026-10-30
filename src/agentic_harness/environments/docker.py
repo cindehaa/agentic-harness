@@ -22,7 +22,9 @@ CP_TIMEOUT = 600.0  # seconds; copies can be large
 BUILD_TIMEOUT = 1800.0  # seconds; builds may pull base images and run setup scripts
 PULL_TIMEOUT = 600.0  # seconds for one `docker pull`
 MAX_OUTPUT = 1_000_000  # bytes kept per stream of one exec; the rest is read and thrown away
-LABEL = "agentic-harness=1"  # on every container we start, so leftovers are easy to find
+LABEL = "agentic-harness=1"  # on every container and volume we start, so leftovers are easy to find
+ATTEMPT_LABEL = "agentic-harness.attempt"  # which attempt a world belongs to: `harness cleanup` keeps live ones
+IMAGE_PREFIX = "harness-"  # every image the harness builds is named harness-<something>; cleanup's --images scope
 VOLUME_RM_TRIES = 4  # removing a workspace volume; waits VOLUME_RM_DELAY_S x try number between tries
 VOLUME_RM_DELAY_S = 0.5
 KILL_PASSES = 5  # kill_agent_processes: passes over /proc at most, so a fork loop can't keep it busy forever
@@ -40,8 +42,10 @@ class DockerEnvironment(Environment):
     grader can share it; use download() or save_workspace() to get files out. Attached sidecars join its network
     namespace (`--network container:`), so localhost is the same in all of them."""
 
-    def __init__(self, image: str, lifetime_s: int = 7200, limits: Limits = Limits(), workdir: str = "/workspace") -> None:
+    def __init__(self, image: str, lifetime_s: int = 7200, limits: Limits = Limits(), workdir: str = "/workspace",
+                 labels: dict[str, str] | None = None) -> None:
         super().__init__(image)
+        self.labels = labels or {}  # extra docker labels on its container and volume (and its sidecars'), e.g. ATTEMPT_LABEL
         self.limits = limits  # memory, cpus, pids_limit become docker run flags
         self.lifetime_s = lifetime_s  # the container's main process is `sleep lifetime_s`: a self-destruct timer if the harness dies
         self.workdir = workdir  # default cwd for exec; relative paths resolve here
@@ -57,7 +61,7 @@ class DockerEnvironment(Environment):
         try:
             if self.attached_to is None:
                 # A named volume starts with the image's own /workspace files (Docker copies them in on first use)
-                _docker("volume", "create", "--label", LABEL, name)
+                _docker("volume", "create", *self._label_flags(), name)
                 self.volume = name
                 world = ["-v", f"{name}:{self.workdir}"]
             else:
@@ -69,7 +73,7 @@ class DockerEnvironment(Environment):
             # --init: sleep as PID 1 would never reap zombies.
             # --entrypoint: images with their own ENTRYPOINT would otherwise wrap our sleep.
             result = _docker(
-                "run", "-d", "--init", "--label", LABEL, "--name", name, "-w", self.workdir, *world,
+                "run", "-d", "--init", *self._label_flags(), "--name", name, "-w", self.workdir, *world,
                 "--memory", self.limits.memory, "--cpus", str(self.limits.cpus), "--pids-limit", str(self.limits.pids_limit),
                 "--entrypoint", "sleep", self.image, str(self.lifetime_s),
                 timeout=START_TIMEOUT,
@@ -98,8 +102,11 @@ class DockerEnvironment(Environment):
         self.sleep_pid = None
         self._remove_volume()
 
+    def _label_flags(self) -> list[str]:
+        return ["--label", LABEL, *(a for k, v in self.labels.items() for a in ("--label", f"{k}={v}"))]
+
     def attach(self, sidecar: Sidecar) -> "DockerEnvironment":
-        env = DockerEnvironment(sidecar.image, self.lifetime_s, self.limits, self.workdir)
+        env = DockerEnvironment(sidecar.image, self.lifetime_s, self.limits, self.workdir, self.labels)
         env.attached_to = self._id()
         env.sidecar = sidecar
         self.attached.append(env)
@@ -300,6 +307,47 @@ def ensure_image(image: str, timeout: float = PULL_TIMEOUT) -> None:
             _docker("pull", image, timeout=timeout)
         except DockerError as e:
             raise DockerError(f"{e} while pulling {image} (try `docker pull {image}` by hand)") from None
+
+
+def remove_leftovers(keep_attempts: set[str]) -> tuple[list[str], list[str], list[str]]:
+    """Remove every container, then every volume, labelled LABEL, except those of the attempts in `keep_attempts`
+    (ATTEMPT_LABEL). Returns what was removed (containers, volumes) and what could not be (with docker's reason)."""
+    removed: tuple[list[str], list[str]] = ([], [])
+    failed = []
+    for i, kind in enumerate(("container", "volume")):
+        listed = _docker(kind, "ls", *(["-a"] if kind == "container" else []), "--filter", f"label={LABEL}",
+                         "--format", f'{{{{.Name{"s" if kind == "container" else ""}}}}}\t{{{{.Label "{ATTEMPT_LABEL}"}}}}')
+        for line in _decode(listed.stdout).splitlines():
+            name, _, attempt = line.partition("\t")
+            if attempt and attempt in keep_attempts:
+                continue
+            result = _docker(kind, "rm", "-f", name, check=False)
+            if result.returncode == 0:
+                removed[i].append(name)
+            else:
+                failed.append(f"{kind} {name}: {_decode(result.stderr).strip()}")
+    return removed[0], removed[1], failed
+
+
+def remove_images(keep: set[str]) -> tuple[list[str], int, list[str]]:
+    """Remove every image named IMAGE_PREFIX* except the tags in `keep`. Returns the tags removed, the bytes freed
+    (the sizes of images left with no tag; shared layers can make the real figure smaller) and the tags that could
+    not be removed (e.g. a container still uses them)."""
+    listed = _decode(_docker("image", "ls", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}").stdout).splitlines()
+    images = [line.split("\t") for line in listed if line.startswith(IMAGE_PREFIX) and not line.endswith(":<none>")]
+    sizes = {}
+    for _, image_id in images:
+        size = _docker("image", "inspect", "-f", "{{.Size}}", image_id, check=False)
+        sizes[image_id] = int(_decode(size.stdout).strip() or 0)
+    removed, failed = [], []
+    for tag, _ in images:
+        if tag in keep:
+            continue
+        result = _docker("image", "rm", tag, check=False)
+        (removed if result.returncode == 0 else failed).append(tag)
+    freed = sum(size for image_id, size in sizes.items()
+                if _docker("image", "inspect", image_id, check=False).returncode != 0)  # gone: no tag kept it
+    return removed, freed, failed
 
 
 def _docker(

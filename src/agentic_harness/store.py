@@ -367,6 +367,15 @@ class Store:
             (run_id, run_id),
         ).fetchall()
 
+    def live_attempts(self) -> set[str]:
+        """Ids (as text, like the ATTEMPT_LABEL on their worlds) of attempts a worker is running and still renewing."""
+        rows = self.db.execute(
+            "SELECT a.id FROM attempts a JOIN trials t ON t.id = a.trial_id"
+            " WHERE t.state = 'running' AND t.lease_until >= ? AND a.n = t.attempt_count AND a.outcome IS NULL",
+            (time.time(),),
+        ).fetchall()
+        return {str(r[0]) for r in rows}
+
     def waiting_trials(self) -> int:
         """Trials a worker still has to finish: not done, in runs that are not over (pending setup or running)."""
         return self._one(

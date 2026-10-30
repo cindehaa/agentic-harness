@@ -19,7 +19,7 @@ from pathlib import Path
 
 from agentic_harness.agents import Agent, PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
-from agentic_harness.environments import DockerEnvironment, Environment, EnvironmentLost, ensure_image
+from agentic_harness.environments import ATTEMPT_LABEL, DockerEnvironment, Environment, EnvironmentLost, ensure_image
 from agentic_harness.redact import redact
 from agentic_harness.runner import run_trial
 from agentic_harness.store import Claim, LostClaim, Store
@@ -248,7 +248,7 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
     def environment(image: str, lifetime_s: int, limits: Limits) -> Environment:  # ENVIRONMENT, known to Stop
         if stop.requested.is_set():
             raise EnvironmentLost("worker interrupted")
-        env = ENVIRONMENT(image, lifetime_s, limits)
+        env = ENVIRONMENT(image, lifetime_s, limits, labels={ATTEMPT_LABEL: str(claim.attempt_id)})  # for `harness cleanup`
         stop.track_world(claim, env)
         return env
 

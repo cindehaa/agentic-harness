@@ -96,6 +96,11 @@ class Agent(ABC):
         cached. The runner calls it right before starting the world; graders still use their own image."""
         return task_image
 
+    def image_for(self, task_image: str) -> str:
+        """The image prepare_image() returns for `task_image`, without building anything (`harness cleanup --images`
+        keeps it while a trial still needs it)."""
+        return task_image
+
     def preflight(self) -> None:
         """Raise PreflightError if this agent can't run at all. Must be cheap and spend no model tokens."""
 
