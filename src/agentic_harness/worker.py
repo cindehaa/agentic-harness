@@ -205,7 +205,7 @@ def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row, stop: Sto
         try:
             tasks = [t for t in benchmark.tasks() if t.id in task_ids]
             benchmark.setup(tasks)
-            _prepare_images(benchmark, resolve_agent(run["agent"])(run["model"]), tasks)
+            prepare_images(benchmark, resolve_agent(run["agent"])(run["model"]), tasks)
         except Exception as e:
             log_file = store.runs_dir / run["id"] / "setup.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -222,7 +222,7 @@ def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row, stop: Sto
     log.info("run %s: %s", run["id"], "setup failed: " + error if error else "set up; trials claimable")
 
 
-def _prepare_images(benchmark: Benchmark, agent: Agent, tasks: list[Task]) -> None:
+def prepare_images(benchmark: Benchmark, agent: Agent, tasks: list[Task]) -> None:
     """Every image a trial will start, made local now, so no trial stalls on a first pull or build: graders, MCP
     servers (pulled unless setup() built them) and the agent's own derived images (e.g. Claude Code's)."""
     for image in sorted({benchmark.grader_image(t) for t in tasks} | {s.image for t in tasks for s in benchmark.mcp_servers(t)}):

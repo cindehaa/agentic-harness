@@ -14,13 +14,14 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
+from agentic_harness import validate as validate_module
 from agentic_harness import worker as worker_module
 from agentic_harness.agents import PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
 from agentic_harness.dashboard import make_server
 from agentic_harness.environments import remove_images, remove_leftovers
 from agentic_harness.metrics import run_metrics
-from agentic_harness.paths import DB_PATH, REPO_ROOT
+from agentic_harness.paths import DB_PATH, REPO_ROOT, RUNS_DIR
 from agentic_harness.store import SchemaMismatch, Store
 from agentic_harness.types import Limits, Task
 
@@ -105,6 +106,41 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
     click.get_current_context().invoke(results, run_id=run_id, format="table")
     click.echo()
     click.get_current_context().invoke(results, run_id=run_id, format="summary")
+
+
+@cli.command()
+@click.option("--benchmark", required=True, help=f"Name of the benchmark to check ({', '.join(BENCHMARKS)})")
+@click.option("--task_ids", default=None, help="Comma-separated task IDs to check (all if not provided)")
+@click.option("--concurrency", default=4, show_default=True, help="Trials (containers) run at the same time")
+def validate(benchmark: str, task_ids: str | None, concurrency: int):
+    """Check an adapter is wired correctly, with no real agent: doing nothing must fail every task, and the task's
+    reference solution must pass it. Exits 1 if any check fails."""
+    if benchmark not in BENCHMARKS:
+        raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
+    bench = BENCHMARKS[benchmark]()
+    tasks = _select(bench.tasks(), task_ids)
+    out_dir = RUNS_DIR / "validate" / f"{benchmark}-{time.strftime('%Y%m%d-%H%M%S')}"
+    checks = validate_module.validate(bench, tasks, out_dir, concurrency)
+    by_task = {t.id: {c.kind: c for c in checks if c.task_id == t.id} for t in tasks}
+    _table(("TASK", "DO NOTHING (must fail)", "REFERENCE SOLUTION (must pass)", "SOLUTION BY"),
+           [(task_id, _verdict(c["null"]), _verdict(c["oracle"]), c["oracle"].source or "-") for task_id, c in by_task.items()])
+    failed = [c for c in checks if c.ok is False]
+    for c in failed:
+        click.echo(f"\n{c.task_id} {'do-nothing' if c.kind == 'null' else 'reference'} check: {c.detail}")
+    nulls, oracles = [c for c in checks if c.kind == "null"], [c for c in checks if c.kind == "oracle" and c.ok is not None]
+    sources = sorted({c.source for c in oracles})
+    click.echo(f"\n{benchmark}: do-nothing {sum(c.ok for c in nulls)}/{len(nulls)} failed as they should; reference "
+               f"{sum(c.ok for c in oracles)}/{len(oracles)} passed ({', '.join(sources) or 'none'}); "
+               f"{len(nulls) - len(oracles)} task(s) without a reference solution (do-nothing check only)")
+    if "harness-written" in sources:
+        click.echo("Note: harness-written reference solutions check the wiring, not the benchmark (we wrote them)")
+    click.echo(f"Artifacts: {out_dir}")
+    if failed:
+        raise SystemExit(1)
+
+
+def _verdict(check) -> str:
+    return "-" if check.ok is None else ("ok" if check.ok else "FAIL")
 
 
 @cli.command()
