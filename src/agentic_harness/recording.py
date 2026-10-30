@@ -39,9 +39,10 @@ class EventLog:
 
 class RecordingSession(AgentSession):
     """What the benchmark is handed: forwards to the agent's session, records both sides, and caps the turns.
-    `on_turn_end` runs after every turn (the worker loads events.jsonl into the events table then)."""
+    `on_turn_end(stats)` runs after every turn, also one the agent crashed in (the worker then loads events.jsonl into
+    the events table and records the spend so far)."""
 
-    def __init__(self, inner: AgentSession, max_turns: int, log: EventLog, on_turn_end: Callable[[], None]) -> None:
+    def __init__(self, inner: AgentSession, max_turns: int, log: EventLog, on_turn_end: Callable[[AgentStats], None]) -> None:
         self.inner = inner
         self.max_turns = max_turns
         self.log = log
@@ -57,12 +58,14 @@ class RecordingSession(AgentSession):
         self.log.turn = self.turns
         self._record("message_sent", message)
         try:
-            reply = self.inner.send(message)
-        finally:  # also when the agent raised: what it did is still traced
-            for kind, payload in self.inner.new_events():
-                self.log.write(kind, payload)
-        self._record("message_received", reply)
-        self.on_turn_end()
+            try:
+                reply = self.inner.send(message)
+            finally:  # also when the agent raised: what it did is still traced
+                for kind, payload in self.inner.new_events():
+                    self.log.write(kind, payload)
+            self._record("message_received", reply)
+        finally:  # also when the agent raised: what it spent is still counted
+            self.on_turn_end(self.inner.stats())
         return reply
 
     def stats(self) -> AgentStats:

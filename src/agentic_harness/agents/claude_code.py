@@ -96,6 +96,52 @@ def trace_events(stream: list[dict]) -> list[tuple[str, dict]]:
     return events
 
 
+def usage(stream: list[dict]) -> tuple[int, int, int]:
+    """(input tokens, output tokens, model calls) of one `claude -p` run. From its result event when it has one; a run
+    cut off before it (the deadline) counts its assistant messages instead, each by its last event (Claude Code
+    prints one per content block, the usage growing). Input counts cached tokens too, as litellm's prompt_tokens does."""
+    result = next((e for e in reversed(stream) if e.get("type") == "result"), None)
+    if result is not None:
+        usages, calls = [result.get("usage") or {}], result.get("num_turns") or 0
+    else:
+        usages = _message_usages(stream)
+        calls = len(usages)
+    return sum(_input_tokens(u) for u in usages), sum(u.get("output_tokens") or 0 for u in usages), calls
+
+
+def _input_tokens(usage: dict) -> int:
+    """Anthropic counts cached prompt tokens apart from input_tokens."""
+    return sum(usage.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+
+
+def estimate_cost(model: str, stream: list[dict]) -> float:
+    """What a run cut off before its result event spent (Claude Code reports cost only in that event): its tokens
+    at litellm's prices. 0 if litellm doesn't know the model."""
+    import litellm  # here, not at the top: only this rare path needs it, and importing it is slow
+
+    total = 0.0
+    for u in _message_usages(stream):
+        try:
+            prompt, completion = litellm.cost_per_token(  # its prompt_tokens include the cached ones
+                model=f"anthropic/{model}", prompt_tokens=_input_tokens(u), completion_tokens=u.get("output_tokens") or 0,
+                cache_creation_input_tokens=u.get("cache_creation_input_tokens") or 0,
+                cache_read_input_tokens=u.get("cache_read_input_tokens") or 0)
+        except Exception:
+            return 0.0
+        total += prompt + completion
+    return total
+
+
+def _message_usages(stream: list[dict]) -> list[dict]:
+    """The usage of each model call in the stream: its assistant message's last event (one per content block)."""
+    by_id = {}
+    for e in stream:
+        message = e.get("message") or {}
+        if e.get("type") == "assistant" and message.get("usage"):
+            by_id[message.get("id")] = message["usage"]
+    return list(by_id.values())
+
+
 def check_result(stream: list[dict]) -> dict:
     """The run's result event. Raises AgentLimitation / TransientError / ClaudeCodeError for a failed API call, as
     mini's adapter does for the same litellm errors."""
@@ -130,14 +176,16 @@ class ClaudeCodeSession(AgentSession):
         self.turns = 0
         self.exit_status: str | None = None
         self.cost = 0.0
-        self.steps = 0
+        self.model_calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
         self.pending: list[tuple[str, dict]] = []
 
     def send(self, message: Message) -> Message:
         if not all(isinstance(c, Text) for c in message.content):
             raise Unsupported("Claude Code adapter only sends Text")
         remaining = self.deadline - time.monotonic()
-        steps_left, budget_left = self.limits.max_steps - self.steps, self.limits.cost_usd - self.cost
+        steps_left, budget_left = self.limits.max_steps - self.model_calls, self.limits.cost_usd - self.cost
         if remaining <= 0 or steps_left <= 0 or budget_left <= 0:  # nothing left for this turn
             self.exit_status = "TimeLimit" if remaining <= 0 else "LimitsExceeded"
             return Message("agent", (Text(""),))
@@ -164,6 +212,7 @@ class ClaudeCodeSession(AgentSession):
             f.write(text)
         stream = parse_stream(text)
         self.pending += trace_events(stream)
+        self._count(stream)  # before anything can raise: what this run spent is spent whatever happens next
         if r.timed_out:
             self.exit_status = "TimeLimit"
             return Message("agent", (Text(""),))
@@ -172,13 +221,22 @@ class ClaudeCodeSession(AgentSession):
         except ClaudeCodeError as e:
             raise ClaudeCodeError(f"{e} (exit {r.exit_code}; stderr: {r.stderr.strip()[-2000:]})") from None
         self.session_id = result.get("session_id")
-        self.cost = result.get("total_cost_usd") or self.cost  # cumulative over the session, resumed turns included
-        self.steps += result.get("num_turns") or 0
         self.exit_status = result.get("subtype")  # e.g. success, error_max_turns, error_max_budget_usd
         return Message("agent", (Text(result.get("result") or ""),))
 
+    def _count(self, stream: list[dict]) -> None:
+        tokens_in, tokens_out, calls = usage(stream)
+        self.input_tokens += tokens_in
+        self.output_tokens += tokens_out
+        self.model_calls += calls
+        result = next((e for e in reversed(stream) if e.get("type") == "result"), None)
+        if result is not None and result.get("total_cost_usd") is not None:
+            self.cost = result["total_cost_usd"]  # cumulative over the session, resumed turns included
+        else:
+            self.cost += estimate_cost(self.model, stream)
+
     def stats(self) -> AgentStats:
-        return AgentStats(self.exit_status, self.cost, self.steps)
+        return AgentStats(self.exit_status, self.cost, self.model_calls, self.input_tokens, self.output_tokens)
 
     def new_events(self) -> list[tuple[str, dict]]:
         events, self.pending = self.pending, []

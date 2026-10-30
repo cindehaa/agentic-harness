@@ -53,7 +53,9 @@ class AgentStats:
 
     exit_status: str | None = None  # the agent's own reason for stopping, e.g. mini's "Submitted"
     cost_usd: float = 0.0
-    steps: int = 0  # model calls
+    model_calls: int = 0
+    input_tokens: int = 0  # every prompt token, cached ones included
+    output_tokens: int = 0
 
 
 class AgentSession(ABC):
@@ -64,7 +66,8 @@ class AgentSession(ABC):
         """Give the agent a message, block until it hands back, and return its reply."""
 
     def stats(self) -> AgentStats:
-        """Stats so far, including after a crash. A session that tracks nothing reports zeros."""
+        """Stats so far, including after a crash or a timeout: money already spent is always reported. A session that
+        tracks nothing reports zeros."""
         return AgentStats()
 
     def new_events(self) -> list[tuple[str, dict]]:

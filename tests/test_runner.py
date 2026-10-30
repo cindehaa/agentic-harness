@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 from litellm.exceptions import AuthenticationError
 
-from agentic_harness.agents import Agent, AgentLimitation, AgentSession, AgentStats
+from agentic_harness.agents import Agent, AgentLimitation, AgentSession, AgentStats, TransientError
 from agentic_harness.benchmarks import BashOperations, GraderError
 from agentic_harness.environments import DockerEnvironment, Environment
 from agentic_harness.runner import run_trial
@@ -151,8 +151,8 @@ def test_events_are_appended_as_they_happen_and_everything_is_redacted(tmp_path,
     monkeypatch.setattr("agentic_harness.redact._secrets", lambda: ("Hello World",))  # pretend it's a secret
     turns_ended = []
     outcome = run_trial(FixedGrader(True), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, DockerEnvironment,
-                        on_turn_end=lambda: turns_ended.append(1))
-    assert outcome.status == "graded" and turns_ended == [1]
+                        on_turn_end=lambda stats: turns_ended.append(stats.cost_usd))
+    assert outcome.status == "graded" and turns_ended == [0.01]  # each turn reports the spend so far
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [
         (0, "message_sent", 1), (1, "message_received", 1), (2, "workspace_saved", 1)]
@@ -223,3 +223,51 @@ def test_score_to_float_rejects_other_values():
 
 def test_no_leftover_containers_or_volumes():
     assert _labelled("ps", "-a") == "" and _labelled("volume", "ls") == ""
+
+
+class SpendThenFail(Agent):
+    """Spends (two model calls, $0.03) and then fails the way `fail` says."""
+
+    name = "spend-then-fail"
+
+    def __init__(self, fail: Exception) -> None:
+        self.fail = fail
+
+    def start(self, env, artifacts_dir, limits, mcp_servers=()) -> AgentSession:
+        agent = self
+
+        class Session(AgentSession):
+            def send(self, message: Message) -> Message:
+                raise agent.fail
+
+            def stats(self) -> AgentStats:
+                return AgentStats("crashed", 0.03, 2, 1500, 80)
+
+        return Session()
+
+
+@pytest.mark.parametrize("fail, status", [
+    (TransientError("provider down"), "infra_error"),  # an error
+    (AgentLimitation("context window exceeded"), "graded"),  # the agent's own end, graded as it is
+    (TimeoutError("model call timed out"), "infra_error"),
+])
+def test_spend_is_recorded_whatever_the_outcome(tmp_path, fail, status):
+    spent = []
+    outcome = run_trial(bench, SpendThenFail(fail), TASK, Limits(), tmp_path, DockerEnvironment,
+                        on_turn_end=lambda stats: spent.append(stats.cost_usd))
+    assert outcome.status == status and spent == [0.03]  # reported at the turn's end even though it raised
+    assert (outcome.cost_usd, outcome.model_calls, outcome.input_tokens, outcome.output_tokens) == (0.03, 2, 1500, 80)
+    assert json.loads((tmp_path / "outcome.json").read_text())["cost_usd"] == 0.03
+
+
+def test_phase_timestamps_are_in_order(tmp_path):
+    outcome = run_trial(bench, ScriptedAgent(lambda env: env.exec("echo 'Hello World' > hello.txt")), TASK, Limits(),
+                        tmp_path, DockerEnvironment)
+    p = outcome.phases
+    assert list(p) == ["env_ready", "agent_start", "agent_end", "grade_start", "grade_end"]
+    assert p["env_ready"] <= p["agent_start"] < p["agent_end"] <= p["grade_start"] < p["grade_end"]
+
+
+def test_a_trial_that_never_reaches_grading_has_no_grading_phase(tmp_path):
+    outcome = run_trial(bench, SpendThenFail(TransientError("down")), TASK, Limits(), tmp_path, DockerEnvironment)
+    assert set(outcome.phases) == {"env_ready", "agent_start", "agent_end"}

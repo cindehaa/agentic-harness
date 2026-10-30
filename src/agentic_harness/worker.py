@@ -17,7 +17,7 @@ from collections.abc import Callable
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from agentic_harness.agents import Agent, PreflightError, resolve_agent
+from agentic_harness.agents import Agent, AgentStats, PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
 from agentic_harness.environments import ATTEMPT_LABEL, DockerEnvironment, Environment, EnvironmentLost, ensure_image
 from agentic_harness.redact import redact
@@ -239,7 +239,7 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
     task = next(t for t in benchmark.tasks() if t.id == claim.task_id)
     limits = Limits(**json.loads(run["config"])["limits"])
 
-    def load_events() -> None:  # after each turn; a failure here only delays them to the attempt's end
+    def load_events(stats: AgentStats) -> None:  # after each turn; a failure here only delays them to the attempt's end
         try:
             store.load_events(claim.attempt_id, claim.artifacts_dir / "events.jsonl")
         except sqlite3.Error as e:

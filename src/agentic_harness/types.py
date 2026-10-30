@@ -100,9 +100,15 @@ class Outcome:
     error: str | None = None  # why it isn't graded (or the traceback)
     retryable: bool = False  # infra_error only: a transient failure (Docker, network, provider overloaded) worth another attempt
     agent_exit_status: str | None = None  # the agent's own reason for stopping, e.g. "Submitted", "TimeLimit"
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0  # what the agent spent, also when it crashed or ran out of time
+    model_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
     duration_s: float = 0.0
     turns: int = 0
+    # when each phase began or ended (time.time()): env_ready, agent_start, agent_end, grade_start, grade_end; a phase
+    # the attempt never reached is missing
+    phases: dict[str, float] = field(default_factory=dict)
 
 
 def score_to_float(value: Value) -> float:

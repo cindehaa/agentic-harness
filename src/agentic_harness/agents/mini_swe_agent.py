@@ -132,7 +132,9 @@ class MiniSweSession(AgentSession):
     def stats(self) -> AgentStats:
         # mini logs an "exit" message when it stops, even when it crashed: its exit_status is the reason
         exit_status = self.agent.messages[-1].get("extra", {}).get("exit_status") if self.agent.messages else None
-        return AgentStats(exit_status, self.agent.cost, self.agent.n_calls)
+        usages = [(m.get("extra", {}).get("response") or {}).get("usage") or {} for m in self.agent.messages]
+        return AgentStats(exit_status, self.agent.cost, self.agent.n_calls,
+                          sum(u.get("prompt_tokens") or 0 for u in usages), sum(u.get("completion_tokens") or 0 for u in usages))
 
 
 class MiniSweAgent(Agent):

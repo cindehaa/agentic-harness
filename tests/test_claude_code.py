@@ -11,7 +11,8 @@ from agentic_harness.agents import (
     AgentCapabilities, AgentLimitation, AgentStats, PreflightError, TransientError, Unsupported, resolve_agent,
 )
 from agentic_harness.agents.claude_code import (
-    MCP_CONFIG, ClaudeCode, ClaudeCodeError, check_result, derived_tag, mcp_config, parse_stream, trace_events,
+    MCP_CONFIG, ClaudeCode, ClaudeCodeError, check_result, derived_tag, estimate_cost, mcp_config, parse_stream, trace_events,
+    usage,
 )
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, McpServer, Message, Text
@@ -178,6 +179,7 @@ def test_deadline_kills_claude_inside_and_keeps_what_it_did(tmp_path, monkeypatc
     s = session(world, tmp_path, monkeypatch)
     assert s.send(Message("user", (Text("go"),))) == Message("agent", (Text(""),))
     assert world.killed and s.stats().exit_status == "TimeLimit"
+    assert s.stats().cost_usd == 0  # nothing spent in this stream: the assistant message carries no usage
     assert [k for k, _ in s.new_events()] == ["tool_call"]
     assert world.calls[0][1] <= Limits().trial_timeout_s  # exec timeout = what is left of the trial
 
@@ -246,3 +248,21 @@ def test_live_calls_a_tool_on_the_mcp_fixture_sidecar(tmp_path):
              if json.loads(line)["kind"] == "tool_call"]
     assert "mcp__fixture__secret_word" in calls
     assert _no_leftovers()
+
+
+def test_usage_comes_from_the_result_event_with_cached_tokens_counted_as_input():
+    result = RESULT | {"usage": {"input_tokens": 10, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 3000,
+                                 "output_tokens": 50}}
+    assert usage([TOOL_USE, result]) == (3210, 50, 2)
+
+
+def test_a_turn_cut_off_at_the_deadline_still_counts_its_tokens_and_cost(tmp_path, monkeypatch):
+    def assistant(text_tokens: int) -> dict:  # Claude Code prints the same message once per content block
+        return {"type": "assistant", "message": {"id": "m1", "content": [],
+                                                 "usage": {"input_tokens": 1000, "output_tokens": text_tokens}}}
+    world = FakeWorld([[assistant(5), assistant(400)]], timed_out=True)
+    s = session(world, tmp_path, monkeypatch)
+    s.send(Message("user", (Text("go"),)))
+    stats = s.stats()
+    assert (stats.exit_status, stats.model_calls, stats.input_tokens, stats.output_tokens) == ("TimeLimit", 1, 1000, 400)
+    assert stats.cost_usd == pytest.approx(estimate_cost("claude-haiku-5-5", [assistant(400)])) and stats.cost_usd > 0

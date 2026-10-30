@@ -12,7 +12,7 @@ from litellm.exceptions import AuthenticationError, ContextWindowExceededError, 
 from minisweagent.exceptions import LimitsExceeded, Submitted
 from minisweagent.models.test_models import DeterministicToolcallModel, make_toolcall_output
 
-from agentic_harness.agents import AgentCapabilities, AgentLimitation, PreflightError, TransientError, Unsupported, resolve_agent
+from agentic_harness.agents import AgentCapabilities, AgentStats, AgentLimitation, PreflightError, TransientError, Unsupported, resolve_agent
 from agentic_harness.agents.mini_swe_agent import ContainerEnv, MiniAgent, MiniSweAgent, MiniSweSession, TimeLimit
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, Message, Text
@@ -84,7 +84,9 @@ def test_command_after_deadline_raises_time_limit_without_running():
 
 def _bash(call_id: str, command: str) -> dict:
     tool_call = {"id": call_id, "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": command})}}
-    return make_toolcall_output(None, [tool_call], [{"command": command, "tool_call_id": call_id}])
+    output = make_toolcall_output(None, [tool_call], [{"command": command, "tool_call_id": call_id}])
+    output["extra"]["response"] = {"usage": {"prompt_tokens": 100, "completion_tokens": 7}}  # what litellm reports
+    return output
 
 
 def scripted_session(outputs: list[dict], tmp_path) -> tuple[FakeEnv, MiniSweSession]:
@@ -98,13 +100,13 @@ def test_second_send_continues_the_same_history(tmp_path):
     submit = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
     env, session = scripted_session([_bash("1", "echo a"), _bash("2", submit), _bash("3", "echo b"), _bash("4", submit)], tmp_path)
     assert session.send(Message("user", (Text("first"),))) == Message("agent", (Text(""),))
-    assert (session.stats().exit_status, session.stats().steps) == ("Submitted", 2)
+    assert session.stats() == AgentStats("Submitted", 2.0, 2, 200, 14)  # the scripted model charges $1 a call
     session.send(Message("user", (Text("second"),)))
     roles = [m["role"] for m in session.agent.messages]
     # the submit's tool call got its result, then the new user message, then the agent went on
     assert roles == ["system", "user", "assistant", "tool", "assistant", "tool", "user", "assistant", "tool", "assistant", "exit"]
     assert session.agent.messages[6]["content"] == "second"
-    assert (session.stats().exit_status, session.stats().steps) == ("Submitted", 4)
+    assert session.stats() == AgentStats("Submitted", 4.0, 4, 400, 28)
     assert json.loads((tmp_path / "trajectory.json").read_text())["info"]["exit_status"] == "Submitted"
 
 
@@ -188,7 +190,7 @@ def test_live_solves_bash_001(tmp_path):
         with env.attach_grader(bench.grader_image(task)) as grader:
             score = bench.grade(task, grader, env, ())
     stats = session.stats()
-    print(f"live cost: ${stats.cost_usd:.4f}, steps: {stats.steps}, exit: {stats.exit_status}")
+    print(f"live cost: ${stats.cost_usd:.4f}, calls: {stats.model_calls}, tokens: {stats.input_tokens}/{stats.output_tokens}, exit: {stats.exit_status}")
     assert stats.exit_status == "Submitted"
     assert score.value is True, score.explanation
     assert (tmp_path / "trajectory.json").exists()
