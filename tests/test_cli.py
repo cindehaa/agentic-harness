@@ -82,6 +82,18 @@ def test_results_summary_always_shows_every_excluded_count(store):
     assert "Cost: $0.0300 · Time: 6.0s in trials" in out
 
 
+def test_results_default_to_the_summary(store):
+    assert harness("results", "--run_id", "run-a") == harness("results", "--run_id", "run-a", "--format", "summary")
+
+
+def test_results_wall_time_spans_the_trials_and_the_queue_wait_is_separate(store):
+    store.claim_trial("w", 120)  # t4: every trial has started
+    store.db.execute("UPDATE runs SET created_at = 100, status = 'done', finished_at = 999")
+    store.db.execute("UPDATE attempts SET started_at = 130 + id, finished_at = 140 + id")  # ids 1-4: 131 ... 144
+    out = harness("results", "--run_id", "run-a")
+    assert "Time: 6.0s in trials, 13.0s wall (waited 31.0s in queue)" in out
+
+
 def test_results_table_has_one_row_per_trial(store):
     rows = [line.split() for line in harness("results", "--run_id", "run-a", "--format", "table").splitlines()]
     assert rows[0] == ["TASK", "OUTCOME", "SCORE", "COST", "TIME", "ATTEMPTS"]

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from agentic_harness.types import Outcome
 
-SCHEMA_VERSION = 2  # bump on any schema change; an old harness.db is then refused, not migrated
+SCHEMA_VERSION = 3  # bump on any schema change; an old harness.db is then refused, not migrated
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     cost_usd REAL,
     duration_s REAL,
     artifacts_dir TEXT,
+    started_at REAL,            -- claimed (time.time()); NULL for a setup failure's attempt
+    finished_at REAL,
     UNIQUE (trial_id, n)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -201,7 +203,7 @@ class Store:
             if trial is None:
                 return None
             attempt_id = self.db.execute(
-                "INSERT INTO attempts (trial_id, n) VALUES (?, ?)", (trial["id"], trial["attempt_count"])
+                "INSERT INTO attempts (trial_id, n, started_at) VALUES (?, ?, ?)", (trial["id"], trial["attempt_count"], now)
             ).lastrowid
             artifacts_dir = self.runs_dir / trial["run_id"] / trial["task_id"] / f"attempt-{attempt_id}"
             self.db.execute("UPDATE attempts SET artifacts_dir = ? WHERE id = ?", (str(artifacts_dir), attempt_id))
@@ -226,9 +228,9 @@ class Store:
             ).fetchall()
             for t in expired:
                 self.db.execute(
-                    "UPDATE attempts SET outcome = 'infra_error', error = 'worker lost: lease expired'"
+                    "UPDATE attempts SET outcome = 'infra_error', error = 'worker lost: lease expired', finished_at = ?"
                     " WHERE trial_id = ? AND n = ? AND outcome IS NULL",
-                    (t["id"], t["attempt_count"]),
+                    (now, t["id"], t["attempt_count"]),
                 )
                 self._end_or_requeue(t["id"], t["run_id"], Outcome("infra_error"),
                                      None if t["attempt_count"] >= max_attempts else now + backoff_s * t["attempt_count"])
@@ -247,10 +249,10 @@ class Store:
                 raise LostClaim(f"trial {claim.trial_id} attempt {claim.n}")
             self._load_events(claim.attempt_id, claim.artifacts_dir / "events.jsonl")
             self.db.execute(
-                "UPDATE attempts SET outcome = ?, score = ?, exit_status = ?, error = ?, cost_usd = ?, duration_s = ?"
-                " WHERE id = ?",
+                "UPDATE attempts SET outcome = ?, score = ?, exit_status = ?, error = ?, cost_usd = ?, duration_s = ?,"
+                " finished_at = ? WHERE id = ?",
                 (outcome.status, _json(outcome.score and asdict(outcome.score)), outcome.agent_exit_status, outcome.error,
-                 outcome.cost_usd, outcome.duration_s, claim.attempt_id),
+                 outcome.cost_usd, outcome.duration_s, time.time(), claim.attempt_id),
             )
             self._end_or_requeue(claim.trial_id, claim.run_id, outcome, retry_at)
 
@@ -340,6 +342,14 @@ class Store:
     def accuracy(self, run_id: str) -> tuple[float | None, int]:
         """Mean score_float over graded trials only, and how many there are."""
         row = self._one("SELECT AVG(score_float), COUNT(*) FROM trials WHERE run_id = ? AND outcome = 'graded'", (run_id,))
+        return row[0], row[1]
+
+    def trial_span(self, run_id: str) -> tuple[float | None, float | None]:
+        """When the run's first attempt started and its last finished attempt ended (None if none has)."""
+        row = self._one(
+            "SELECT MIN(a.started_at), MAX(a.finished_at) FROM attempts a JOIN trials t ON t.id = a.trial_id WHERE t.run_id = ?",
+            (run_id,),
+        )
         return row[0], row[1]
 
     def unfinished_runs(self, run_id: str | None = None) -> list[sqlite3.Row]:

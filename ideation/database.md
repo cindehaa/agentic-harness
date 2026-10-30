@@ -12,7 +12,7 @@ writer, so `status` works while workers run). Only the harness writes it.
 ```
 runs(id, benchmark, agent, model, versions json, config json, status, setup_claimed_by, setup_lease_until, created_at, finished_at)
 trials(id, run_id, task_id, state, claimed_by, lease_until, available_at, attempt_count, outcome, score_value json, score_float)
-attempts(id, trial_id, n, outcome, score json, exit_status, error, cost_usd, duration_s, artifacts_dir)
+attempts(id, trial_id, n, outcome, score json, exit_status, error, cost_usd, duration_s, artifacts_dir, started_at, finished_at)
 events(id, attempt_id, seq, turn, kind, payload json, ts)
 workers(id, started_at, heartbeat_at)
 ```
@@ -62,10 +62,13 @@ workers(id, started_at, heartbeat_at)
   hour (`--all` for every run): `RUN, BENCHMARK, AGENT, PROGRESS, STARTED`;
   PROGRESS is e.g. `3/5 done`, `setting up`, `queued`, `setup failed`.
 - **`harness status --run_id X`**: one row per trial: `TASK, STATE, OUTCOME, SCORE, ATTEMPTS`.
-- **`harness results --run_id X --format summary|table|json`**:
+- **`harness results --run_id X --format summary|table|json`** (default `summary`, 2026-10-29):
   - `summary` = benchmark · agent (model); accuracy = mean `score_float` over
     `graded` trials (n graded); the excluded counts `grader_error · infra_error
-    · unsupported` always shown, even when 0 (with their task ids); cost; time.
+    · unsupported` always shown, even when 0 (with their task ids); cost; time: summed
+    trial time, wall time from the first attempt's start to the last one's end
+    (`attempts.started_at` / `finished_at`, schema v3), and the queue wait before the
+    first attempt started (setup included) shown separately.
   - `table` = one row per trial: task, outcome, score, cost, time, attempts.
   - `json` = everything: run (versions, config), trials with raw
     `score_value`, and their attempts.

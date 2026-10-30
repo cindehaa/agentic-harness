@@ -189,8 +189,8 @@ def status(run_id: str | None, show_all: bool):
 @click.option(
     "--format",
     type=click.Choice(["json", "table", "summary"], case_sensitive=False),
-    default="json",
-    help="Output format for results (default: json)",
+    default="summary",
+    help="Output format for results (default: summary)",
 )
 def results(run_id: str, format: str):
     """Get results from a run (a run still in progress shows what is done so far)."""
@@ -228,11 +228,21 @@ def results(run_id: str, format: str):
         for s, ids in excluded.items():
             if ids:
                 click.echo(f"  {s}: {', '.join(ids)}")
-        wall = f", {run['finished_at'] - run['created_at']:.1f}s wall" if run["finished_at"] else ""
-        click.echo(f"Cost: ${sum(t['cost_usd'] for t in trials):.4f} · Time: {sum(t['duration_s'] for t in trials):.1f}s in trials{wall}")
+        click.echo(f"Cost: ${sum(t['cost_usd'] for t in trials):.4f} · Time: {sum(t['duration_s'] for t in trials):.1f}s in trials"
+                   + _wall(store, run))
 
 
 EXCLUDED = ("grader_error", "infra_error", "unsupported")  # outcomes left out of accuracy, always reported
+
+
+def _wall(store: Store, run) -> str:
+    """Wall time from the first trial's start to the last one's end (so far, while running), then the wait before
+    the first trial started (setup included): a run that sat queued for an hour didn't take an hour."""
+    first, last = store.trial_span(run["id"])
+    if first is None:
+        return ""
+    end = last if run["finished_at"] else time.time()
+    return f", {end - first:.1f}s wall (waited {first - run['created_at']:.1f}s in queue)"
 
 
 def _find_run(store: Store, run_id: str):
