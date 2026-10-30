@@ -1,6 +1,7 @@
 """`harness status` and `harness results` read back a database built directly with the Store (no Docker)."""
 
 import json
+import time
 
 import pytest
 from click.testing import CliRunner
@@ -45,9 +46,21 @@ def harness(*args: str) -> str:
 def test_status_lists_active_runs_with_progress(store):
     store.create_run("run-b", "python-tasks", "mini-swe-agent", "haiku", {}, {"limits": {}}, ["p1"])
     lines = harness("status").splitlines()
-    assert lines[0].split() == ["RUN", "BENCHMARK", "AGENT", "PROGRESS", "STARTED"]
-    assert lines[1].split()[:5] == ["run-a", "bash-operations", "mini-swe-agent", "3/4", "done"]
-    assert lines[2].split()[:4] == ["run-b", "python-tasks", "mini-swe-agent", "queued"]
+    assert lines[0].split() == ["RUN", "BENCHMARK", "AGENT", "PROGRESS", "SPEND", "ELAPSED", "STARTED"]
+    assert lines[1].split()[:6] == ["run-a", "bash-operations", "mini-swe-agent", "3/4", "done", "$0.0300"]
+    assert lines[2].split()[:5] == ["run-b", "python-tasks", "mini-swe-agent", "queued", "$0.0000"]
+
+
+def test_status_shows_spend_against_the_budget_and_elapsed_time(store):
+    store.create_run("run-b", "python-tasks", "mini-swe-agent", "haiku", {}, {"limits": {}}, ["p1"], max_cost_usd=2)
+    store.db.execute("UPDATE runs SET created_at = 100, status = 'done', finished_at = 190 WHERE id = 'run-b'")
+    row = next(line.split() for line in harness("status", "--all").splitlines() if line.startswith("run-b"))
+    assert row[3:8] == ["0/1", "done", "$0.0000", "of", "$2.00"] and row[8] == "90.0s"
+
+
+def test_status_says_when_the_budget_stopped_a_run(store):
+    store.db.execute("UPDATE trials SET state = 'done', outcome = 'skipped_budget' WHERE task_id = 't4'")
+    assert "4/4 done (budget reached: 1 skipped)" in harness("status")
 
 
 def test_status_says_when_no_worker_is_running(store):
@@ -69,38 +82,62 @@ def test_status_hides_runs_finished_over_an_hour_ago_unless_all(store):
 
 def test_status_of_one_run_shows_its_trials(store):
     out = harness("status", "--run_id", "run-a")
-    assert out.splitlines()[0] == "Run run-a: bash-operations · mini-swe-agent (haiku), 3/4 done"
+    assert out.splitlines()[0].startswith("Run run-a: bash-operations · mini-swe-agent (haiku), 3/4 done, $0.0300 spent, ")
     rows = [line.split() for line in out.splitlines()[2:]]
-    assert rows == [["TASK", "STATE", "OUTCOME", "SCORE", "ATTEMPTS"], ["t1", "done", "graded", "True", "1"],
-                    ["t2", "done", "graded", "False", "1"], ["t3", "done", "infra_error", "1"], ["t4", "pending", "0"]]
+    assert rows == [["TASK", "STATE", "OUTCOME", "SCORE", "ATTEMPTS", "COST", "TIME"],
+                    ["t1", "done", "graded", "True", "1", "$0.0200", "3.0s"],
+                    ["t2", "done", "graded", "False", "1", "$0.0100", "2.0s"],
+                    ["t3", "done", "infra_error", "1", "$0.0000", "1.0s"], ["t4", "pending", "0", "$0.0000", "0.0s"]]
+
+
+def test_status_counts_a_running_trials_time_so_far(store):
+    store.claim_trial("w", 120)  # t4
+    store.db.execute("UPDATE attempts SET started_at = ? WHERE outcome IS NULL", (time.time() - 30,))
+    row = harness("status", "--run_id", "run-a").splitlines()[-1].split()
+    assert row[:2] == ["t4", "running"] and 30 <= float(row[-1].rstrip("s")) < 40
 
 
 def test_results_summary_always_shows_every_excluded_count(store):
     out = harness("results", "--run_id", "run-a", "--format", "summary")
     assert "In progress: 3/4 done" in out
-    assert "Accuracy: 0.50 (n=2 graded)" in out
-    assert "Excluded: grader_error 0 · infra_error 1 · unsupported 0" in out
+    assert "Accuracy: 0.50 (n=2 graded, 1 passed)" in out
+    assert "Excluded: grader_error 0 · infra_error 1 · unsupported 0 · skipped_budget 0" in out
     assert "  infra_error: t3" in out
-    assert "Cost: $0.0300 · Time: 6.0s in trials" in out
+    assert "Cost: $0.0300 · $0.0100/task · $0.0300/passing task" in out
+
+
+def finished_with_known_times(store) -> None:
+    """t4 run too, then fixed timestamps: setup 100-110; attempt i claimed at 110 + i, its world up 1 s later, its
+    agent 2 s, its grading 1 s; done 1 s after (t3's infra_error never got to grading)."""
+    store.finish_attempt(store.claim_trial("w", 120), "w", OUTCOMES["t2"])
+    store.db.execute("UPDATE runs SET created_at = 90, setup_started_at = 100, setup_finished_at = 110, status = 'done',"
+                     " finished_at = 999")
+    store.db.execute("UPDATE attempts SET queued_at = 110, started_at = 110 + id, env_ready_at = 111 + id,"
+                     " agent_start_at = 111 + id, agent_end_at = 113 + id, grade_start_at = 113 + id, grade_end_at = 114 + id,"
+                     " finished_at = 115 + id, input_tokens = 1000 * id, output_tokens = 10 * id, model_calls = id")
+    store.db.execute("UPDATE attempts SET grade_start_at = NULL, grade_end_at = NULL WHERE id = 3")
+
+
+def test_results_summary_breaks_the_time_down(store):
+    finished_with_known_times(store)
+    out = harness("results", "--run_id", "run-a")
+    assert "Tokens: 10,000 in · 100 out · 10 model calls" in out
+    assert "Time per trial (avg): env start 1.0s · agent 2.0s · grading 1.0s" in out
+    # wall: first claim (111) to last outcome (119); queue wait: 1 + 2 + 3 + 4 s
+    assert "Run: setup 10.0s · wall 8.0s (first trial start to last end) · queue wait 10.0s total · 30.0 trials/min" in out
 
 
 def test_results_default_to_the_summary(store):
+    finished_with_known_times(store)
     assert harness("results", "--run_id", "run-a") == harness("results", "--run_id", "run-a", "--format", "summary")
 
 
-def test_results_wall_time_spans_the_trials_and_the_queue_wait_is_separate(store):
-    store.claim_trial("w", 120)  # t4: every trial has started
-    store.db.execute("UPDATE runs SET created_at = 100, status = 'done', finished_at = 999")
-    store.db.execute("UPDATE attempts SET started_at = 130 + id, finished_at = 140 + id")  # ids 1-4: 131 ... 144
-    out = harness("results", "--run_id", "run-a")
-    assert "Time: 6.0s in trials, 13.0s wall (waited 31.0s in queue)" in out
-
-
 def test_results_table_has_one_row_per_trial(store):
+    finished_with_known_times(store)
     rows = [line.split() for line in harness("results", "--run_id", "run-a", "--format", "table").splitlines()]
-    assert rows[0] == ["TASK", "OUTCOME", "SCORE", "COST", "TIME", "ATTEMPTS"]
-    assert rows[1] == ["t1", "graded", "True", "$0.0200", "3.0s", "1"]
-    assert rows[4] == ["t4", "pending", "$0.0000", "0.0s", "0"]
+    assert rows[0] == ["TASK", "OUTCOME", "SCORE", "COST", "TOKENS", "IN/OUT", "AGENT", "GRADING", "TIME", "ATTEMPTS"]
+    assert rows[1] == ["t1", "graded", "True", "$0.0200", "1,000/10", "2.0s", "1.0s", "3.0s", "1"]
+    assert rows[3] == ["t3", "infra_error", "$0.0000", "3,000/30", "2.0s", "0.0s", "1.0s", "1"]
 
 
 def test_results_json_has_everything(store):
@@ -110,6 +147,11 @@ def test_results_json_has_everything(store):
     assert report["excluded"] == {"grader_error": [], "infra_error": ["t3"], "unsupported": [], "skipped_budget": []}
     t1 = report["trials"][0]
     assert t1["score_value"] is True and t1["attempts"][0]["score"]["value"] is True
+    assert (report["cost_usd"], report["cost_per_task_usd"], report["cost_per_passing_task_usd"]) == (0.03, 0.01, 0.03)
+    for key in ("input_tokens", "output_tokens", "model_calls", "avg_agent_s", "avg_grading_s", "avg_env_start_s",
+                "total_queue_wait_s", "setup_s", "wall_s", "trials_per_min", "max_cost_usd"):
+        assert key in report
+    assert {"agent_start_at", "grade_end_at", "queued_at", "input_tokens"} <= set(t1["attempts"][0])
 
 
 def test_unknown_run_is_an_error(store):

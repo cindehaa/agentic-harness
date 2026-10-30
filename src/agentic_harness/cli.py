@@ -19,6 +19,7 @@ from agentic_harness.agents import PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
 from agentic_harness.dashboard import make_server
 from agentic_harness.environments import remove_images, remove_leftovers
+from agentic_harness.metrics import run_metrics
 from agentic_harness.paths import DB_PATH, REPO_ROOT
 from agentic_harness.store import SchemaMismatch, Store
 from agentic_harness.types import Limits, Task
@@ -212,15 +213,19 @@ def status(run_id: str | None, show_all: bool):
         if not runs:
             click.echo("No active or recent runs (--all lists every run)")
             return
-        _table(("RUN", "BENCHMARK", "AGENT", "PROGRESS", "STARTED"),
-               [(r["id"], r["benchmark"], r["agent"], _progress(r, r["done"], r["total"]), _time(r["created_at"])) for r in runs])
+        _table(("RUN", "BENCHMARK", "AGENT", "PROGRESS", "SPEND", "ELAPSED", "STARTED"),
+               [(r["id"], r["benchmark"], r["agent"], _progress(r, r["done"], r["total"], r["skipped"]),
+                 _spend(r["cost_usd"], r["max_cost_usd"]), _elapsed(r), _time(r["created_at"])) for r in runs])
     else:
         run = _find_run(store, run_id)
         trials = store.trials(run_id)
-        click.echo(f"Run {run_id}: {run['benchmark']} · {run['agent']} ({run['model']}), "
-                   f"{_progress(run, sum(t['state'] == 'done' for t in trials), len(trials))}\n")
-        _table(("TASK", "STATE", "OUTCOME", "SCORE", "ATTEMPTS"),
-               [(t["task_id"], t["state"], t["outcome"] or "", _score(t["score_value"]), str(t["attempt_count"])) for t in trials])
+        progress = _progress(run, sum(t["state"] == "done" for t in trials), len(trials),
+                             sum(t["outcome"] == "skipped_budget" for t in trials))
+        click.echo(f"Run {run_id}: {run['benchmark']} · {run['agent']} ({run['model']}), {progress}, "
+                   f"{_spend(sum(t['cost_usd'] for t in trials), run['max_cost_usd'])} spent, {_elapsed(run)} elapsed\n")
+        _table(("TASK", "STATE", "OUTCOME", "SCORE", "ATTEMPTS", "COST", "TIME"),
+               [(t["task_id"], t["state"], t["outcome"] or "", _score(t["score_value"]), str(t["attempt_count"]),
+                 f"${t['cost_usd']:.4f}", _trial_time(t)) for t in trials])
     if (waiting := store.waiting_trials()) and _no_worker(store):
         click.echo(f"\n{waiting} pending — no worker running; start one with `harness worker`")
 
@@ -244,14 +249,15 @@ def results(run_id: str, format: str):
     trials = store.trials(run_id)
     accuracy, graded = store.accuracy(run_id)
     excluded = {s: [t["task_id"] for t in trials if t["outcome"] == s] for s in EXCLUDED}
+    attempts = store.attempts(run_id)
+    m = run_metrics(run, trials, attempts)
     if format == "json":
-        attempts = store.attempts(run_id)
         report = {
             "run": {**dict(run), "versions": json.loads(run["versions"]), "config": json.loads(run["config"])},
             "accuracy": accuracy,
             "graded": graded,
             "excluded": excluded,
-            "cost_usd": sum(t["cost_usd"] for t in trials),
+            **m,
             "trials": [
                 {**dict(t), "score_value": _parse(t["score_value"]),
                  "attempts": [{**dict(a), "score": _parse(a["score"])} for a in attempts if a["trial_id"] == t["id"]]}
@@ -260,34 +266,54 @@ def results(run_id: str, format: str):
         }
         click.echo(json.dumps(report, indent=2))
     elif format == "table":
-        _table(("TASK", "OUTCOME", "SCORE", "COST", "TIME", "ATTEMPTS"),
+        _table(("TASK", "OUTCOME", "SCORE", "COST", "TOKENS IN/OUT", "AGENT", "GRADING", "TIME", "ATTEMPTS"),
                [(t["task_id"], t["outcome"] or t["state"], _score(t["score_value"]), f"${t['cost_usd']:.4f}",
+                 f"{t['input_tokens']:,}/{t['output_tokens']:,}", f"{t['agent_s']:.1f}s", f"{t['grading_s']:.1f}s",
                  f"{t['duration_s']:.1f}s", str(t["attempt_count"])) for t in trials])
     else:
         done = sum(t["state"] == "done" for t in trials)
         click.echo(f"{run['benchmark']} · {run['agent']} ({run['model']})   run {run_id}")
         if done < len(trials):
             click.echo(f"In progress: {_progress(run, done, len(trials))}")
-        click.echo("Accuracy: " + ("n/a" if accuracy is None else f"{accuracy:.2f}") + f" (n={graded} graded)")
+        click.echo("Accuracy: " + ("n/a" if accuracy is None else f"{accuracy:.2f}") + f" (n={graded} graded, {m['passed']} passed)")
         click.echo("Excluded: " + " · ".join(f"{s} {len(ids)}" for s, ids in excluded.items()))
         for s, ids in excluded.items():
             if ids:
                 click.echo(f"  {s}: {', '.join(ids)}")
-        click.echo(f"Cost: ${sum(t['cost_usd'] for t in trials):.4f} · Time: {sum(t['duration_s'] for t in trials):.1f}s in trials"
-                   + _wall(store, run))
+        click.echo(f"Cost: {_spend(m['cost_usd'], m['max_cost_usd'])} · {_usd(m['cost_per_task_usd'])}/task · "
+                   f"{_usd(m['cost_per_passing_task_usd'])}/passing task")
+        click.echo(f"Tokens: {m['input_tokens']:,} in · {m['output_tokens']:,} out · {m['model_calls']:,} model calls")
+        click.echo(f"Time per trial (avg): env start {_secs(m['avg_env_start_s'])} · agent {_secs(m['avg_agent_s'])} · "
+                   f"grading {_secs(m['avg_grading_s'])}")
+        click.echo(f"Run: setup {_secs(m['setup_s'])} · wall {_secs(m['wall_s'])} (first trial start to last end) · "
+                   f"queue wait {_secs(m['total_queue_wait_s'])} total · "
+                   + ("n/a" if m["trials_per_min"] is None else f"{m['trials_per_min']:.1f}") + " trials/min")
 
 
 EXCLUDED = ("grader_error", "infra_error", "unsupported", "skipped_budget")  # left out of accuracy, always reported
 
 
-def _wall(store: Store, run) -> str:
-    """Wall time from the first trial's start to the last one's end (so far, while running), then the wait before
-    the first trial started (setup included): a run that sat queued for an hour didn't take an hour."""
-    first, last = store.trial_span(run["id"])
-    if first is None:
-        return ""
-    end = last if run["finished_at"] else time.time()
-    return f", {end - first:.1f}s wall (waited {first - run['created_at']:.1f}s in queue)"
+def _usd(value: float | None) -> str:
+    return "n/a" if value is None else f"${value:.4f}"
+
+
+def _spend(cost: float, budget: float | None) -> str:
+    return f"${cost:.4f}" + ("" if budget is None else f" of ${budget:.2f}")
+
+
+def _secs(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.1f}s"
+
+
+def _elapsed(run) -> str:
+    """Since submission: until it finished, or until now."""
+    return _secs((run["finished_at"] or time.time()) - run["created_at"])
+
+
+def _trial_time(trial) -> str:
+    """Its finished attempts' time, plus the one in flight so far."""
+    running = time.time() - trial["running_since"] if trial["running_since"] else 0
+    return _secs(trial["duration_s"] + running)
 
 
 def _find_run(store: Store, run_id: str):
@@ -297,12 +323,12 @@ def _find_run(store: Store, run_id: str):
     return run
 
 
-def _progress(run, done: int, total: int) -> str:
+def _progress(run, done: int, total: int, skipped: int = 0) -> str:
     if run["status"] == "failed":
         return "setup failed"
     if run["status"] == "pending":
         return "setting up" if run["setup_claimed_by"] else "queued"
-    return f"{done}/{total} done"
+    return f"{done}/{total} done" + (f" (budget reached: {skipped} skipped)" if skipped else "")
 
 
 def _no_worker(store: Store) -> bool:

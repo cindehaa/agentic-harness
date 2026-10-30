@@ -378,9 +378,13 @@ class Store:
         return self._one("SELECT * FROM runs WHERE id = ?", (run_id,))
 
     def runs(self, finished_since: float | None = None) -> list[sqlite3.Row]:
-        """Runs with their trial counts: all of them, or (finished_since given) the active ones plus those finished since."""
+        """Runs with their trial counts and spend so far: all of them, or (finished_since given) the active ones plus
+        those finished since."""
         return self.db.execute(
-            """SELECT r.*, COUNT(t.id) AS total, COALESCE(SUM(t.state = 'done'), 0) AS done
+            """SELECT r.*, COUNT(t.id) AS total, COALESCE(SUM(t.state = 'done'), 0) AS done,
+                      COALESCE(SUM(t.outcome = 'skipped_budget'), 0) AS skipped,
+                      (SELECT COALESCE(SUM(a.cost_usd), 0) FROM attempts a JOIN trials t2 ON t2.id = a.trial_id
+                       WHERE t2.run_id = r.id) AS cost_usd
                FROM runs r LEFT JOIN trials t ON t.run_id = r.id
                WHERE ? IS NULL OR r.status IN ('pending', 'running') OR r.finished_at >= ?
                GROUP BY r.id ORDER BY r.created_at""",
@@ -388,9 +392,15 @@ class Store:
         ).fetchall()
 
     def trials(self, run_id: str) -> list[sqlite3.Row]:
-        """The run's trials, each with its cost and time summed over its attempts."""
+        """The run's trials, each with its spend and times summed over its attempts, and when its attempt in flight
+        (if any) started."""
         return self.db.execute(
-            """SELECT t.*, COALESCE(SUM(a.cost_usd), 0) AS cost_usd, COALESCE(SUM(a.duration_s), 0) AS duration_s
+            """SELECT t.*, COALESCE(SUM(a.cost_usd), 0) AS cost_usd, COALESCE(SUM(a.duration_s), 0) AS duration_s,
+                      COALESCE(SUM(a.input_tokens), 0) AS input_tokens, COALESCE(SUM(a.output_tokens), 0) AS output_tokens,
+                      COALESCE(SUM(a.model_calls), 0) AS model_calls,
+                      COALESCE(SUM(a.agent_end_at - a.agent_start_at), 0) AS agent_s,
+                      COALESCE(SUM(a.grade_end_at - a.grade_start_at), 0) AS grading_s,
+                      MAX(CASE WHEN a.outcome IS NULL THEN a.started_at END) AS running_since
                FROM trials t LEFT JOIN attempts a ON a.trial_id = t.id
                WHERE t.run_id = ? GROUP BY t.id ORDER BY t.id""",
             (run_id,),
@@ -405,14 +415,6 @@ class Store:
     def accuracy(self, run_id: str) -> tuple[float | None, int]:
         """Mean score_float over graded trials only, and how many there are."""
         row = self._one("SELECT AVG(score_float), COUNT(*) FROM trials WHERE run_id = ? AND outcome = 'graded'", (run_id,))
-        return row[0], row[1]
-
-    def trial_span(self, run_id: str) -> tuple[float | None, float | None]:
-        """When the run's first attempt started and its last finished attempt ended (None if none has)."""
-        row = self._one(
-            "SELECT MIN(a.started_at), MAX(a.finished_at) FROM attempts a JOIN trials t ON t.id = a.trial_id WHERE t.run_id = ?",
-            (run_id,),
-        )
         return row[0], row[1]
 
     def unfinished_runs(self, run_id: str | None = None) -> list[sqlite3.Row]:
