@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Generic, TypeVar
 
-from agentic_harness.agents.base import AgentSession
+from agentic_harness.agents.base import AgentCapabilities, AgentSession
 from agentic_harness.environments.base import Environment
 from agentic_harness.types import Score, Task, Transcript, score_to_float
 
@@ -32,6 +32,11 @@ class Benchmark(ABC, Generic[TaskT]):
     @abstractmethod
     def run_agent(self, task: TaskT, agent: AgentSession, env: Environment) -> None:
         """Drive the agent's turns. A simple benchmark sends one message; complex ones loop."""
+
+    def requirements(self, task: TaskT) -> AgentCapabilities:
+        """What an agent must be able to do for this task; the runner checks it against the agent's capabilities
+        before the trial starts. Default: one text message."""
+        return AgentCapabilities()
 
     def grader_image(self, task: TaskT) -> str:
         """The image grade() runs in, attached to the trial's world (sharing its workspace, network and processes).

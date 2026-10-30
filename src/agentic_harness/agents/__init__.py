@@ -4,7 +4,7 @@ import importlib
 from pathlib import Path
 
 from agentic_harness.agents.base import (
-    Agent, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
+    Agent, AgentCapabilities, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
 )
 
 # name -> "module:Class", imported only when used, so `harness status` never loads litellm
@@ -23,6 +23,6 @@ def resolve_agent(name_or_path: str) -> type[Agent]:
 
 
 __all__ = [
-    "AGENTS", "Agent", "AgentLimitation", "AgentSession", "AgentStats", "PreflightError", "TransientError", "Unsupported",
+    "AGENTS", "Agent", "AgentCapabilities", "AgentLimitation", "AgentSession", "AgentStats", "PreflightError", "TransientError", "Unsupported",
     "resolve_agent",
 ]

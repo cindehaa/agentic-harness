@@ -25,7 +25,7 @@ from minisweagent.exceptions import InterruptAgentFlow, LimitsExceeded, Submitte
 from minisweagent.models import get_model  # noqa: E402
 
 from agentic_harness.agents.base import (  # noqa: E402
-    Agent, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
+    Agent, AgentCapabilities, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
 )
 from agentic_harness.environments.base import Environment  # noqa: E402
 from agentic_harness.paths import REPO_ROOT  # noqa: E402
@@ -138,6 +138,8 @@ class MiniSweSession(AgentSession):
 class MiniSweAgent(Agent):
     name = "mini-swe-agent"
     model_env = "MSWEA_MODEL_NAME"  # mini's own setting, in .env
+    # bash only: mini acts solely through shell commands, so a task needing MCP tools is unsupported
+    capabilities = AgentCapabilities(content_types=frozenset({"text"}), multi_turn=True, mcp=False)
 
     def preflight(self) -> None:
         """The model is one litellm knows, and its provider's API key is set. No auth call: that would spend tokens."""

@@ -12,7 +12,7 @@ from litellm.exceptions import AuthenticationError, ContextWindowExceededError, 
 from minisweagent.exceptions import LimitsExceeded, Submitted
 from minisweagent.models.test_models import DeterministicToolcallModel, make_toolcall_output
 
-from agentic_harness.agents import AgentLimitation, PreflightError, TransientError, Unsupported, resolve_agent
+from agentic_harness.agents import AgentCapabilities, AgentLimitation, PreflightError, TransientError, Unsupported, resolve_agent
 from agentic_harness.agents.mini_swe_agent import ContainerEnv, MiniAgent, MiniSweAgent, MiniSweSession, TimeLimit
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, Message, Text
@@ -192,6 +192,10 @@ def test_live_solves_bash_001(tmp_path):
     assert stats.exit_status == "Submitted"
     assert score.value is True, score.explanation
     assert (tmp_path / "trajectory.json").exists()
+
+
+def test_mini_is_text_only_multi_turn_and_has_no_mcp():
+    assert MiniSweAgent.capabilities == AgentCapabilities(content_types=frozenset({"text"}), multi_turn=True, mcp=False)
 
 
 def test_version_is_the_submodule_commit():

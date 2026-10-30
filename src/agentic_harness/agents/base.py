@@ -29,6 +29,25 @@ class PreflightError(Exception):
 
 
 @dataclass(frozen=True)
+class AgentCapabilities:
+    """What an agent can do. Agents declare theirs; benchmarks say what a task needs (Benchmark.requirements); the
+    runner compares the two once, before a trial starts, and a gap makes the trial unsupported."""
+
+    content_types: frozenset[str] = frozenset({"text"})  # message content it reads: "text", "file", "data"
+    multi_turn: bool = False  # a second send() continues the same conversation
+    mcp: bool = False  # uses tools from the MCP servers a benchmark declares
+
+    def missing(self, needed: "AgentCapabilities") -> list[str]:
+        """What `needed` asks for that this agent can't do, e.g. ["content: file", "mcp"]. Empty if nothing."""
+        gaps = [f"content: {t}" for t in sorted(needed.content_types - self.content_types)]
+        if needed.multi_turn and not self.multi_turn:
+            gaps.append("multi_turn")
+        if needed.mcp and not self.mcp:
+            gaps.append("mcp")
+        return gaps
+
+
+@dataclass(frozen=True)
 class AgentStats:
     """What the session reports for the trial's records; benchmarks don't read it."""
 
@@ -54,6 +73,7 @@ class Agent(ABC):
 
     name: ClassVar[str]  # registry key, e.g. "mini-swe-agent"
     model_env: ClassVar[str | None] = None  # the environment variable with its default model, e.g. MSWEA_MODEL_NAME
+    capabilities: ClassVar[AgentCapabilities] = AgentCapabilities()  # the least: one text message
 
     def __init__(self, model: str) -> None:
         self.model = model  # resolved at submit time (runs.model); adapters never read model_env themselves

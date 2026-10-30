@@ -33,6 +33,8 @@ def run_trial(
     began = time.monotonic()
     session: RecordingSession | None = None
     try:
+        if missing := agent.capabilities.missing(benchmark.requirements(task)):  # the one compatibility check
+            raise Unsupported(f"{agent.name} can't do what this task needs: {', '.join(missing)}")
         with env_factory(task.image, int(LIFETIME_FACTOR * limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
             log = EventLog(attempt_dir / "events.jsonl")
             inner = agent.start(RecordingEnvironment(env, log), attempt_dir, limits)

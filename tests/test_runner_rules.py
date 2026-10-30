@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
-from agentic_harness.agents import Agent, AgentSession, TransientError
+from agentic_harness.agents import Agent, AgentCapabilities, AgentSession, TransientError
 from agentic_harness.benchmarks import Benchmark
 from agentic_harness.environments import EndReason, Environment, EnvironmentLost, EnvironmentState, ExecResult
 from agentic_harness.runner import run_trial
@@ -250,3 +250,23 @@ def test_secrets_in_the_saved_workspace_are_masked_and_the_tar_keeps_its_size(tm
     monkeypatch.setattr("agentic_harness.redact._secrets", lambda: ("ok",))
     run(write_ok, tmp_path)
     assert (tmp_path / "workspace.tar").read_bytes() == b"tar of **"
+
+
+class NeedsFilesAndMcp(OneMessage):
+    def requirements(self, task):
+        return AgentCapabilities(content_types=frozenset({"text", "file"}), multi_turn=True, mcp=True)
+
+
+def test_agent_lacking_a_capability_is_unsupported_before_anything_starts(tmp_path):
+    factory = Factory()
+    outcome = run_trial(NeedsFilesAndMcp(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, factory)
+    assert outcome.status == "unsupported"
+    assert outcome.error == "scripted can't do what this task needs: content: file, multi_turn, mcp"
+    assert not hasattr(factory, "env")  # no world was started
+    assert json.loads((tmp_path / "outcome.json").read_text())["status"] == "unsupported"
+
+
+def test_capabilities_cover_what_they_declare():
+    agent = AgentCapabilities(content_types=frozenset({"text", "file"}), multi_turn=True, mcp=True)
+    assert agent.missing(AgentCapabilities(content_types=frozenset({"file"}), multi_turn=True, mcp=True)) == []
+    assert AgentCapabilities().missing(AgentCapabilities(content_types=frozenset({"data"}))) == ["content: data"]
