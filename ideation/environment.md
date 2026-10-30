@@ -65,11 +65,13 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 the process inside the container. Leftover processes are killed before grading
 (`kill_agent_processes()`, repeated passes over `/proc`, so a fork loop can't outrun it).
 
-**Known gaps (Phase 6):**
+**Known gaps:**
 - A timed-out `exec` keeps running inside the container until the pre-grade `kill_agent_processes()`.
-- The first `docker pull` can hang silently in sandboxed shells → pre-pull images once per run.
 - `download()` copies symlinks as symlinks, so a link the agent planted can point at a host path when read later. The runner saves the final workspace with `save_workspace()` (a tar, never unpacked) instead.
-- DockerError (→ infra_error) only when the container is verifiably gone; anything the agent can cause stays a normal command failure (prevents gaming failures into excluded trials). Remaining hole: if the agent itself kills the container, that still reads as infra (planned fix in Phase 3, below).
+- A fork bomb that fills `--pids-limit` can make `docker exec` itself fail to start, so `kill_agent_processes()` may not run; the grader is a separate container with its own limit, so grading still starts.
+- `harness cleanup` treats every labelled container that isn't a live attempt's as leftover, including one a test or a script started by hand with `DockerEnvironment` while it runs.
+
+Fixed in Phase 6 (2026-10-29): first pulls hanging silently (run setup pulls every image explicitly, 600 s per pull, decision 11); a fork loop outliving the pre-grade kill (repeated passes, decision 9); workspace volumes left behind (retried removal, logged, decision 2; `harness cleanup`, decision 4); the agent killing its own container reading as infra (`EndReason`, decision 8).
 
 **Phase 3** (decided 2026-10-29, `agents-and-runner.md`; `--rm` dropped and `state()` added, decisions 8-9 above):
 - Drop `--rm` from `docker run` so a container that dies during the agent's turn can be `docker inspect`ed: vanished / Docker unreachable → `infra_error`; exited non-zero or `OOMKilled` → `graded`, failed; exited 0 (lifetime ran out) → `infra_error` (2026-10-29 audit). `stop()` still removes the container; expired containers are found by label for a future `harness cleanup`.

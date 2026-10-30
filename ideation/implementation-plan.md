@@ -129,10 +129,16 @@ Decisions and survey: `action-space.md`.
 
 ## Phase 6 — Hardening
 
-- Image pre-pull per run, per-trial cost/token tracking, LLM rate-limit backoff, `harness cancel`.
-- Break things on purpose: bad image name, grader crash, agent infinite loop, Docker daemon restart.
+**Done 2026-10-29:**
+- `harness results` defaults to `--format summary`; wall time = first trial start → last trial end (`attempts.started_at` / `finished_at`, schema v3), queue wait shown separately.
+- Graceful Ctrl-C / SIGTERM for `harness worker` and `run --wait`: stop claiming, stop the worlds in flight (sidecars, volumes), close their attempts as retryable `infra_error` ("worker interrupted", re-queued at once), release setups, delete the worker row, exit; a second signal exits at once (`errors.md`).
+- `harness cleanup` (`--all`, `--images`): labelled containers and volumes of no live attempt; cached `harness-*` images no unfinished trial needs (`environment.md` DockerEnvironment #4).
+- Image pre-pull at run setup: base, grader and MCP-server images pulled explicitly, time-bounded; agent images built (`environment.md` #11).
+- `kill_agent_processes` repeats its `/proc` pass (fork loops); workspace volume removal retried, leftovers logged.
+- `harness status` warns when trials wait and no worker is running.
+- Break-it cases covered by tests: bad image name, grader crash, fork loop, container killed from inside, worker killed (lease) or interrupted (signal).
 
-**Done when:** every failure above ends in a clear status, no orphaned containers.
+**Not done:** per-trial token tracking (cost is tracked), `harness cancel`, a Docker daemon restart mid-run (untested; containers then read as gone → retryable `infra_error`).
 
 ## Phase 7 — Extensions (pick by time left)
 
@@ -150,4 +156,3 @@ Decisions and survey: `action-space.md`.
 
 - README: setup, run instructions, write-up, design decisions (link `ideation/`).
 - Architecture diagram (Excalidraw).
-- A rehearsed 5-minute demo: submit runs → workers → status → results → kill a worker.

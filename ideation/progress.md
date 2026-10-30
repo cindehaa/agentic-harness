@@ -1,9 +1,9 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Action space + MCP + Claude Code built (2026-10-29, [`action-space.md`](action-space.md)): one `AgentCapabilities` check in the runner, MCP servers as network-only attached sidecars (`Benchmark.mcp_servers`, `Environment.attach(Sidecar)`), `exec(env=, user=)`, `ClaudeCode` adapter (in-world, cached derived image, `--mcp-config`, stream-json trace). Live on Haiku 5.5: bash-operations 0.80, python-tasks 1.00, MCP fixture pass. Awaiting Cindy's review. τ²-bench: designed, not built (out of scope). Before that: general grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
+**Now:** Phase 6 hardening built (2026-10-29, `implementation-plan.md` → Phase 6): `harness results` summary by default with wall time and queue wait, graceful Ctrl-C / SIGTERM (trials handed back as "worker interrupted"), `harness cleanup [--all] [--images]`, explicit time-bounded image pre-pull at run setup, repeated pre-grade kill passes, retried volume removal, `status` no-worker warning. Schema v3 (`attempts.started_at` / `finished_at`): an older `runs/harness.db` must be deleted. Awaiting Cindy's review. Before that: action space + MCP + Claude Code built (2026-10-29, [`action-space.md`](action-space.md)): one `AgentCapabilities` check in the runner, MCP servers as network-only attached sidecars (`Benchmark.mcp_servers`, `Environment.attach(Sidecar)`), `exec(env=, user=)`, `ClaudeCode` adapter (in-world, cached derived image, `--mcp-config`, stream-json trace). Live on Haiku 5.5: bash-operations 0.80, python-tasks 1.00, MCP fixture pass. Awaiting Cindy's review. τ²-bench: designed, not built (out of scope). Before that: general grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
-**Next:** Phase 6: hardening.
+**Next:** token tracking, `harness cancel` (Phase 6 leftovers); Phase 7 extensions.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
@@ -127,10 +127,15 @@ flowchart TB
     x_tau["τ²-bench via an MCP sidecar (designed, not built; out of scope)"]
   end
 
-  subgraph P6["Phase 6: hardening"]
+  subgraph P6["Phase 6: hardening (2026-10-29)"]
     direction LR
-    prepull["Image pre-pull"]
-    cost["Cost / token tracking"]
+    prepull["Image pre-pull at run setup (explicit, time-bounded)"]
+    p6_stop["Graceful Ctrl-C / SIGTERM: worker interrupted → re-queued"]
+    p6_res["results: summary default; wall = first start → last end; queue wait"]
+    p6_status["status: warn when trials wait and no worker runs"]
+    p6_kill["kill_agent_processes: repeated /proc passes"]
+    p6_vol["Volume removal retried; leftovers logged"]
+    cost["Token tracking, harness cancel"]
     breakit["Break-it tests"]
   end
 
@@ -147,7 +152,6 @@ flowchart TB
     direction LR
     readme["README: setup, usage, architecture, decisions, extending, limitations"]
     diagram["Architecture diagram: Mermaid in README + docs/architecture.excalidraw + docs/architecture.md"]
-    demo["Demo script examples/demo.sh (syntax-checked; not yet rehearsed live)"]
   end
 
   %% flow between pieces
@@ -247,8 +251,8 @@ flowchart TB
   class traj done
   class a_port,a_retry,a_life,a_lim,a_lazy,a_rec,a_cfg,a_small done
   class readme,diagram done
-  class demo wip
   class x_caps,x_mcp,x_exec,x_cc,claude done
   class x_tau open
-  class tasks,hcleanup,fb,prepull,cost,breakit,validate,nullor,skill,parity todo
+  class hcleanup,prepull,p6_stop,p6_res,p6_status,p6_kill,p6_vol,breakit done
+  class tasks,fb,cost,validate,nullor,skill,parity todo
 ```
