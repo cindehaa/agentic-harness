@@ -81,6 +81,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
         "harness": _git_sha(REPO_ROOT),
         "agent": the_agent.version(),
         "dataset": _dataset_hash(bench),
+        "benchmark": bench.version(),  # content hash of its files, also in its image tags
         "model": the_agent.model,
     }
     store = _store()

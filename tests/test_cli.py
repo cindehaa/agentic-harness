@@ -7,6 +7,8 @@ from click.testing import CliRunner
 
 from agentic_harness import cli as cli_module
 from agentic_harness.agents import AGENTS, Agent, PreflightError
+from agentic_harness.benchmarks import BashOperations
+from agentic_harness.benchmarks.base import content_hash
 from agentic_harness.cli import cli
 from agentic_harness.store import Store
 from agentic_harness.types import Outcome, Score
@@ -122,6 +124,7 @@ def test_run_resolves_the_model_at_submit_and_stores_the_limits(store, agents):
     assert result.exit_code == 0, result.output
     run = store.run(result.output.split()[2].rstrip(":"))
     assert run["model"] == "fake/model-1"  # from FAKE_MODEL, now fixed for the run
+    assert json.loads(run["versions"])["benchmark"] == BashOperations().version()
     limits = json.loads(run["config"])["limits"]
     assert (limits["trial_timeout_s"], limits["cost_usd"], limits["max_steps"], limits["memory"], limits["cpus"]) == (30, 0.5, 7, "1g", 2)
 
@@ -136,3 +139,14 @@ def test_run_whose_preflight_fails_submits_nothing(store, agents):
     result = submit("--agent", "no-key")
     assert result.exit_code != 0 and "pre-flight check failed, nothing submitted: needs FAKE_API_KEY" in result.output
     assert [r["id"] for r in store.runs()] == ["run-a"]
+
+
+def test_content_hash_follows_the_files_and_skips_caches(tmp_path):
+    (tmp_path / "setup.py").write_text("v1")
+    first = content_hash(tmp_path, "FROM alpine")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "setup.pyc").write_text("junk")
+    assert content_hash.__wrapped__(tmp_path, "FROM alpine") == first  # __wrapped__: skip the per-process cache
+    (tmp_path / "setup.py").write_text("v2")
+    assert content_hash.__wrapped__(tmp_path, "FROM alpine") != first
+    assert content_hash.__wrapped__(tmp_path, "FROM debian") != content_hash.__wrapped__(tmp_path, "FROM alpine")

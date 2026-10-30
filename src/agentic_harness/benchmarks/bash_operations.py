@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 
 from agentic_harness.agents.base import AgentSession
-from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
+from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError, content_hash
 from agentic_harness.environments import Environment, build_image
 from agentic_harness.paths import REPO_ROOT
 from agentic_harness.types import Message, Score, Task, Text, Transcript
@@ -40,12 +40,15 @@ class BashOperations(Benchmark[BashTask]):
             BashTask(
                 benchmark=self.name,
                 id=r["task_id"],
-                image=f"harness-bash-operations:{r['task_id']}",
+                image=f"harness-bash-operations:{r['task_id']}-{self.version()}",
                 problem_statement=r["problem_statement"],
                 base_image=r["docker_image"],
             )
             for r in rows
         ]
+
+    def version(self) -> str:
+        return content_hash(ROOT, DOCKERFILE)
 
     def setup(self, tasks: list[BashTask]) -> None:
         for t in tasks:

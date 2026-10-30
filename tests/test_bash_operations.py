@@ -48,7 +48,7 @@ def test_tasks_match_dataset():
     assert [t.id for t in TASKS.values()] == [r["task_id"] for r in rows] and len(rows) == 5
     for t, r in zip(TASKS.values(), rows):
         assert t.benchmark == "bash-operations"
-        assert t.image == f"harness-bash-operations:{r['task_id']}"
+        assert t.image == f"harness-bash-operations:{r['task_id']}-{bench.version()}"
         assert (t.problem_statement, t.base_image) == (r["problem_statement"], r["docker_image"])
 
 
