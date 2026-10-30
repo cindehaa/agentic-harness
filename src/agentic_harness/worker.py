@@ -43,11 +43,18 @@ def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_
         threading.Thread(target=_loop, args=(db_path, f"{prefix}-{i}", exit_when_idle, run_id), name=f"worker-{i}", daemon=True)
         for i in range(concurrency)
     ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        while t.is_alive():
-            t.join(0.5)  # short joins keep Ctrl-C working; a killed worker's leases lapse and its trials are reclaimed
+    with closing(Store(db_path)) as store:
+        store.worker_started(prefix)  # `harness status` shows queued work with no worker running
+    try:
+        with _heartbeat(db_path, lambda s: s.worker_heartbeat(prefix)):
+            for t in threads:
+                t.start()
+            for t in threads:
+                while t.is_alive():
+                    t.join(0.5)  # short joins keep Ctrl-C working; a killed worker's leases lapse and its trials are reclaimed
+    finally:
+        with closing(Store(db_path)) as store:
+            store.worker_stopped(prefix)
 
 
 def preflight(db_path: Path, run_id: str | None = None) -> None:

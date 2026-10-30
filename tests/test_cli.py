@@ -26,6 +26,7 @@ def store(tmp_path, monkeypatch):
     s = Store(tmp_path / "harness.db")
     s.create_run("run-a", "bash-operations", "mini-swe-agent", "haiku", {"harness": "abc"}, {"limits": {}},
                  ["t1", "t2", "t3", "t4"])
+    s.worker_started("w")
     s.claim_setup("w", 120)
     s.finish_setup("run-a", "w")
     for task_id, outcome in OUTCOMES.items():
@@ -47,6 +48,15 @@ def test_status_lists_active_runs_with_progress(store):
     assert lines[0].split() == ["RUN", "BENCHMARK", "AGENT", "PROGRESS", "STARTED"]
     assert lines[1].split()[:5] == ["run-a", "bash-operations", "mini-swe-agent", "3/4", "done"]
     assert lines[2].split()[:4] == ["run-b", "python-tasks", "mini-swe-agent", "queued"]
+
+
+def test_status_says_when_no_worker_is_running(store):
+    store.create_run("run-b", "python-tasks", "mini-swe-agent", "haiku", {}, {"limits": {}}, ["p1"])
+    assert "no worker running" not in harness("status")
+    store.db.execute("UPDATE workers SET heartbeat_at = 0")  # its last heartbeat is long past: it died
+    lines = harness("status").splitlines()
+    assert "queued - no worker running (start one: harness worker)" in lines[2]
+    assert "3/4 done - no worker running" in harness("status", "--run_id", "run-a")
 
 
 def test_status_hides_runs_finished_over_an_hour_ago_unless_all(store):

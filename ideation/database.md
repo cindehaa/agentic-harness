@@ -14,11 +14,13 @@ runs(id, benchmark, agent, model, versions json, config json, status, setup_clai
 trials(id, run_id, task_id, state, claimed_by, lease_until, available_at, attempt_count, outcome, score_value json, score_float)
 attempts(id, trial_id, n, outcome, score json, exit_status, error, cost_usd, duration_s, artifacts_dir)
 events(id, attempt_id, seq, turn, kind, payload json, ts)
+workers(id, started_at, heartbeat_at)
 ```
 
 - `runs.status` is `pending` (waiting for setup) | `running` (setup done, trials claimable) | `done` (every trial done) | `failed` (setup failed).
 - `runs.finished_at` (added 2026-10-29): when the run became `done` or `failed`; `harness status` lists runs finished in the last hour.
-- `trials.state` is `pending` | `running` | `done`. `done` is final: the claim query only takes `pending`.
+- `trials.state` is `pending` | `running` | `done`.
+- `workers` (2026-10-29 audit, schema version 2): one row per `harness worker` process (`host-pid`), heartbeat every 30 s, deleted on exit. `harness status` adds "no worker running (start one: harness worker)" to unfinished runs when no heartbeat is newer than the 120 s lease. `done` is final: the claim query only takes `pending`.
 - `runs.setup_lease_until`, `trials.available_at` (added 2026-10-29, #19): the setup claim's lease; the earliest time a re-queued trial may be claimed (retry backoff).
 - A `schema_version` table holds one number. Tables are created with `CREATE TABLE IF NOT EXISTS` on startup; if the stored version differs from the code's, the harness refuses to start and says to delete `runs/harness.db` (no migrations).
 - `trials.outcome` / `attempts.outcome` is one of the four statuses: `graded`, `grader_error`, `infra_error`, `unsupported`.

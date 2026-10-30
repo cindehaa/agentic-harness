@@ -224,3 +224,18 @@ def test_no_leftover_containers():
         ["docker", "ps", "-a", "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True
     ).stdout
     assert listed == ""
+
+
+def test_a_worker_is_listed_while_it_runs_and_removed_after(db, monkeypatch):
+    submit("oracle", task_ids="bash-001")
+    seen = []
+    real = worker._work_once
+
+    def spy(store, *args):
+        seen.append(store.live_workers(0))
+        return real(store, *args)
+
+    monkeypatch.setattr(worker, "_work_once", spy)
+    work(concurrency=1)
+    assert seen and all(n == 1 for n in seen)
+    assert Store(db).live_workers(0) == 0

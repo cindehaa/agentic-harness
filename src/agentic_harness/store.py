@@ -12,7 +12,7 @@ from pathlib import Path
 
 from agentic_harness.types import Outcome
 
-SCHEMA_VERSION = 1  # bump on any schema change; an old harness.db is then refused, not migrated
+SCHEMA_VERSION = 2  # bump on any schema change; an old harness.db is then refused, not migrated
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS events (
     payload TEXT NOT NULL,      -- json
     ts REAL NOT NULL,
     UNIQUE (attempt_id, seq)    -- loading the same events.jsonl again adds nothing
+);
+CREATE TABLE IF NOT EXISTS workers (  -- one row per running `harness worker` process, so status can say none is
+    id TEXT PRIMARY KEY,        -- host-pid
+    started_at REAL NOT NULL,
+    heartbeat_at REAL NOT NULL  -- renewed every 30 s; a stale row is a worker that died without saying goodbye
 );
 """
 
@@ -279,6 +284,28 @@ class Store:
             "INSERT OR IGNORE INTO events (attempt_id, seq, turn, kind, payload, ts) VALUES (?, ?, ?, ?, ?, ?)",
             [(attempt_id, e["seq"], e["turn"], e["kind"], json.dumps(e["payload"]), e["ts"]) for e in events],
         )
+
+    # --- workers ---
+
+    def worker_started(self, worker: str) -> None:
+        now = time.time()
+        self.db.execute("INSERT OR REPLACE INTO workers (id, started_at, heartbeat_at) VALUES (?, ?, ?)", (worker, now, now))
+
+    def worker_heartbeat(self, worker: str) -> bool:
+        """Always True: a worker that lost its row (e.g. pruned) simply adds it back."""
+        self.db.execute(
+            "INSERT INTO workers (id, started_at, heartbeat_at) VALUES (?, ?, ?)"
+            " ON CONFLICT (id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at",
+            (worker, time.time(), time.time()),
+        )
+        return True
+
+    def worker_stopped(self, worker: str) -> None:
+        self.db.execute("DELETE FROM workers WHERE id = ?", (worker,))
+
+    def live_workers(self, since: float) -> int:
+        """Workers whose last heartbeat is at or after `since`."""
+        return self._one("SELECT COUNT(*) FROM workers WHERE heartbeat_at >= ?", (since,))[0]
 
     # --- reading back (status, results) ---
 
