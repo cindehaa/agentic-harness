@@ -17,7 +17,9 @@ flowchart TB
   preflight["worker start (and harness run at submit): Agent.preflight() for every unfinished run: model known to litellm, its API key set; no tokens spent"]
   preflight -->|"PreflightError"| refuse["worker refuses to start, names the run; nothing claimed"]
   preflight --> setup
-  setup --> claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
+  setup --> budget{"run's spend (every attempt's cost_usd, recorded at each turn's end) under runs.max_cost_usd?"}
+  budget -->|"yes, or no budget"| claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
+  budget -->|"no: spent"| SB["every trial still pending: done as skipped_budget (never started, no attempt); trials in flight finish"]
   claim --> caps{"run_trial: agent.capabilities.missing(benchmark.requirements(task)): content types, multi-turn, MCP"}
   caps -->|"a gap (e.g. mini on a task with MCP servers)"| UN
   caps --> prep["agent.prepare_image(task.image): Claude Code builds its cached derived image"]
@@ -95,7 +97,7 @@ flowchart TB
   class G,GF,lg graded
   class GE,lge gradererr
   class IE1,IE2,IE3,IE5,lost,intr,final,abort,refuse,lie infraerr
-  class UN,lun unsupported
+  class UN,lun,SB unsupported
   class lpl planned
 ```
 
@@ -107,6 +109,7 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
 | `grader_error` | no; reported prominently (count + list) | no | most likely the grader or the benchmark adapter |
 | `infra_error` | no | only if `retryable` (2026-10-29 audit): environment lost / Docker errors, network, provider 5xx / overloaded / rate limit, grader failed to start, container lost or lifetime expired, worker lost: up to 3 attempts in total (backoff 5 s × attempt number). Not retried (fail fast, logged as an error): auth / permission, bad request / misconfiguration, any unexpected exception in harness or adapter code; a setup failure | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
 | `unsupported` | no; reported separately | no | a capability gap: `AgentCapabilities` vs `Benchmark.requirements(task)` (content types, multi-turn, MCP), checked once before the world starts; or the agent raised `Unsupported` for a message it can't read |
+| `skipped_budget` (trial only) | no; reported separately | no | nobody's: the run's `--max-run-cost` was spent before the trial started |
 
 ## Notes
 
@@ -155,3 +158,16 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   `claimed_by` + `attempt_count` (`database.md` #19). The heartbeat retries a
   renewal that hit "database is locked". Setup has the same lease: a dead
   setup worker's run is re-claimed by another worker.
+- **Spend is always recorded.** The agent's cost, tokens and model calls are
+  read from its session at the end of every turn, also a turn it crashed or
+  timed out in (`RecordingSession.send`'s `finally`), and written to the
+  attempt row at once (`Store.record_spend`, not fenced: money a worker spent
+  before losing its claim was still spent; `MAX`, so an outcome without stats,
+  e.g. "worker interrupted", never erases it). Claude Code reports cost only in
+  its result event; a turn cut off before it is priced from its tokens with
+  litellm's table (`estimate_cost`).
+- **Run budget** (`harness run --max-run-cost USD`, `database.md` #22): once
+  the run's recorded spend reaches it, no trial of the run is claimed and every
+  trial still pending (a retry waiting out its backoff included) ends
+  `skipped_budget`. Trials in flight finish under their own per-trial limits,
+  so a run can overshoot its budget by what they spend.

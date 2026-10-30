@@ -377,3 +377,13 @@ def test_a_retrys_queue_wait_starts_when_its_backoff_ends(db, monkeypatch):
     first, second = Store(db).attempts(run_id)
     assert second["queued_at"] == pytest.approx(first["finished_at"] + 0.5, abs=0.1)
     assert second["queued_at"] <= second["started_at"]
+
+
+def test_max_run_cost_stops_the_run_once_spent(db):
+    run_id = submit("oracle", "local-bash", "bash-001,bash-002", "--max-run-cost", "0.01")  # one oracle trial's spend
+    work(concurrency=1)
+    store = Store(db)
+    assert store.run(run_id)["max_cost_usd"] == 0.01 and store.run(run_id)["status"] == "done"
+    assert [(t["outcome"], t["attempt_count"]) for t in store.trials(run_id)] == [("graded", 1), ("skipped_budget", 0)]
+    summary = CliRunner().invoke(cli, ["results", "--run_id", run_id]).output
+    assert "skipped_budget 1" in summary and "skipped_budget: bash-002" in summary

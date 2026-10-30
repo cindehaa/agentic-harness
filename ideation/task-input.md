@@ -228,6 +228,7 @@ point and where it leads: [`errors.md`](errors.md)):
 | `grader_error` | The agent ran, then the grader crashed or its output was unparseable | excluded; reported prominently (count + list) | no |
 | `infra_error` | Harness/infra failure (container died, image pull failed) | excluded | yes, per retry policy |
 | `unsupported` | The agent can't handle the task's content (e.g. a `File` it can't read, multi-turn without resume) | excluded; reported separately | no |
+| `skipped_budget` | Trial outcome only (never an attempt's): the run's budget (`harness run --max-run-cost`) was spent before this trial started, so it never ran (no attempt row) | excluded; reported separately | no |
 
 - `grader_error` trials are **flagged in the results** (grader stderr saved as
   an artifact), so humans can spot real grader bugs among them.
@@ -236,6 +237,12 @@ point and where it leads: [`errors.md`](errors.md)):
   `infra_error`) and reported prominently in results (count + list), because
   a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare. Rejected: counting it as 0
   (assumed the agent usually broke the world).
+- **DECIDED (2026-10-29): `skipped_budget`** (`database.md` #22): a run-level
+  budget stops new trials, never one in flight (each trial keeps its own
+  per-trial cost limit). The trial ends `done` with outcome `skipped_budget`,
+  so the run finishes and its results say why those tasks have no score.
+  Rejected: leaving them `pending` (the run would never finish) or calling
+  them `infra_error` (it is neither infra's fault nor retryable).
 - **DECIDED (2026-10-29): `error` is renamed `infra_error`** for clarity (it is
   never the agent's fault). The statuses are `graded`, `grader_error`,
   `infra_error`, `unsupported`.
@@ -244,8 +251,8 @@ point and where it leads: [`errors.md`](errors.md)):
 `True`/`"C"` → 1.0, `"P"` → 0.5, `False`/`"I"`/`"N"` → 0.0, int/float as-is.
 Overridable per benchmark (e.g. a `Benchmark.score_to_float(score)` method,
 added in Phase 4). **Accuracy** = mean of that number over `graded` trials
-only; `grader_error`, `infra_error` and `unsupported` are excluded and each
-reported separately.
+only; `grader_error`, `infra_error`, `unsupported` and `skipped_budget` are
+excluded and each reported separately.
 
 This replaces the earlier `passed` / `failed` / `error` model (grader crash →
 `failed` with reason `grader_error`; before that, grader crash → `error`).

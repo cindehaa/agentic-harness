@@ -55,11 +55,13 @@ def cli():
 @click.option("--concurrency", default=1, show_default=True, help="With --wait: trials run at the same time")
 @click.option("--trial-timeout", default=Limits().trial_timeout_s, show_default=True, help="Seconds per trial")
 @click.option("--cost-limit", default=Limits().cost_usd, show_default=True, help="Model spend per trial, USD")
+@click.option("--max-run-cost", type=float, default=None,
+              help="Budget for the whole run, USD: once spent, no more trials start (the rest end skipped_budget)")
 @click.option("--max-steps", default=Limits().max_steps, show_default=True, help="Model calls per trial")
 @click.option("--memory", default=Limits().memory, show_default=True, help="Memory per container (docker --memory)")
 @click.option("--cpus", default=Limits().cpus, show_default=True, help="CPUs per container (docker --cpus)")
 def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int,
-        trial_timeout: float, cost_limit: float, max_steps: int, memory: str, cpus: float):
+        trial_timeout: float, cost_limit: float, max_run_cost: float | None, max_steps: int, memory: str, cpus: float):
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
     if benchmark not in BENCHMARKS:
         raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
@@ -89,7 +91,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
     }
     store = _store()
     store.create_run(run_id, benchmark, the_agent.name, the_agent.model, versions, {"limits": asdict(limits)},
-                     [t.id for t in tasks])
+                     [t.id for t in tasks], max_run_cost)
     click.echo(f"Submitted run {run_id}: {the_agent.name} ({the_agent.model}) on {benchmark}, {len(tasks)} task(s)")
     if not wait:
         click.echo("Start a worker to run it: harness worker")
@@ -275,7 +277,7 @@ def results(run_id: str, format: str):
                    + _wall(store, run))
 
 
-EXCLUDED = ("grader_error", "infra_error", "unsupported")  # outcomes left out of accuracy, always reported
+EXCLUDED = ("grader_error", "infra_error", "unsupported", "skipped_budget")  # left out of accuracy, always reported
 
 
 def _wall(store: Store, run) -> str:

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS runs (
     model TEXT,
     versions TEXT NOT NULL,     -- json: harness commit, agent commit, dataset hash, model
     config TEXT NOT NULL,       -- json: limits
+    max_cost_usd REAL,          -- the run's budget: once its attempts have spent this, no more trials start
     status TEXT NOT NULL,       -- pending (waiting for setup) | running | done | failed (setup failed)
     setup_claimed_by TEXT,
     setup_lease_until REAL,     -- the setup claim lapses after this (time.time()) unless renewed
@@ -40,7 +41,7 @@ CREATE TABLE IF NOT EXISTS trials (
     lease_until REAL,           -- the claim lapses after this (time.time()) unless renewed
     available_at REAL NOT NULL DEFAULT 0,  -- not claimable before this (retry backoff)
     attempt_count INTEGER NOT NULL DEFAULT 0,  -- attempts started; the current one is n = attempt_count
-    outcome TEXT,               -- graded | grader_error | infra_error | unsupported
+    outcome TEXT,               -- graded | grader_error | infra_error | unsupported | skipped_budget (never started)
     score_value TEXT,           -- json: the grader's raw verdict
     score_float REAL,           -- what accuracy averages
     UNIQUE (run_id, task_id)
@@ -143,12 +144,12 @@ class Store:
     # --- submitting ---
 
     def create_run(self, run_id: str, benchmark: str, agent: str, model: str | None, versions: dict, config: dict,
-                   task_ids: list[str]) -> None:
+                   task_ids: list[str], max_cost_usd: float | None = None) -> None:
         with self._transaction():
             self.db.execute(
-                "INSERT INTO runs (id, benchmark, agent, model, versions, config, status, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-                (run_id, benchmark, agent, model, json.dumps(versions), json.dumps(config), time.time()),
+                "INSERT INTO runs (id, benchmark, agent, model, versions, config, max_cost_usd, status, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (run_id, benchmark, agent, model, json.dumps(versions), json.dumps(config), max_cost_usd, time.time()),
             )
             self.db.executemany(
                 "INSERT INTO trials (run_id, task_id, state) VALUES (?, ?, 'pending')", [(run_id, t) for t in task_ids]
@@ -219,6 +220,8 @@ class Store:
                    WHERE id = (SELECT t.id FROM trials t JOIN runs r ON r.id = t.run_id
                                WHERE t.state = 'pending' AND t.available_at <= ? AND r.status = 'running'
                                  AND (? IS NULL OR r.id = ?)
+                                 AND (r.max_cost_usd IS NULL OR (SELECT COALESCE(SUM(a.cost_usd), 0) FROM attempts a
+                                       JOIN trials t2 ON t2.id = a.trial_id WHERE t2.run_id = r.id) < r.max_cost_usd)
                                ORDER BY r.created_at, t.id LIMIT 1)
                    RETURNING id, run_id, task_id, attempt_count, available_at""",
                 (worker, now + lease_s, now, run_id, run_id),
@@ -286,9 +289,14 @@ class Store:
             self._end_or_requeue(claim.trial_id, claim.run_id, outcome, retry_at)
 
     def record_spend(self, attempt_id: int, stats: AgentStats) -> None:
-        """What the attempt's agent has spent so far. Not fenced: an attempt row belongs to one attempt, and money a
-        worker spent before losing its claim was still spent."""
-        self._record_spend(attempt_id, stats.cost_usd, stats.model_calls, stats.input_tokens, stats.output_tokens)
+        """What the attempt's agent has spent so far; if that uses up its run's budget, the run's waiting trials end
+        skipped_budget. Not fenced: an attempt row belongs to one attempt, and money a worker spent before losing its
+        claim was still spent."""
+        with self._transaction():
+            self._record_spend(attempt_id, stats.cost_usd, stats.model_calls, stats.input_tokens, stats.output_tokens)
+            run_id = self._one("SELECT t.run_id FROM attempts a JOIN trials t ON t.id = a.trial_id WHERE a.id = ?",
+                               (attempt_id,))[0]
+            self._apply_budget(run_id)
 
     def _record_spend(self, attempt_id: int, cost_usd: float, model_calls: int, input_tokens: int, output_tokens: int) -> None:
         # MAX: spend only grows, so an outcome without stats (e.g. "worker interrupted") never erases what was recorded
@@ -305,10 +313,22 @@ class Store:
                 "UPDATE trials SET state = 'pending', claimed_by = NULL, lease_until = NULL, available_at = ? WHERE id = ?",
                 (retry_at, trial_id),
             )
-            return
-        self.db.execute(  # done is final: the claim query only takes pending trials
-            "UPDATE trials SET state = 'done', outcome = ?, score_value = ?, score_float = ?, lease_until = NULL WHERE id = ?",
-            (outcome.status, _json(outcome.score and outcome.score.value), outcome.score_float, trial_id),
+        else:
+            self.db.execute(  # done is final: the claim query only takes pending trials
+                "UPDATE trials SET state = 'done', outcome = ?, score_value = ?, score_float = ?, lease_until = NULL"
+                " WHERE id = ?",
+                (outcome.status, _json(outcome.score and outcome.score.value), outcome.score_float, trial_id),
+            )
+        self._apply_budget(run_id)
+
+    def _apply_budget(self, run_id: str) -> None:
+        """If the run has spent its budget: every trial still waiting ends skipped_budget (no attempt: it never
+        started; trials in flight finish within their own limits). Then the run is done once every trial is."""
+        self.db.execute(
+            "UPDATE trials SET state = 'done', outcome = 'skipped_budget' WHERE run_id = ? AND state = 'pending'"
+            " AND (SELECT max_cost_usd FROM runs WHERE id = ?) <= (SELECT COALESCE(SUM(a.cost_usd), 0) FROM attempts a"
+            " JOIN trials t ON t.id = a.trial_id WHERE t.run_id = ?)",
+            (run_id, run_id, run_id),
         )
         self.db.execute(
             "UPDATE runs SET status = 'done', finished_at = ? WHERE id = ? AND status = 'running'"

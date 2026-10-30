@@ -177,3 +177,50 @@ def test_recorded_spend_is_never_erased_by_an_outcome_without_it(store):
     store.finish_attempt(claim, "w", Outcome("infra_error", error="worker interrupted"))  # carries no stats
     a = store.attempts("run-1")[0]
     assert (a["cost_usd"], a["model_calls"], a["input_tokens"], a["output_tokens"]) == (0.05, 4, 900, 60)
+
+
+def budgeted(store, task_ids=("t1", "t2", "t3"), budget=0.05) -> None:
+    store.create_run("run-b", "bench", "agent", "model", {}, {"limits": {}}, list(task_ids), max_cost_usd=budget)
+    store.claim_setup("w", 120, "run-b")
+    store.finish_setup("run-b", "w")
+
+
+def test_a_spent_budget_stops_claiming_and_skips_the_waiting_trials(store):
+    budgeted(store)
+    claim = store.claim_trial("w", 120)
+    store.finish_attempt(claim, "w", Outcome("graded", Score(True), 1.0, cost_usd=0.05))
+    assert store.claim_trial("w", 120) is None
+    trials = store.trials("run-b")
+    assert [(t["state"], t["outcome"], t["attempt_count"]) for t in trials] == [
+        ("done", "graded", 1), ("done", "skipped_budget", 0), ("done", "skipped_budget", 0)]
+    assert len(store.attempts("run-b")) == 1  # a skipped trial never started: no attempt
+    assert store.run("run-b")["status"] == "done"
+
+
+def test_under_budget_trials_go_on(store):
+    budgeted(store)
+    store.finish_attempt(store.claim_trial("w", 120), "w", Outcome("graded", Score(True), 1.0, cost_usd=0.01))
+    assert store.claim_trial("w", 120).task_id == "t2"
+
+
+def test_trials_in_flight_finish_when_live_spend_reaches_the_budget(store):
+    from agentic_harness.agents import AgentStats
+
+    budgeted(store)
+    first, second = store.claim_trial("w1", 120), store.claim_trial("w2", 120)
+    store.record_spend(first.attempt_id, AgentStats(None, 0.06))  # at a turn's end, before either attempt is done
+    assert store.trials("run-b")[2]["outcome"] == "skipped_budget"
+    assert store.claim_trial("w3", 120) is None
+    store.finish_attempt(first, "w1", Outcome("graded", Score(True), 1.0, cost_usd=0.06))
+    assert store.run("run-b")["status"] == "running"  # the second is still in flight
+    store.finish_attempt(second, "w2", Outcome("graded", Score(False), 0.0, cost_usd=0.02))
+    assert [t["outcome"] for t in store.trials("run-b")] == ["graded", "graded", "skipped_budget"]
+    assert store.run("run-b")["status"] == "done"
+
+
+def test_a_retry_waiting_when_the_budget_runs_out_is_skipped(store):
+    budgeted(store, task_ids=("t1",))
+    claim = store.claim_trial("w", 120)
+    store.finish_attempt(claim, "w", Outcome("infra_error", cost_usd=0.05, retryable=True), retry_at=time.time())
+    trial = store.trials("run-b")[0]
+    assert (trial["state"], trial["outcome"], trial["attempt_count"]) == ("done", "skipped_budget", 1)

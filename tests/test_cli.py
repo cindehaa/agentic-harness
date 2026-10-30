@@ -107,7 +107,7 @@ def test_results_json_has_everything(store):
     report = json.loads(harness("results", "--run_id", "run-a", "--format", "json"))
     assert report["run"]["versions"] == {"harness": "abc"} and report["run"]["config"] == {"limits": {}}
     assert (report["accuracy"], report["graded"]) == (0.5, 2)
-    assert report["excluded"] == {"grader_error": [], "infra_error": ["t3"], "unsupported": []}
+    assert report["excluded"] == {"grader_error": [], "infra_error": ["t3"], "unsupported": [], "skipped_budget": []}
     t1 = report["trials"][0]
     assert t1["score_value"] is True and t1["attempts"][0]["score"]["value"] is True
 
