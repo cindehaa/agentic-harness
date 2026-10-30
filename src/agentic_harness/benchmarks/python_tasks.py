@@ -20,8 +20,7 @@ class PythonTask(Task):
     base_image: str  # the image the benchmark specifies, e.g. "python:3.11-slim"
 
 
-# One stage: prepare.py pip-installs pytest and writes test_solution.py + a solution.py stub, which is the
-# world the benchmark intends (pytest stays available to the agent). The benchmark's files are removed after.
+# One stage, so prepare.py's pytest stays available to the agent; /bench (incl. grade.py) is removed after.
 DOCKERFILE = """\
 FROM {base_image}
 COPY . /bench
@@ -56,7 +55,6 @@ class PythonTasks(Benchmark[PythonTask]):
         agent.send(Message("user", (Text(task.prompt),)))
 
     def grade(self, task: PythonTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
-        # The grader runs the task's own image (python + pytest from prepare.py), attached to the agent's workspace
         grader.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, only in the grader
         r = grader.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=GRADE_TIMEOUT)
         # grade.py always exits 0, so judge only by its JSON

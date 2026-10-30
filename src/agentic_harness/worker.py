@@ -1,4 +1,4 @@
-"""Workers: take work from the queue (the trials table) and do it (`ideation/database.md` #9-19).
+"""Workers: take work from the queue (the trials table) and do it.
 
 One worker = one thread with its own DB connection, running one trial (one container) at a time. Threads, not
 processes: a trial spends its time waiting on `docker` and on model calls, so the GIL costs nothing.
@@ -44,7 +44,7 @@ def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_
         for i in range(concurrency)
     ]
     with closing(Store(db_path)) as store:
-        store.worker_started(prefix)  # `harness status` shows queued work with no worker running
+        store.worker_started(prefix)  # lets `harness status` warn when no worker is running
     try:
         with _heartbeat(db_path, lambda s: s.worker_heartbeat(prefix)):
             for t in threads:

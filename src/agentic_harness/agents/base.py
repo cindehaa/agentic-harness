@@ -19,9 +19,8 @@ class AgentLimitation(Exception):
 
 
 class TransientError(Exception):
-    """A temporary failure outside the agent: the model provider is overloaded, failing (5xx) or rate limiting, or the
-    network is down -> infra_error, retried. Adapters raise it from their own client's errors (after the agent's own
-    retries); anything else they let through (auth, bad request, a bug) is infra_error and not retried."""
+    """A temporary failure outside the agent (provider overloaded, 5xx, rate limited, network down) -> infra_error,
+    retried. Raise it only after the agent's own retries; other errors (auth, bad request, a bug) are not retried."""
 
 
 class PreflightError(Exception):
@@ -39,17 +38,14 @@ class AgentStats:
 
 
 class AgentSession(ABC):
-    """One live conversation with an agent, as a benchmark sees it.
-
-    The harness wraps the real session to log every turn, build the transcript, and enforce limits.
-    """
+    """One live conversation with an agent, as a benchmark sees it (the harness wraps it to record and cap turns)."""
 
     @abstractmethod
     def send(self, message: Message) -> Message:
         """Give the agent a message, block until it hands back, and return its reply."""
 
     def stats(self) -> AgentStats:
-        """So far, including after a crash. A session that tracks nothing reports zeros."""
+        """Stats so far, including after a crash. A session that tracks nothing reports zeros."""
         return AgentStats()
 
 
@@ -60,7 +56,7 @@ class Agent(ABC):
     model_env: ClassVar[str | None] = None  # the environment variable with its default model, e.g. MSWEA_MODEL_NAME
 
     def __init__(self, model: str) -> None:
-        self.model = model  # resolved once, when the run is submitted (runs.model); adapters never look it up again
+        self.model = model  # resolved at submit time (runs.model); adapters never read model_env themselves
 
     @abstractmethod
     def start(self, env: Environment, artifacts_dir: Path, limits: Limits) -> AgentSession:

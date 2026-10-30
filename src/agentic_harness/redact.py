@@ -1,5 +1,4 @@
-"""Redaction at the log boundary (`ideation/security.md`): secret values from `.env` become *** before anything is
-written to disk or the database."""
+"""Secret values from `.env` become *** before anything is written to disk or the database."""
 
 import functools
 from pathlib import Path
@@ -25,7 +24,7 @@ def secret_values(env_file: Path) -> tuple[str, ...]:
 
 @functools.cache
 def _secrets() -> tuple[str, ...]:
-    return secret_values(REPO_ROOT / ".env")  # read once per process
+    return secret_values(REPO_ROOT / ".env")
 
 
 def redact(text: str, secrets: tuple[str, ...] | None = None) -> str:

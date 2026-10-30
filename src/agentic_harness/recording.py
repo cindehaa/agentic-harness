@@ -1,4 +1,4 @@
-"""What the harness records while an agent works: the agent-neutral trace in events.jsonl (`ideation/database.md` #5).
+"""What the harness records while an agent works: the agent-neutral trace in events.jsonl.
 
 The benchmark is handed a RecordingSession (messages), the agent a RecordingEnvironment (commands); both write to
 one EventLog, so the trace reads the same whatever the agent is."""
@@ -49,7 +49,6 @@ class RecordingSession(AgentSession):
         self.turns = 0
         self.transcript: list[Message] = []
         self.limitation: str | None = None  # set by the runner when the agent raised AgentLimitation
-
 
     def send(self, message: Message) -> Message:
         if self.turns >= self.max_turns:

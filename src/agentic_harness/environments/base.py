@@ -38,7 +38,7 @@ class EndReason(Enum):
 
 @dataclass(frozen=True)
 class EnvironmentState:
-    """Whether the world is still up, and if not, why it ended (the runner's container-death rule)."""
+    """Whether the world is still up, and if not, why it ended."""
 
     running: bool
     end_reason: EndReason | None = None  # set once it has ended
@@ -58,10 +58,8 @@ class Environment(ABC):
 
     @abstractmethod
     def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None) -> ExecResult:
-        """Run a command. A string runs through a shell (`sh -c`, for agents); a list runs the program directly (for graders/harness).
-
-        `timeout` is in seconds; None means no timeout.
-        """
+        """Run a command: a string through `sh -c` (agents), a list directly (graders, the harness).
+        `timeout` is in seconds; None means no timeout."""
 
     @abstractmethod
     def state(self) -> EnvironmentState | None:

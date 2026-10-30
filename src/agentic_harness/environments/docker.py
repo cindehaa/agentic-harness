@@ -84,7 +84,6 @@ class DockerEnvironment(Environment):
         self._remove_volume()
 
     def attach_grader(self, image: str) -> "DockerEnvironment":
-        """`--volumes-from`, `--network container:`, `--pid container:` this container, same lifetime and limits."""
         grader = DockerEnvironment(image, self.lifetime_s, self.limits, self.workdir)
         grader.attached_to = self._id()
         self.graders.append(grader)
@@ -100,8 +99,8 @@ class DockerEnvironment(Environment):
             proc.wait(timeout=timeout)
             timed_out = False
         except subprocess.TimeoutExpired:
-            # Killing the `docker exec` client does NOT kill the process inside the container.
-            # Leftover processes are killed before grading (kill_agent_processes); Phase 6 may harden this.
+            # Killing the `docker exec` client does NOT kill the process inside the container;
+            # kill_agent_processes() cleans up leftovers before grading.
             proc.kill()
             proc.wait()
             timed_out = True
@@ -111,10 +110,9 @@ class DockerEnvironment(Environment):
         stdout, stderr = _decode(out[:MAX_OUTPUT]), _decode(err[:MAX_OUTPUT])
         if timed_out:
             return ExecResult(-1, stdout, stderr, timed_out=True, truncated=truncated)
-        # docker's own failures look like a command's (exit 1/126/127). Raise DockerError (-> infra_error, excluded
-        # and retried) ONLY when the container is verifiably gone. Anything else, like a missing cwd or an OCI exec
-        # error, the agent can cause (delete /workspace, or just print a fake docker message), so it stays a normal
-        # failed command; otherwise an agent could turn a failing trial into an excluded one.
+        # docker's own failures look like a command's (exit 1/126/127). Raise DockerError (infra_error, excluded)
+        # ONLY when the container is verifiably gone: anything else the agent can cause (delete /workspace, print a
+        # fake docker message), and it must not be able to turn a failing trial into an excluded one.
         message = stderr or stdout  # docker prints on stderr or, for OCI errors, stdout
         if proc.returncode != 0 and message.startswith(("Error response from daemon", "OCI runtime exec failed")):
             if not self._alive():
@@ -135,11 +133,8 @@ class DockerEnvironment(Environment):
         return EnvironmentState(running=False, end_reason=_end_reason(state))
 
     def kill_agent_processes(self) -> None:
-        """Kill every process the agent left running, before grading: all except PID 1 (the init) and its `sleep`.
-
-        Not a plain `kill -9 -1`: that also kills the sleep, and the init exits when its child does, taking the
-        container with it. One pass over /proc, so a process that keeps forking could slip through (Phase 6).
-        """
+        """Kill every process except PID 1 (the init) and its `sleep`. Not `kill -9 -1`: that kills the sleep too,
+        and the init exits with it, taking the container down. One pass over /proc: a fork loop could slip through."""
         script = 'for p in /proc/[0-9]*; do p=${p#/proc/}; [ "$p" = 1 ] || [ "$p" = "$1" ] || [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; true'
         self.exec(["sh", "-c", script, "sh", self.sleep_pid])
 

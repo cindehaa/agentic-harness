@@ -278,7 +278,6 @@ def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
 
 
 def main():
-    """Main entry point for the CLI."""
     cli()
 
 

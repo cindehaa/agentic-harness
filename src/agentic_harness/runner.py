@@ -1,4 +1,4 @@
-"""The trial runner: one attempt at one task, start to finish (`ideation/agents-and-runner.md`)."""
+"""The trial runner: one attempt at one task, start to finish."""
 
 import json
 import os
@@ -15,8 +15,8 @@ from agentic_harness.recording import EventLog, RecordingEnvironment, RecordingS
 from agentic_harness.redact import redact, redact_file
 from agentic_harness.types import Limits, Outcome, Score, Task
 
-# The container's keep-alive runs this long: generous, so it never ends before the trial does (if it does, that is
-# infra_error, not the agent's doing). It is still a self-destruct timer if the harness dies.
+# Container lifetime: long enough to outlast the trial and grading (expiring is infra_error), yet still a
+# self-destruct timer if the harness dies.
 LIFETIME_FACTOR = 3  # times the trial timeout
 GRADE_MARGIN_S = 600  # plus time for grading to finish
 WORKSPACE_MAX_BYTES = 50_000_000  # the saved final workspace (workspace.tar) is cut off here
@@ -28,7 +28,6 @@ def run_trial(
 ) -> Outcome:
     """Run one attempt in a world from `env_factory`: events.jsonl as it goes, then outcome.json and transcript.json,
     all in attempt_dir, all redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome.
-
     The agent gets the world wrapped in a RecordingEnvironment (its commands are traced); the benchmark gets it bare."""
     attempt_dir.mkdir(parents=True, exist_ok=True)
     began = time.monotonic()
@@ -63,7 +62,7 @@ def run_trial(
 
 
 def _agent_turns(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession) -> Outcome | None:
-    """Let the benchmark drive the agent. Returns an Outcome only if the container died meanwhile (rule 6)."""
+    """Let the benchmark drive the agent. Returns an Outcome only if the container died meanwhile."""
     lost = None
     try:
         benchmark.run_agent(task, session, env)
@@ -81,7 +80,7 @@ def _agent_turns(benchmark: Benchmark, task: Task, env: Environment, session: Re
 
 
 def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
-    """Rule 6, from env.state(): None if the container still runs, else how the trial ends."""
+    """None if the container still runs, else how the trial ends."""
     state = env.state()
     if state is None:  # gone, or Docker unreachable
         return Outcome("infra_error", error="container lost: gone, or Docker unreachable", retryable=True)
@@ -103,14 +102,13 @@ def _grade(benchmark: Benchmark, task: Task, env: Environment, session: Recordin
     try:
         env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         _save_workspace(env, session)  # the agent's end state, before the grader adds anything
-        # The grader runs beside the world, sharing its workspace, network and processes; stopped before the world.
-        # If it can't start (e.g. its image is missing), that is EnvironmentLost: infra_error, retried.
+        # A grader that can't start (e.g. its image is missing) raises EnvironmentLost: infra_error, retried
         with env.attach_grader(benchmark.grader_image(task)) as grader:
             score = benchmark.grade(task, grader, env, tuple(session.transcript))
     except GraderError as e:
         return Outcome("grader_error", error=str(e))
     except EnvironmentLost:
-        # The agent may have killed PID 1 as its last act and the container exited only now: rule 6 again
+        # The agent may have killed PID 1 as its last act and the container exited only now
         if died := _container_death(benchmark, env):
             return died
         raise  # the container still runs: an infra problem
@@ -122,8 +120,8 @@ def _grade(benchmark: Benchmark, task: Task, env: Environment, session: Recordin
 
 
 def _save_workspace(env: Environment, session: RecordingSession) -> None:
-    """workspace.tar in the attempt folder (integrity evidence, `fidelity-vs-integrity.md`), noted in the trace.
-    A workspace that can't be read (e.g. the agent deleted it) is noted, not fatal: the grader decides."""
+    """Save the agent's end state as workspace.tar in the attempt folder, noted in the trace. A workspace that can't
+    be read (e.g. the agent deleted it) is noted, not fatal: the grader decides."""
     path = session.log.path.parent / "workspace.tar"
     try:
         truncated = env.save_workspace(path, WORKSPACE_MAX_BYTES)

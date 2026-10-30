@@ -7,7 +7,7 @@ from agentic_harness.agents.base import (
     Agent, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
 )
 
-# registry: name -> "module:Class", imported only when the agent is used (so `harness status` never loads litellm)
+# name -> "module:Class", imported only when used, so `harness status` never loads litellm
 AGENTS: dict[str, str] = {
     "mini-swe-agent": "agentic_harness.agents.mini_swe_agent:MiniSweAgent",
 }

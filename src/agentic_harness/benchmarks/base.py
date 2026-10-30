@@ -27,28 +27,25 @@ class Benchmark(ABC, Generic[TaskT]):
         """Every task in the benchmark."""
 
     def setup(self, tasks: list[TaskT]) -> None:
-        """Optional, once per run before any trial: build images, download data, whatever the benchmark needs.
-
-        tasks() already names each task's image (e.g. "harness-bash-operations:bash-003"); setup() makes sure it exists.
-        """
+        """Optional, once per run before any trial: build or pull the images tasks() names, download data, etc."""
 
     @abstractmethod
     def run_agent(self, task: TaskT, agent: AgentSession, env: Environment) -> None:
         """Drive the agent's turns. A simple benchmark sends one message; complex ones loop."""
 
     def grader_image(self, task: TaskT) -> str:
-        """The image grade() runs in, attached to the trial's world (sees its workspace, network and processes).
-        Default: the task's own image, i.e. the world's own tools. setup() makes sure it is local."""
+        """The image grade() runs in, attached to the trial's world (sharing its workspace, network and processes).
+        Defaults to the task's own image; setup() must make sure it is local."""
         return task.image
 
     @abstractmethod
     def grade(self, task: TaskT, grader: Environment, env: Environment, transcript: Transcript) -> Score:
-        """Judge the result in `grader`, the attached grader (grader files go there; the agent's world never gets
-        them). `env` is the trial's own world, for checks only its own programs can do."""
+        """Judge the result in `grader` (grader files go there, never into the agent's world). `env` is the trial's
+        own world, for checks only its own programs can do."""
 
     def version(self) -> str | None:
-        """What runs.versions records for the benchmark: a content hash of everything that builds its tasks' images
-        (adapters also put it in the image tags, so changed files never reuse a stale image). None if not tracked."""
+        """A content hash of everything that builds the tasks' images, recorded in runs.versions. Adapters also put
+        it in the image tags, so changed files never reuse a stale image. None if not tracked."""
         return None
 
     def score_to_float(self, score: Score) -> float:
@@ -59,7 +56,7 @@ class Benchmark(ABC, Generic[TaskT]):
 @functools.cache
 def content_hash(folder: Path, *texts: str) -> str:
     """12 hex chars of sha256 over every file under `folder` (relative path + bytes; caches and dotfiles skipped)
-    and `texts` (e.g. the adapter's Dockerfile template). Computed once per process."""
+    and `texts` (e.g. the adapter's Dockerfile template)."""
     digest = hashlib.sha256()
     for path in sorted(folder.rglob("*")):
         parts = path.relative_to(folder).parts

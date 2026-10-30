@@ -4,7 +4,6 @@ from agentic_harness.benchmarks.base import Benchmark, GraderError
 from agentic_harness.benchmarks.bash_operations import BashOperations
 from agentic_harness.benchmarks.python_tasks import PythonTasks
 
-# registry: name -> adapter class
 BENCHMARKS: dict[str, type[Benchmark]] = {
     "bash-operations": BashOperations,
     "python-tasks": PythonTasks,

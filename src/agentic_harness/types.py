@@ -3,8 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-# What a grader can return: a verdict, a number, or named results
-Value = Any # must be JSON-serializable (the recorder checks); e.g. True, 0.75, "C", {"passed": True}
+Value = Any  # what a grader returns; must be JSON-serializable, e.g. True, 0.75, "C", {"passed": True}
 
 
 @dataclass
@@ -32,7 +31,7 @@ class File:
 
 @dataclass(frozen=True)
 class Data:
-    data: Any  # any JSON-serializable value; note: frozen stops reassignment, not mutation of a dict inside
+    data: Any  # any JSON-serializable value (frozen stops reassignment, not mutation of a dict inside)
 
 
 Content = Text | File | Data
@@ -46,19 +45,15 @@ class Message:
     content: tuple[Content, ...]
 
 
-# Everything said during a trial's turns: benchmark messages ("user") and agent replies ("agent").
-# The session builds it as a list while the agent runs and hands grade() a read-only snapshot.
-# The agent's individual commands/tool calls live in the recorder's event log, not here.
+# Every message of a trial's turns, in order; grade() gets a read-only snapshot.
+# The agent's individual commands are in events.jsonl, not here.
 Transcript = tuple[Message, ...]
 
 
 @dataclass(frozen=True)
 class Task:
-    """One task from a benchmark. Adapters subclass this with their own typed fields.
-
-    Base fields deliberately have no defaults: if they did, every subclass field would
-    need a default too (dataclass inheritance rule).
-    """
+    """One task from a benchmark. Adapters subclass it with their own fields, so these have no defaults (otherwise
+    every subclass field would need one too)."""
 
     benchmark: str  # e.g. "bash-operations"; makes a Task self-describing in logs and the DB
     id: str  # e.g. "bash-001"
@@ -67,7 +62,7 @@ class Task:
 
 @dataclass(frozen=True)
 class Limits:
-    """What one trial may spend. Defaults decided 2026-10-29 (`ideation/agents-and-runner.md`)."""
+    """What one trial may spend."""
 
     trial_timeout_s: float = 600  # the first agent command after this deadline ends the agent's run
     cost_usd: float = 1.0  # model spend per trial
@@ -82,7 +77,7 @@ class Limits:
 
 @dataclass(frozen=True)
 class Outcome:
-    """How one attempt at one trial ended (`ideation/task-input.md`, Outcome model). Accuracy counts only "graded"."""
+    """How one attempt at one trial ended. Accuracy counts only "graded"."""
 
     status: Literal["graded", "grader_error", "infra_error", "unsupported"]
     score: Score | None = None

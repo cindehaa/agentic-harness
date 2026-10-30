@@ -1,4 +1,4 @@
-"""The database: runs, trials (which are also the queue), attempts, events (`ideation/database.md`).
+"""The database: runs, trials (which are also the queue), attempts, events.
 
 Plain sqlite3 with handwritten SQL. One Store = one connection; every thread opens its own Store.
 """
@@ -95,7 +95,7 @@ class Claim:
 
 class Store:
     def __init__(self, path: Path) -> None:
-        self.runs_dir = path.parent  # attempt files live next to the DB: runs/<run_id>/<task_id>/attempt-<n>/
+        self.runs_dir = path.parent  # attempt folders live next to the DB
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, isolation_level=None)  # autocommit; transactions are explicit (_transaction)
         self.db.row_factory = sqlite3.Row
