@@ -1,6 +1,7 @@
 """An Environment backed by one Docker container, driven through the `docker` CLI (no SDK dependency)."""
 
 import json
+import os
 import posixpath
 import subprocess
 import threading
@@ -117,10 +118,14 @@ class DockerEnvironment(Environment):
         # each row: sl local_address(hex ip:hex port) rem_address st(0A = LISTEN) ...
         return any(f[1].endswith(f":{port:04X}") and f[3] == "0A" for f in (line.split() for line in table.splitlines()[1:]) if len(f) > 3)
 
-    def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None) -> ExecResult:
+    def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None,
+             env: dict[str, str] | None = None, user: str | None = None) -> ExecResult:
         argv = ["sh", "-c", cmd] if isinstance(cmd, str) else cmd
-        full = ["docker", "exec", "-w", cwd or self.workdir, self._id(), *argv]
-        proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # `-e NAME` without a value: docker takes it from its own environment, so values never show in `ps` on the host
+        names = [a for name in env or {} for a in ("-e", name)]
+        full = ["docker", "exec", "-w", cwd or self.workdir, *names, *(["-u", user] if user else []), self._id(), *argv]
+        proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=os.environ | env if env else None)
         out, err = bytearray(), bytearray()
         readers = [_drain(proc.stdout, out), _drain(proc.stderr, err)]
         try:

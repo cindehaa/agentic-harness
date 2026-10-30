@@ -327,3 +327,23 @@ def test_grader_that_fails_to_start_is_environment_lost():
     with DockerEnvironment(IMAGE) as env:
         with pytest.raises(EnvironmentLost):
             env.attach_grader("harness-no-such-image:nope").start()
+
+
+def test_exec_env_reaches_the_command_but_never_the_docker_command_line(env, monkeypatch):
+    seen = []
+    real_popen = subprocess.Popen
+
+    def popen(argv, **kwargs):
+        seen.append(argv)
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr("agentic_harness.environments.docker.subprocess.Popen", popen)
+    r = env.exec(["sh", "-c", 'echo "$HARNESS_TEST_SECRET"'], env={"HARNESS_TEST_SECRET": "s3cret-value"})
+    assert r.stdout == "s3cret-value\n"
+    assert "HARNESS_TEST_SECRET" in seen[0] and not any("s3cret-value" in a for a in seen[0])
+    assert env.exec(["sh", "-c", 'echo "x$HARNESS_TEST_SECRET"']).stdout == "x\n"  # for that command only
+
+
+def test_exec_as_another_user(env):
+    assert env.exec(["id", "-un"], user="nobody").stdout == "nobody\n"
+    assert env.exec(["id", "-un"]).stdout == "root\n"

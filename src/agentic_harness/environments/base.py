@@ -70,9 +70,11 @@ class Environment(ABC):
     def stop(self) -> None: ...
 
     @abstractmethod
-    def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None) -> ExecResult:
+    def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None,
+             env: dict[str, str] | None = None, user: str | None = None) -> ExecResult:
         """Run a command: a string through `sh -c` (agents), a list directly (graders, the harness).
-        `timeout` is in seconds; None means no timeout."""
+        `timeout` is in seconds; None means no timeout. `env` adds variables for this command only (e.g. an agent's
+        API key: never written into the image); `user` runs it as that user (default: the image's, root here)."""
 
     @abstractmethod
     def state(self) -> EnvironmentState | None:

@@ -71,18 +71,20 @@ class RecordingSession(AgentSession):
 
 class RecordingEnvironment(Environment):
     """What the agent is handed: the trial's Environment, with every exec written to the log as a "command" event
-    (command, exit code, output capped at OUTPUT_CAP, duration, turn). Everything else is passed straight through."""
+    (command, env names, user, exit code, output capped at OUTPUT_CAP, duration, turn). Everything else is passed straight through."""
 
     def __init__(self, env: Environment, log: EventLog) -> None:
         super().__init__(env.image)
         self.env = env
         self.log = log
 
-    def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None) -> ExecResult:
+    def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None,
+             env: dict[str, str] | None = None, user: str | None = None) -> ExecResult:
         began = time.monotonic()
-        event = {"command": cmd, "cwd": cwd}
+        # variable names only: their values may be credentials not in .env, which redaction wouldn't know
+        event = {"command": cmd, "cwd": cwd, "env": {name: "***" for name in env or {}}, "user": user}
         try:
-            r = self.env.exec(cmd, timeout=timeout, cwd=cwd)
+            r = self.env.exec(cmd, timeout=timeout, cwd=cwd, env=env, user=user)
         except Exception as e:  # e.g. EnvironmentLost: still in the trace
             self.log.write("command", event | {"error": f"{type(e).__name__}: {e}", "duration_s": _since(began)})
             raise

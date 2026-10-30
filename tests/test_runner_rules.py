@@ -53,7 +53,7 @@ class FakeEnvironment(Environment):
         return attached
     def download(self, remote, local): ...
 
-    def exec(self, cmd, timeout=60, cwd=None) -> ExecResult:
+    def exec(self, cmd, timeout=60, cwd=None, env=None, user=None) -> ExecResult:
         if self.lose_on_exec:
             raise EnvironmentLost("backend unreachable")
         return ExecResult(0, "", "")
@@ -272,3 +272,13 @@ def test_capabilities_cover_what_they_declare():
     agent = AgentCapabilities(content_types=frozenset({"text", "file"}), multi_turn=True, mcp=True)
     assert agent.missing(AgentCapabilities(content_types=frozenset({"file"}), multi_turn=True, mcp=True)) == []
     assert AgentCapabilities().missing(AgentCapabilities(content_types=frozenset({"data"}))) == ["content: data"]
+
+
+def test_exec_env_values_never_reach_the_trace(tmp_path):
+    def act(env):
+        env.exec("true", env={"SOME_TOKEN": "not-in-dotenv-123"}, user="agent")
+
+    run(act, tmp_path)
+    command = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()][1]["payload"]
+    assert (command["env"], command["user"]) == ({"SOME_TOKEN": "***"}, "agent")
+    assert "not-in-dotenv-123" not in (tmp_path / "events.jsonl").read_text()

@@ -27,7 +27,7 @@ class FakeEnv(Environment):
         super().__init__("fake:image")
         self.calls: list[tuple] = []
 
-    def exec(self, cmd, timeout=60, cwd=None) -> ExecResult:
+    def exec(self, cmd, timeout=60, cwd=None, env=None, user=None) -> ExecResult:
         self.calls.append((cmd, timeout, cwd))
         if cmd.startswith("uname"):
             return ExecResult(0, UNAME, "")
