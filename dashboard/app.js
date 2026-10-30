@@ -62,6 +62,11 @@ function ago(ts) {
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+const tokens = (n) => (!n ? "0" : n < 1000 ? String(n) : n < 1e6 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1e6).toFixed(2)}M`);
+const span = (start, end) => (start != null && end != null ? end - start : null);
+// "$0.42" or, with a run budget, "$0.42 of $5"
+const spend = (r) => (r.max_cost_usd != null ? `${cost(r.cost_usd)} of ${cost(r.max_cost_usd)}` : cost(r.cost_usd));
+
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 function shellJoin(cmd) {
@@ -86,7 +91,7 @@ function trialKind(t) {
 
 const LABELS = {
   pass: "pass", fail: "fail", grader_error: "grader error", infra_error: "infra error",
-  unsupported: "unsupported", running: "running", pending: "pending", graded: "graded",
+  unsupported: "unsupported", skipped_budget: "skipped (budget)", running: "running", pending: "pending", graded: "graded",
 };
 
 const Pill = ({ kind, children }) => html`
@@ -95,7 +100,8 @@ const Pill = ({ kind, children }) => html`
 function ProgressBar({ run }) {
   const segments = [
     ["pass", run.passed], ["fail", run.graded - run.passed], ["grader_error", run.grader_error],
-    ["infra_error", run.infra_error], ["unsupported", run.unsupported], ["running", run.running],
+    ["infra_error", run.infra_error], ["unsupported", run.unsupported],
+    ["skipped_budget", run.skipped_budget], ["running", run.running],
   ];
   const title = segments.filter(([, n]) => n).map(([k, n]) => `${n} ${LABELS[k]}`).join(" · ") || "nothing done yet";
   return html`
@@ -140,7 +146,7 @@ function RunsList({ runs, selected }) {
           </div>
           <${ProgressBar} run=${r} />
           <div class="run-meta">
-            <span>${progressText(r)} · ${cost(r.cost_usd)}</span>
+            <span>${progressText(r)} · ${spend(r)}</span>
             <span>${ago(r.created_at)}</span>
           </div>
         </a>`)}
@@ -157,11 +163,8 @@ function RunDetail({ runId, attemptId, noWorkers }) {
   const { data: run, error } = usePoll(`/api/runs/${encodeURIComponent(runId)}`);
   if (error && !run) return html`<p class="subtle">${error}</p>`;
   if (!run) return null;
-  // wall time spans the trials (first start to last finish); time spent queued or in setup is shown apart
-  const started = run.first_started_at;
-  const wall = started && (run.finished_at ? run.last_finished_at : Date.now() / 1000) - started;
-  const queued = started && started - run.created_at;
-  const excluded = ["grader_error", "infra_error", "unsupported"].filter((k) => run[k] > 0);
+  const m = run.metrics;
+  const excluded = ["grader_error", "infra_error", "unsupported", "skipped_budget"].filter((k) => run[k] > 0);
   const open = (t) => t.attempts.length && (location.hash = `#/runs/${encodeURIComponent(run.id)}/attempts/${t.attempts[t.attempts.length - 1].id}`);
   return html`
     <section>
@@ -175,9 +178,10 @@ function RunDetail({ runId, attemptId, noWorkers }) {
       <div class="stats">
         <${Stat} value=${pct(run.accuracy)} label="accuracy" />
         <${Stat} value=${`${run.graded}`} label=${`graded of ${run.total}`} />
-        <${Stat} value=${cost(run.cost_usd)} label="cost" />
-        <${Stat} value=${dur(wall)} label=${queued >= 5 ? `wall time · ${dur(queued)} queued` : "wall time"} />
+        <${Stat} value=${cost(m.cost_usd)} label=${m.max_cost_usd != null ? `spent of ${cost(m.max_cost_usd)}` : "cost"} />
+        <${Stat} value=${dur(m.wall_s)} label="wall time" />
       </div>
+      <${Breakdown} m=${m} />
       ${excluded.length > 0 && html`
         <div class="excluded">
           <span class="subtle">Excluded</span>
@@ -187,7 +191,7 @@ function RunDetail({ runId, attemptId, noWorkers }) {
         <div class="notice">No worker running. Start one: <code>harness worker</code></div>`}
       <table>
         <thead>
-          <tr><th>Task</th><th>Outcome</th><th>Score</th><th class="num">Attempts</th><th class="num">Cost</th><th class="num">Time</th></tr>
+          <tr><th>Task</th><th>Outcome</th><th>Score</th><th class="num">Attempts</th><th class="num">Tokens in / out</th><th class="num">Cost</th><th class="num">Agent</th><th class="num">Grading</th></tr>
         </thead>
         <tbody>
           ${run.trials.map((t) => {
@@ -201,13 +205,35 @@ function RunDetail({ runId, attemptId, noWorkers }) {
                 <td><${Pill} kind=${trialKind(t)} /></td>
                 <td class="mono">${scoreText(t.score_value)}</td>
                 <td class="num">${t.attempt_count || ""}</td>
-                <td class="num">${t.state === "done" || t.cost_usd ? cost(t.cost_usd) : ""}</td>
-                <td class="num">${t.duration_s ? dur(t.duration_s) : ""}</td>
+                <td class="num">${t.input_tokens || t.output_tokens ? `${tokens(t.input_tokens)} / ${tokens(t.output_tokens)}` : ""}</td>
+                <td class="num">${t.state === "done" && t.attempt_count || t.cost_usd ? cost(t.cost_usd) : ""}</td>
+                <td class="num">${t.agent_s != null ? dur(t.agent_s) : ""}</td>
+                <td class="num">${t.grading_s != null ? dur(t.grading_s) : ""}</td>
               </tr>`;
           })}
         </tbody>
       </table>
     </section>`;
+}
+
+// One quiet line (tokens, calls, cost per task) that opens into the time breakdown: the numbers `harness results` prints.
+function Breakdown({ m }) {
+  const times = [
+    ["env start", m.avg_env_start_s, "avg"], ["agent", m.avg_agent_s, "avg"], ["grading", m.avg_grading_s, "avg"],
+    ["setup", m.setup_s], ["queue wait", m.total_queue_wait_s || null, "total"],
+  ].filter(([, v]) => v != null);
+  return html`
+    <details class="breakdown">
+      <summary>
+        ${tokens(m.input_tokens)} in · ${tokens(m.output_tokens)} out tokens · ${m.model_calls} model calls
+        ${m.cost_per_task_usd != null && ` · ${cost(m.cost_per_task_usd)}/task`}
+        ${m.cost_per_passing_task_usd != null && ` · ${cost(m.cost_per_passing_task_usd)}/pass`}
+      </summary>
+      <div class="times">
+        ${times.map(([label, v, note]) => html`<span key=${label}>${label} <b>${dur(v)}</b>${note ? html` <span class="faint">${note}</span>` : ""}</span>`)}
+        ${m.trials_per_min != null && html`<span>throughput <b>${m.trials_per_min.toFixed(1)}</b> <span class="faint">trials/min</span></span>`}
+      </div>
+    </details>`;
 }
 
 // ---------- attempt drawer ----------
@@ -260,8 +286,12 @@ function Attempt({ a }) {
       <${Pill} kind=${kind} />
       ${a.score && html`<span>score <b class="mono">${scoreText(a.score.value)}</b></span>`}
       ${a.exit_status && html`<span>agent exit <b>${a.exit_status}</b></span>`}
-      ${a.outcome && html`<span><b>${cost(a.cost_usd)}</b></span>`}
-      ${a.duration_s != null && html`<span><b>${dur(a.duration_s)}</b></span>`}
+      ${a.outcome || a.cost_usd ? html`<span><b>${cost(a.cost_usd)}</b></span>` : null}
+      ${a.input_tokens || a.output_tokens ? html`<span>tokens <b>${tokens(a.input_tokens)} / ${tokens(a.output_tokens)}</b></span>` : null}
+      ${a.model_calls ? html`<span><b>${a.model_calls}</b> model calls</span>` : null}
+      ${span(a.started_at, a.env_ready_at) != null && html`<span>env <b>${dur(span(a.started_at, a.env_ready_at))}</b></span>`}
+      ${span(a.agent_start_at, a.agent_end_at) != null && html`<span>agent <b>${dur(span(a.agent_start_at, a.agent_end_at))}</b></span>`}
+      ${span(a.grade_start_at, a.grade_end_at) != null && html`<span>grading <b>${dur(span(a.grade_start_at, a.grade_end_at))}</b></span>`}
       ${a.attempts.length > 1 && html`<span>attempt ${a.n} of ${a.attempts.length}</span>`}
     </div>
     ${a.error && html`<pre class="error-box mono">${a.error}</pre>`}

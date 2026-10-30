@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -12,9 +13,10 @@ from agentic_harness.store import Store
 from agentic_harness.types import Outcome, Score
 
 
-def finish(store: Store, outcome: Outcome, retry_at: float | None = None, events: list[dict] = ()) -> int:
+def finish(store: Store, outcome: Outcome, retry_at: float | None = None, events: list[dict] = (),
+           run_id: str = "run-done") -> int:
     """Claim the next trial and end its attempt with `outcome`, leaving the attempt's files as a worker would."""
-    claim = store.claim_trial("w1", 120)
+    claim = store.claim_trial("w1", 120, run_id)
     claim.artifacts_dir.mkdir(parents=True)
     (claim.artifacts_dir / "transcript.json").write_text(json.dumps(
         [{"role": "user", "content": [{"text": "do it"}]}, {"role": "agent", "content": [{"text": "done"}]}]))
@@ -24,6 +26,7 @@ def finish(store: Store, outcome: Outcome, retry_at: float | None = None, events
     return claim.attempt_id
 
 
+T = time.time()
 COMMAND = {"seq": 0, "turn": 1, "kind": "command", "ts": 1.0,
            "payload": {"command": "ls", "exit_code": 0, "stdout": "a.txt\n", "stderr": "", "duration_s": 0.1}}
 
@@ -35,7 +38,9 @@ def db(tmp_path):
     store.create_run("run-done", "bench", "agent", "model-a", {}, {}, ["t1", "t2", "t3"])
     store.claim_setup("w1", 120, "run-done")
     store.finish_setup("run-done", "w1")
-    finish(store, Outcome("graded", Score(True), 1.0, cost_usd=0.25, duration_s=3.0), events=[COMMAND])
+    finish(store, Outcome("graded", Score(True), 1.0, cost_usd=0.25, duration_s=3.0, model_calls=4, input_tokens=1200,
+                          output_tokens=300, phases={"env_ready": T + 1, "agent_start": T + 1, "agent_end": T + 3,
+                                                     "grade_start": T + 3, "grade_end": T + 3.5}), events=[COMMAND])
     finish(store, Outcome("graded", Score(False), 0.0, cost_usd=0.25, duration_s=2.0))
     finish(store, Outcome("infra_error", error="docker went away", retryable=True), retry_at=0)
     finish(store, Outcome("grader_error", error="unparseable"))
@@ -43,6 +48,10 @@ def db(tmp_path):
     store.claim_setup("w1", 120, "run-live")
     store.finish_setup("run-live", "w1")
     store.claim_trial("w1", 120, "run-live")
+    store.create_run("run-budget", "bench", "agent", "model-c", {}, {}, ["t1", "t2"], max_cost_usd=0.1)
+    store.claim_setup("w1", 120, "run-budget")
+    store.finish_setup("run-budget", "w1")
+    finish(store, Outcome("graded", Score(True), 1.0, cost_usd=0.2), run_id="run-budget")  # over budget: t2 never starts
     store.worker_started("host-1")
     store.close()
     return path
@@ -71,8 +80,8 @@ def get(db):
 def test_runs_list_running_first_with_progress_accuracy_and_cost(get):
     status, runs = get("/api/runs")
     assert status == 200
-    assert [r["id"] for r in runs] == ["run-live", "run-done"]
-    done = runs[1]
+    assert [r["id"] for r in runs] == ["run-live", "run-budget", "run-done"]
+    done = runs[2]
     assert (done["done"], done["total"], done["graded"], done["passed"]) == (3, 3, 2, 1)
     assert (done["grader_error"], done["infra_error"], done["unsupported"]) == (1, 0, 0)
     assert done["accuracy"] == 0.5
@@ -164,7 +173,7 @@ def test_symlink_out_of_runs_is_not_served(db, get, tmp_path):
 
 
 def test_runs_carry_the_trial_span(get):
-    run = get("/api/runs")[1][1]
+    run = get("/api/runs")[1][2]
     assert run["first_started_at"] <= run["last_finished_at"]
 
 
@@ -187,3 +196,20 @@ def test_cli_says_when_the_port_is_taken(tmp_path):
     finally:
         taken.server_close()
     assert result.exit_code == 1 and "pass another --port" in result.output
+
+
+def test_run_detail_has_the_results_metrics_and_trial_tokens_and_times(get):
+    _, run = get("/api/runs/run-done")
+    m = run["metrics"]
+    assert (m["input_tokens"], m["output_tokens"], m["model_calls"]) == (1200, 300, 4)
+    assert m["cost_per_task_usd"] == 0.5 / 3 and m["cost_per_passing_task_usd"] == 0.5
+    assert m["avg_agent_s"] == 2 and m["avg_grading_s"] == 0.5 and m["avg_env_start_s"] is not None
+    t1 = run["trials"][0]
+    assert (t1["input_tokens"], t1["output_tokens"], t1["agent_s"], t1["grading_s"]) == (1200, 300, 2, 0.5)
+
+
+def test_budget_and_skipped_budget_trials_are_reported(get):
+    _, run = get("/api/runs/run-budget")
+    assert run["max_cost_usd"] == 0.1 and run["metrics"]["max_cost_usd"] == 0.1
+    assert run["skipped_budget"] == 1 and run["status"] == "done"
+    assert [t["outcome"] for t in run["trials"]] == ["graded", "skipped_budget"]

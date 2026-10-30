@@ -13,6 +13,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from agentic_harness.metrics import run_metrics
 from agentic_harness.paths import REPO_ROOT
 from agentic_harness.store import SCHEMA_VERSION, SchemaMismatch
 
@@ -31,7 +32,7 @@ WITH spent AS (
            MIN(a.started_at) AS first_started_at, MAX(a.finished_at) AS last_finished_at
     FROM attempts a JOIN trials t ON t.id = a.trial_id GROUP BY t.run_id
 )
-SELECT r.id, r.benchmark, r.agent, r.model, r.status, r.setup_claimed_by IS NOT NULL AS setup_claimed,
+SELECT r.id, r.benchmark, r.agent, r.model, r.status, r.setup_claimed_by IS NOT NULL AS setup_claimed, r.max_cost_usd,
        r.created_at, r.finished_at, s.first_started_at, s.last_finished_at,
        COALESCE(s.cost_usd, 0) AS cost_usd, COALESCE(s.trial_time_s, 0) AS trial_time_s,
        COUNT(t.id) AS total,
@@ -42,6 +43,7 @@ SELECT r.id, r.benchmark, r.agent, r.model, r.status, r.setup_claimed_by IS NOT 
        COALESCE(SUM(t.outcome = 'grader_error'), 0) AS grader_error,
        COALESCE(SUM(t.outcome = 'infra_error'), 0) AS infra_error,
        COALESCE(SUM(t.outcome = 'unsupported'), 0) AS unsupported,
+       COALESCE(SUM(t.outcome = 'skipped_budget'), 0) AS skipped_budget,
        AVG(CASE WHEN t.outcome = 'graded' THEN t.score_float END) AS accuracy
 FROM runs r LEFT JOIN trials t ON t.run_id = r.id LEFT JOIN spent s ON s.run_id = r.id
 WHERE ? IS NULL OR r.id = ?
@@ -52,6 +54,8 @@ ORDER BY r.status IN ('pending', 'running') DESC, r.created_at DESC
 TRIALS_SQL = """
 SELECT t.id, t.task_id, t.state, t.outcome, t.score_value, t.score_float, t.attempt_count,
        COALESCE(SUM(a.cost_usd), 0) AS cost_usd, COALESCE(SUM(a.duration_s), 0) AS duration_s,
+       COALESCE(SUM(a.input_tokens), 0) AS input_tokens, COALESCE(SUM(a.output_tokens), 0) AS output_tokens,
+       SUM(a.agent_end_at - a.agent_start_at) AS agent_s, SUM(a.grade_end_at - a.grade_start_at) AS grading_s,
        json_group_array(json_object('id', a.id, 'n', a.n, 'outcome', a.outcome)) FILTER (WHERE a.id IS NOT NULL) AS attempts
 FROM trials t LEFT JOIN attempts a ON a.trial_id = t.id
 WHERE t.run_id = ? GROUP BY t.id ORDER BY t.id
@@ -101,10 +105,16 @@ class Dashboard:
         if not found:
             raise NotFound(f"no run {run_id}")
         with self._db() as db:
-            row = db.execute("SELECT versions, config FROM runs WHERE id = ?", (run_id,)).fetchone()
-            trials = [{**dict(t), "score_value": _parse(t["score_value"]), "attempts": json.loads(t["attempts"] or "[]")}
-                      for t in db.execute(TRIALS_SQL, (run_id,))]
-        return {**found[0], "versions": _parse(row["versions"]), "config": _parse(row["config"]), "trials": trials}
+            row = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            trials = db.execute(TRIALS_SQL, (run_id,)).fetchall()
+            attempts = db.execute("SELECT a.* FROM attempts a JOIN trials t ON t.id = a.trial_id WHERE t.run_id = ?",
+                                  (run_id,)).fetchall()
+        return {
+            **found[0], "versions": _parse(row["versions"]), "config": _parse(row["config"]),
+            "metrics": run_metrics(row, trials, attempts),  # the same numbers `harness results` prints
+            "trials": [{**dict(t), "score_value": _parse(t["score_value"]), "attempts": json.loads(t["attempts"] or "[]")}
+                       for t in trials],
+        }
 
     def attempt(self, attempt_id: int) -> dict:
         with self._db() as db:
@@ -119,7 +129,9 @@ class Dashboard:
         events = _read_jsonl(folder / "events.jsonl") if folder else None
         return {
             **{k: a[k] for k in ("id", "trial_id", "run_id", "task_id", "n", "outcome", "exit_status", "error",
-                                 "cost_usd", "duration_s", "started_at", "finished_at")},
+                                 "cost_usd", "duration_s", "model_calls", "input_tokens", "output_tokens",
+                                 "queued_at", "started_at", "env_ready_at", "agent_start_at", "agent_end_at",
+                                 "grade_start_at", "grade_end_at", "finished_at")},
             "score": _parse(a["score"]),
             "attempts": siblings,
             "outcome_file": _read_json(folder / "outcome.json") if folder else None,
