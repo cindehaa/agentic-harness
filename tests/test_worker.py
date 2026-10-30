@@ -1,6 +1,6 @@
 """Submit with `harness run`, run with `harness worker`: scripted fake agents, real Docker, no model.
 
-Grading reads hello.txt directly (no `apk add`), so these tests don't need the network."""
+Grading reads hello.txt directly (a one-line grader), so these tests don't depend on evaluate.py."""
 
 import json
 import subprocess
@@ -28,7 +28,7 @@ def images():
 
 
 class LocalGrade(BashOperations):
-    """bash-operations with a grader that needs no network: passed = hello.txt says Hello World."""
+    """bash-operations with a one-line grader: passed = hello.txt says Hello World."""
 
     name = "local-bash"
     setups = 0
@@ -36,8 +36,8 @@ class LocalGrade(BashOperations):
     def setup(self, tasks):
         LocalGrade.setups += 1  # the images were built by the fixture
 
-    def grade(self, task, env, transcript):
-        return Score(env.exec(["cat", "hello.txt"]).stdout.strip() == "Hello World")
+    def grade(self, task, grader, env, transcript):
+        return Score(grader.exec(["cat", "hello.txt"]).stdout.strip() == "Hello World")
 
 
 class BrokenSetup(LocalGrade):

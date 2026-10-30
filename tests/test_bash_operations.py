@@ -32,6 +32,12 @@ def images():
     bench.setup(list(TASKS.values()))
 
 
+def grade(task, env):
+    """What the runner does: grade in a grader attached to the trial's world."""
+    with env.attach_grader(bench.grader_image(task)) as grader:
+        return bench.grade(task, grader, env, ())
+
+
 class RecordingSession(AgentSession):
     """A fake agent that remembers what it was sent."""
 
@@ -64,7 +70,7 @@ def test_oracle_passes(task_id):
     task = TASKS[task_id]
     with DockerEnvironment(task.image) as env:
         assert env.exec(ORACLES[task_id]).exit_code == 0
-        score = bench.grade(task, env, ())
+        score = grade(task, env)
     assert score.value is True, score.explanation
 
 
@@ -72,7 +78,7 @@ def test_oracle_passes(task_id):
 def test_doing_nothing_fails(task_id):
     task = TASKS[task_id]
     with DockerEnvironment(task.image) as env:
-        score = bench.grade(task, env, ())
+        score = grade(task, env)
     assert score.value is False, score.explanation
 
 
@@ -82,13 +88,32 @@ def test_world_has_no_python_before_grading():
         assert env.exec("ls -A /workspace").stdout == ""  # setup made no files for this task, but the folder exists
 
 
+def test_world_gains_no_python_and_no_grader_files_from_grading():
+    task = TASKS["bash-001"]
+    with DockerEnvironment(task.image) as env:
+        env.exec(ORACLES["bash-001"])
+        assert grade(task, env).value is True
+        assert env.exec("command -v python3 || command -v python").exit_code != 0
+        assert env.exec("test -e /grader").exit_code != 0  # evaluate.py lived only in the grader
+
+
+def test_grading_needs_no_internet():
+    task = TASKS["bash-001"]
+    with DockerEnvironment(task.image) as env:
+        env.exec(ORACLES["bash-001"])
+        subprocess.run(["docker", "network", "disconnect", "bridge", env.container_id], capture_output=True, check=True)
+        with env.attach_grader(bench.grader_image(task)) as grader:  # shares the (now absent) network
+            offline = ["python", "-c", "import socket; socket.create_connection(('1.1.1.1', 53), timeout=2)"]
+            assert grader.exec(offline).exit_code != 0
+            assert bench.grade(task, grader, env, ()).value is True  # nothing to install: the image has python
+
+
 def test_setup_files_are_baked_in():
     with DockerEnvironment(TASKS["bash-003"].image) as env:
         assert env.read_file("/workspace/input.txt") == b"line 1\nline 2\nline 3\nline 4\nline 5"
 
 
-def test_no_leftover_containers():
-    listed = subprocess.run(
-        ["docker", "ps", "-a", "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True
-    ).stdout
-    assert listed == ""
+def test_no_leftover_containers_or_volumes():
+    for cmd in (["ps", "-a"], ["volume", "ls"]):
+        listed = subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+        assert listed == ""

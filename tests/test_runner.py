@@ -11,7 +11,7 @@ import pytest
 from litellm.exceptions import AuthenticationError
 
 from agentic_harness.agents import Agent, AgentLimitation, AgentSession, AgentStats
-from agentic_harness.benchmarks import BashOperations, GraderError, GraderSetupError
+from agentic_harness.benchmarks import BashOperations, GraderError
 from agentic_harness.environments import DockerEnvironment, Environment
 from agentic_harness.runner import run_trial
 from agentic_harness.types import Limits, Message, Score, Text, score_to_float
@@ -60,20 +60,20 @@ def kill_container(env) -> None:
 
 
 class BrokenGrader(BashOperations):
-    def grade(self, task, env, transcript):
+    def grade(self, task, grader, env, transcript):
         raise GraderError("grader crashed")
 
 
-class NoNetworkGrader(BashOperations):
-    def grade(self, task, env, transcript):
-        raise GraderSetupError("installing python3 failed: no network")
+class MissingGraderImage(BashOperations):
+    def grader_image(self, task):
+        return "harness-no-such-image:nope"
 
 
 class FixedGrader(BashOperations):
     def __init__(self, value) -> None:
         self.value = value
 
-    def grade(self, task, env, transcript):
+    def grade(self, task, grader, env, transcript):
         return Score(self.value)
 
 
@@ -169,9 +169,28 @@ def test_grader_crash_is_grader_error(tmp_path):
     assert json.loads((tmp_path / "outcome.json").read_text())["status"] == "grader_error"
 
 
-def test_grader_setup_failure_is_infra_error(tmp_path):
-    outcome = run_trial(NoNetworkGrader(), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, DockerEnvironment)
-    assert (outcome.status, outcome.error) == ("infra_error", "GraderSetupError: installing python3 failed: no network")
+def test_grader_that_cannot_start_is_infra_error(tmp_path):
+    outcome = run_trial(MissingGraderImage(), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, DockerEnvironment)
+    assert (outcome.status, outcome.retryable) == ("infra_error", True) and "DockerError" in outcome.error
+
+
+def test_grader_and_workspace_volume_are_removed_after_the_trial(tmp_path):
+    made = []
+
+    def factory(image, lifetime_s, limits):
+        made.append(DockerEnvironment(image, lifetime_s, limits))
+        return made[-1]
+
+    outcome = run_trial(bench, ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, factory)
+    [env] = made
+    [grader] = env.graders
+    assert outcome.status == "graded" and grader.image == "python:3.11-slim"
+    assert env.container_id is None and grader.container_id is None and env.volume is None
+    assert _labelled("ps", "-a") == "" and _labelled("volume", "ls") == ""
+
+
+def _labelled(*cmd: str) -> str:
+    return subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
 
 
 def test_leftover_agent_process_is_killed_before_grading(tmp_path):
@@ -202,8 +221,5 @@ def test_score_to_float_rejects_other_values():
         score_to_float({"passed": True})
 
 
-def test_no_leftover_containers():
-    listed = subprocess.run(
-        ["docker", "ps", "-a", "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True
-    ).stdout
-    assert listed == ""
+def test_no_leftover_containers_or_volumes():
+    assert _labelled("ps", "-a") == "" and _labelled("volume", "ls") == ""

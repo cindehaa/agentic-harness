@@ -185,7 +185,8 @@ def test_live_solves_bash_001(tmp_path):
     with DockerEnvironment(task.image) as env:
         session = MiniSweAgent(os.environ["MSWEA_MODEL_NAME"]).start(env, tmp_path, Limits())
         bench.run_agent(task, session, env)
-        score = bench.grade(task, env, ())
+        with env.attach_grader(bench.grader_image(task)) as grader:
+            score = bench.grade(task, grader, env, ())
     stats = session.stats()
     print(f"live cost: ${stats.cost_usd:.4f}, steps: {stats.steps}, exit: {stats.exit_status}")
     assert stats.exit_status == "Submitted"

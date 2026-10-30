@@ -17,11 +17,6 @@ class GraderError(Exception):
     """The grader crashed or its output was unreadable -> outcome grader_error."""
 
 
-class GraderSetupError(Exception):
-    """Preparing the grader failed for an infrastructure reason, e.g. installing its dependencies needs the network
-    and there is none -> outcome infra_error (retried). Not a GraderError: the grader itself never ran."""
-
-
 class Benchmark(ABC, Generic[TaskT]):
     """One benchmark, adapted to the harness. Subclass as e.g. `BashOperations(Benchmark[BashTask])`."""
 
@@ -41,9 +36,15 @@ class Benchmark(ABC, Generic[TaskT]):
     def run_agent(self, task: TaskT, agent: AgentSession, env: Environment) -> None:
         """Drive the agent's turns. A simple benchmark sends one message; complex ones loop."""
 
+    def grader_image(self, task: TaskT) -> str:
+        """The image grade() runs in, attached to the trial's world (sees its workspace, network and processes).
+        Default: the task's own image, i.e. the world's own tools. setup() makes sure it is local."""
+        return task.image
+
     @abstractmethod
-    def grade(self, task: TaskT, env: Environment, transcript: Transcript) -> Score:
-        """Judge the result. Grader prep (copy grader files in, install grader deps) goes first."""
+    def grade(self, task: TaskT, grader: Environment, env: Environment, transcript: Transcript) -> Score:
+        """Judge the result in `grader`, the attached grader (grader files go there; the agent's world never gets
+        them). `env` is the trial's own world, for checks only its own programs can do."""
 
     def version(self) -> str | None:
         """What runs.versions records for the benchmark: a content hash of everything that builds its tasks' images

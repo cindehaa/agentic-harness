@@ -87,7 +87,7 @@ Ownership: Claude drafts everything; you review line by line (claim query, lease
 - **DECIDED (2026-10-29):** `grader_error` is excluded from accuracy and reported prominently (count + list), because a grader crash is more likely a grader/harness problem than the agent's fault; agents destroying the world is rare, and `harness validate` keeps grader errors rare.
 - **DECIDED (2026-10-29):** `error` is renamed `infra_error`; statuses are `graded`, `grader_error`, `infra_error`, `unsupported`.
 - **DECIDED (2026-10-29):** who calls `Benchmark.setup()` in queue mode: the first worker to claim `runs.setup_claimed_by`; trials are claimable only after the run is `running`. The queue lives in `trials`, no jobs table.
-- **DECIDED (2026-10-29):** a failed grader-dependency install (e.g. `apk add` with no network) is infrastructure, not the grader: `GraderSetupError` → `infra_error`, retried (`errors.md`).
+- **DECIDED (2026-10-29):** a failed grader-dependency install (e.g. `apk add` with no network) is infrastructure, not the grader: `GraderSetupError` → `infra_error`, retried (`errors.md`). **Superseded 2026-10-29:** grading runs in an attached grader sidecar with its own image (`environment-and-grading.md` #7); nothing is installed, `GraderSetupError` is gone.
 - **DECIDED (2026-10-29):** threads, not processes, for `--concurrency` (I/O-bound; `database.md` #15).
 **Explain-back:** Why an attempts table? What's in the DB vs on disk, and why? How is accuracy computed when some trials errored? How do two workers never grab the same trial? What bounds concurrency? What happens to a trial whose worker died? Why threads?
 
@@ -98,6 +98,20 @@ Decisions A–H built; findings, decisions and commits: `audit-2026-10-29.md`.
 - **DEFERRED:** `Environment.exec(env=, user=)` parameters: add them with the second agent (Claude Code needs
   `forward_env` injected with `docker exec -e`, and the unprivileged `agent` user from `security.md` needs
   `docker exec -u`). Not needed while mini runs on the host as root.
+
+## Grader sidecar (2026-10-29)
+
+- **DECIDED + built:** general grading via an attached grader sidecar (`environment-and-grading.md` #7):
+  workspace = named volume per trial; `Environment.attach_grader(image)`; `Benchmark.grader_image(task)`;
+  `grade(task, grader, env, transcript)`; grader files only ever in the grader.
+
+## Scale-up design (talking points, not built)
+
+- **Pipelined grading.** After the agent hands back, the trial moves to a `grading` state that a separate
+  grading pool picks up, so agent slots free up while graders run. The trial container must stay alive
+  until it is graded (live-state grading needs it), so containers outlive the agent slot; the queue needs a
+  second claimable state and its own lease. Small gain while graders are fast (bash-operations: ~1 s);
+  worth it for slow graders (long test suites, browser checks).
 
 ## Phase 6 — Hardening
 

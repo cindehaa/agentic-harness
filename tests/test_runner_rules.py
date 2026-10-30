@@ -7,7 +7,7 @@ from collections.abc import Callable
 import pytest
 
 from agentic_harness.agents import Agent, AgentSession, TransientError
-from agentic_harness.benchmarks import Benchmark, GraderSetupError
+from agentic_harness.benchmarks import Benchmark
 from agentic_harness.environments import Environment, EnvironmentLost, EnvironmentState, ExecResult
 from agentic_harness.runner import run_trial
 from agentic_harness.types import Limits, Message, Score, Task, Text
@@ -27,7 +27,10 @@ class FakeEnvironment(Environment):
         self.started = self.stopped = self.killed = False
         self.graders: list[FakeEnvironment] = []
 
-    def start(self): self.started = True
+    def start(self):
+        if self.image == "missing:image":
+            raise EnvironmentLost("no such image")
+        self.started = True
     def stop(self): self.stopped = True
     def state(self): return self.state_now
     def kill_agent_processes(self): self.killed = True
@@ -70,8 +73,8 @@ class OneMessage(Benchmark[Task]):
     def tasks(self): return [TASK]
     def run_agent(self, task, agent, env): agent.send(Message("user", (Text("write ok"),)))
 
-    def grade(self, task, env, transcript):
-        return Score(env.files.get("answer.txt") == b"ok")
+    def grade(self, task, grader, env, transcript):
+        return Score(grader.files.get("answer.txt") == b"ok")
 
 
 class ScriptedAgent(Agent):
@@ -116,6 +119,14 @@ def test_runner_uses_the_injected_factory_and_always_stops(tmp_path):
     outcome, env = run(write_ok, tmp_path)
     assert (outcome.status, outcome.score.value, outcome.score_float) == ("graded", True, 1.0)
     assert env.started and env.killed and env.stopped and env.image == "fake:image"
+
+
+def test_grading_runs_in_an_attached_grader_that_is_stopped(tmp_path):
+    outcome, env = run(write_ok, tmp_path)
+    [grader] = env.graders
+    assert outcome.score.value is True  # the grader saw the trial's workspace
+    assert grader.image == "fake:image" and grader.started and grader.stopped  # default grader_image: the task's
+    assert (grader.lifetime_s, grader.limits) == (env.lifetime_s, env.limits)
 
 
 def test_main_process_killed_during_turn_is_graded_fail(tmp_path):
@@ -179,13 +190,13 @@ def test_which_infra_errors_are_retryable(tmp_path, error, retryable):
     assert (outcome.status, outcome.retryable) == ("infra_error", retryable)
 
 
-def test_grader_setup_failure_and_lost_container_are_retryable(tmp_path):
-    class NoNetwork(OneMessage):
-        def grade(self, task, env, transcript):
-            raise GraderSetupError("apk add failed")
+def test_grader_that_cannot_start_and_lost_container_are_retryable(tmp_path):
+    class MissingGrader(OneMessage):
+        def grader_image(self, task):
+            return "missing:image"
 
-    outcome = run_trial(NoNetwork(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, Factory())
-    assert (outcome.status, outcome.retryable) == ("infra_error", True)
+    outcome = run_trial(MissingGrader(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, Factory())
+    assert (outcome.status, outcome.retryable, outcome.error) == ("infra_error", True, "EnvironmentLost: no such image")
     outcome, _ = run(die(), tmp_path)
     assert (outcome.status, outcome.retryable) == ("infra_error", True)
 

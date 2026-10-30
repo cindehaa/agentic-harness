@@ -55,9 +55,10 @@ class PythonTasks(Benchmark[PythonTask]):
     def run_agent(self, task: PythonTask, agent: AgentSession, env: Environment) -> None:
         agent.send(Message("user", (Text(task.prompt),)))
 
-    def grade(self, task: PythonTask, env: Environment, transcript: Transcript) -> Score:
-        env.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, copied in late
-        r = env.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=GRADE_TIMEOUT)
+    def grade(self, task: PythonTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
+        # The grader runs the task's own image (python + pytest from prepare.py), attached to the agent's workspace
+        grader.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, only in the grader
+        r = grader.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=GRADE_TIMEOUT)
         # grade.py always exits 0, so judge only by its JSON
         try:
             result = json.loads(r.stdout)

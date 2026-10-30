@@ -21,7 +21,9 @@ shared trial container.
   in a root-only prefix; final grading can still install them at grade time.
 - Each adapter declares `agent_user`. Default `"root"` for fidelity
   (Terminal-Bench tasks expect root).
-- **Our two benchmarks:** root + grader files copied in at grade time.
+- **Our two benchmarks:** root; grader files go only into the attached grader sidecar, never into the
+  agent's world (2026-10-29, `environment-and-grading.md` #7). With a sidecar, the permission scheme
+  above is needed only for tools a grader must run inside the world itself.
 - `Environment.exec` gains a `user` parameter when first needed.
 
 ## (b) Credentials

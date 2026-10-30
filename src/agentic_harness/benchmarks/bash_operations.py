@@ -5,12 +5,13 @@ import json
 from dataclasses import dataclass
 
 from agentic_harness.agents.base import AgentSession
-from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError, content_hash
-from agentic_harness.environments import Environment, build_image
+from agentic_harness.benchmarks.base import Benchmark, GraderError, content_hash
+from agentic_harness.environments import Environment, build_image, ensure_image
 from agentic_harness.paths import REPO_ROOT
 from agentic_harness.types import Message, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "bash-operations"
+GRADER_IMAGE = "python:3.11-slim"  # evaluate.py needs python; the agent's world (alpine) has none, and never gets it
 
 
 @dataclass(frozen=True)
@@ -51,19 +52,19 @@ class BashOperations(Benchmark[BashTask]):
         return content_hash(ROOT, DOCKERFILE)
 
     def setup(self, tasks: list[BashTask]) -> None:
+        ensure_image(GRADER_IMAGE)  # pulled now, so grading needs no network
         for t in tasks:
             build_image(DOCKERFILE.format(task_id=t.id, base_image=t.base_image), context=ROOT, tag=t.image)
 
     def run_agent(self, task: BashTask, agent: AgentSession, env: Environment) -> None:
         agent.send(Message("user", (Text(task.problem_statement),)))
 
-    def grade(self, task: BashTask, env: Environment, transcript: Transcript) -> Score:
-        # Grader dependency, installed only after the agent is done. It needs the network: a failure is infra's
-        r = env.exec("apk add --no-cache python3", timeout=300)
-        if r.exit_code != 0:
-            raise GraderSetupError(f"installing python3 failed: {r.stderr}")
-        env.upload(ROOT, "/grader")  # the benchmark's own evaluate.py + dataset.json, copied in late
-        r = env.exec(["python3", "/grader/evaluate.py", "--workspace-dir", "/workspace", "--task", task.id])
+    def grader_image(self, task: BashTask) -> str:
+        return GRADER_IMAGE
+
+    def grade(self, task: BashTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
+        grader.upload(ROOT, "/grader")  # the benchmark's own evaluate.py + dataset.json, only in the grader
+        r = grader.exec(["python", "/grader/evaluate.py", "--workspace-dir", "/workspace", "--task", task.id])
         # evaluate.py exits 1 on a failed task, so judge by its JSON, not its exit code
         try:
             result = json.loads(r.stdout)

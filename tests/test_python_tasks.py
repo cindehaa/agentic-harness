@@ -30,6 +30,12 @@ def images():
     bench.setup(list(TASKS.values()))
 
 
+def grade(task, env):
+    """What the runner does: grade in a grader attached to the trial's world (here the task's own image)."""
+    with env.attach_grader(bench.grader_image(task)) as grader:
+        return bench.grade(task, grader, env, ())
+
+
 class RecordingSession(AgentSession):
     """A fake agent that remembers what it was sent."""
 
@@ -62,7 +68,7 @@ def test_oracle_passes(task_id):
     task = TASKS[task_id]
     with DockerEnvironment(task.image) as env:
         env.write_file("/workspace/solution.py", ORACLES[task_id])
-        score = bench.grade(task, env, ())
+        score = grade(task, env)
     assert score.value is True, score.explanation
 
 
@@ -70,7 +76,8 @@ def test_oracle_passes(task_id):
 def test_untouched_stub_fails(task_id):
     task = TASKS[task_id]
     with DockerEnvironment(task.image) as env:
-        score = bench.grade(task, env, ())
+        score = grade(task, env)
+        assert env.exec("test -e /grader").exit_code != 0  # grade.py lived only in the grader
     assert score.value is False, score.explanation
 
 
@@ -80,7 +87,7 @@ def test_cheater_scores_as_benchmark_says():
     with DockerEnvironment(task.image) as env:
         env.write_file("/workspace/solution.py", "def add():\n    return 5\n")  # wrong
         env.write_file("/workspace/test_solution.py", "def test_ok(): assert True\n")
-        assert bench.grade(task, env, ()).value is True  # faithful: the score is what the benchmark says
+        assert grade(task, env).value is True  # faithful: the score is what the benchmark says
 
 
 def test_world_is_prepared():
@@ -91,8 +98,7 @@ def test_world_is_prepared():
         assert env.exec("test -e /bench").exit_code != 0  # the benchmark's files (incl. grade.py) are not in the world
 
 
-def test_no_leftover_containers():
-    listed = subprocess.run(
-        ["docker", "ps", "-a", "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True
-    ).stdout
-    assert listed == ""
+def test_no_leftover_containers_or_volumes():
+    for cmd in (["ps", "-a"], ["volume", "ls"]):
+        listed = subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+        assert listed == ""

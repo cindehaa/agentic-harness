@@ -40,8 +40,10 @@ flowchart TB
   check -->|"Running"| kill["env.kill_agent_processes()"]
 
   kill --> save["save workspace.tar (size-capped tar via exec); OSError (e.g. workspace deleted) is noted in the trace, not fatal"]
-  save --> grade["benchmark.grade(task, env, transcript)"]
+  save --> gstart["start the attached grader: env.attach_grader(benchmark.grader_image(task)) (shares the world's workspace, network, processes)"]
   save -->|"EnvironmentLost"| recheck
+  gstart -->|"EnvironmentLost (DockerError): grader image missing, docker run fails"| recheck
+  gstart --> grade["benchmark.grade(task, grader, env, transcript); then the grader is stopped, then the world"]
   kill -->|"EnvironmentLost"| recheck
   grade -->|"EnvironmentLost"| recheck{"env.state() again (the agent may have killed PID 1 just before handing back)"}
   recheck -->|"None"| IE3
@@ -49,7 +51,6 @@ flowchart TB
   recheck -->|"exited, exit code 0"| IE3
   recheck -->|"exited, non-zero"| GF
   recheck -->|"Running"| IE3
-  grade -->|"GraderSetupError: installing the grader's deps failed (e.g. apk add, no network)"| IE4["infra_error (grader setup)"]
   grade -->|"GraderError: grader crashed, unparseable output"| GE["grader_error"]
   grade -->|"any other exception"| IE2
   grade -->|"Score"| usable{"json.dumps(value) and score_to_float(score) succeed?"}
@@ -64,7 +65,6 @@ flowchart TB
   IE2 --> final
   IE5 --> retry
   IE3 --> retry
-  IE4 --> retry
   lost --> retry
   retry -->|"yes: back to pending, available_at = now + 5 s x attempt number"| claim
   retry -->|"no"| final["trial ends infra_error"]
@@ -86,7 +86,7 @@ flowchart TB
 
   class G,GF,lg graded
   class GE,lge gradererr
-  class IE1,IE2,IE3,IE4,IE5,lost,final,abort,refuse,lie infraerr
+  class IE1,IE2,IE3,IE5,lost,final,abort,refuse,lie infraerr
   class UN,lun unsupported
   class lpl planned
 ```
@@ -97,7 +97,7 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
 |---|---|---|---|
 | `graded` | yes (its `score_float`) | no | nobody's: the agent's result, including failures it caused (killed its container, hit a limit, context full, model refused) |
 | `grader_error` | no; reported prominently (count + list) | no | most likely the grader or the benchmark adapter |
-| `infra_error` | no | only if `retryable` (2026-10-29 audit): environment lost / Docker errors, network, provider 5xx / overloaded / rate limit, grader-dep install, container lost or lifetime expired, worker lost: up to 3 attempts in total (backoff 5 s × attempt number). Not retried (fail fast, logged as an error): auth / permission, bad request / misconfiguration, any unexpected exception in harness or adapter code; a setup failure | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
+| `infra_error` | no | only if `retryable` (2026-10-29 audit): environment lost / Docker errors, network, provider 5xx / overloaded / rate limit, grader failed to start, container lost or lifetime expired, worker lost: up to 3 attempts in total (backoff 5 s × attempt number). Not retried (fail fast, logged as an error): auth / permission, bad request / misconfiguration, any unexpected exception in harness or adapter code; a setup failure | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
 | `unsupported` | no; reported separately | no | a capability gap: the agent can't take this task's content |
 
 ## Notes
@@ -113,11 +113,12 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   overloaded, 5xx) into `TransientError` (retryable `infra_error`); everything
   else passes through to the runner's catch-all (`infra_error`, not retryable,
   with the traceback).
-- **Grader deps need the network.** bash-operations installs `python3` with
-  `apk` at grade time. If that install fails (e.g. no network) the adapter
-  raises `GraderSetupError` → `infra_error`, retried: the infrastructure
-  failed, not the grader (fix A, 2026-10-29). Phase 6 option B removes the
-  network need (`environment-and-grading.md`, known gaps).
+- **The grader runs in an attached sidecar** (2026-10-29,
+  `environment-and-grading.md` #7) from `Benchmark.grader_image(task)`, pre-pulled in
+  `setup()`. Nothing is installed at grade time, so grading needs no network and
+  `GraderSetupError` is gone (was: `apk add python3` failing → `infra_error`). If the
+  grader can't start, that is `EnvironmentLost` → the world's state is checked again
+  (rule 6), and if the world still runs → `infra_error`, retried.
 - **mini's own retries are left alone.** mini retries failed model calls
   itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
   agent's scaffolding, part of what is measured; we don't change it

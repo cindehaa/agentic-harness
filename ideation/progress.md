@@ -1,9 +1,9 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
+**Now:** General grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
-**Next:** Phase 6: hardening (incl. baking grader deps into the image, option B).
+**Next:** Phase 6: hardening.
 
 Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
 
@@ -24,14 +24,14 @@ flowchart TB
     d_own["Harness owns containers; agents get Environment handle"]
     d_db["Only harness writes DB"]
     d_sleep["Container keep-alive: sleep timeout+margin"]
-    d_same["Grade in same trial container"]
-    d_pre["Pre-grade: kill leftover agent procs, copy grader files late, install grader deps"]
+    d_same["Grade in an attached grader sidecar: shares the trial's workspace volume, network, processes (2026-10-29; was same container)"]
+    d_pre["Pre-grade: kill leftover agent procs, save workspace.tar, start the grader (grader files only in the grader)"]
     d_out["Outcome: graded / grader_error / infra_error / unsupported, infra_error = infra, retried (renamed from error 2026-10-29)"]
     d_score["Score → number: Inspect-style default, per-benchmark override"]
     d_grerr["grader_error excluded from accuracy, reported prominently (count + list); accuracy = mean over graded only (2026-10-29)"]
     d_integ["Integrity = trace + saved workspace (no special mechanism; fidelity-vs-integrity.md)"]
     d_logs["Exec output streamed to host artifacts"]
-    d_deps["Grader deps installed at grade time"]
+    d_deps["Grader tools come from Benchmark.grader_image (pre-pulled in setup); nothing installed at grade time (2026-10-29)"]
     d_turns["Turn model (benchmark-driven turns)"]
     d_iface["Benchmark API locked: tasks / setup / run_agent / grade"]
     d_bake["Setup baked into images (D)"]
@@ -103,7 +103,7 @@ flowchart TB
     worker["harness worker --concurrency N"]
     retry["Retry policy: retry infra_error only"]
     d5_setup["Decided: first worker claims runs.setup_claimed_by, runs setup(), sets run running; trials claimable only then; setup failure → run failed, trials infra_error"]
-    d45["Decided 2026-10-29 (database.md #9–18): run returns id (--wait = inline worker); sqlite3 + handwritten SQL in store.py; BEGIN IMMEDIATE claim; 120 s lease renewed every 30 s; infra_error retried up to 3 attempts; worker threads; events.jsonl → events per turn; secret redaction; GraderSetupError → infra_error"]
+    d45["Decided 2026-10-29 (database.md #9–18): run returns id (--wait = inline worker); sqlite3 + handwritten SQL in store.py; BEGIN IMMEDIATE claim; 120 s lease renewed every 30 s; infra_error retried up to 3 attempts; worker threads; events.jsonl → events per turn; secret redaction; grader that can't start → infra_error"]
   end
 
   subgraph AUD["Architecture audit (2026-10-29, audit-2026-10-29.md)"]

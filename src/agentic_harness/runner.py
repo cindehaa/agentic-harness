@@ -9,7 +9,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from agentic_harness.agents.base import Agent, AgentLimitation, TransientError, Unsupported
-from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
+from agentic_harness.benchmarks.base import Benchmark, GraderError
 from agentic_harness.environments.base import Environment, EnvironmentFactory, EnvironmentLost
 from agentic_harness.recording import EventLog, RecordingEnvironment, RecordingSession, TurnLimit
 from agentic_harness.redact import redact, redact_file
@@ -99,9 +99,10 @@ def _grade(benchmark: Benchmark, task: Task, env: Environment, session: Recordin
     try:
         env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         _save_workspace(env, session)  # the agent's end state, before the grader adds anything
-        score = benchmark.grade(task, env, tuple(session.transcript))
-    except GraderSetupError as e:  # e.g. no network to install the grader's deps: infra, retried
-        return Outcome("infra_error", error=f"GraderSetupError: {e}", retryable=True)
+        # The grader runs beside the world, sharing its workspace, network and processes; stopped before the world.
+        # If it can't start (e.g. its image is missing), that is EnvironmentLost: infra_error, retried.
+        with env.attach_grader(benchmark.grader_image(task)) as grader:
+            score = benchmark.grade(task, grader, env, tuple(session.transcript))
     except GraderError as e:
         return Outcome("grader_error", error=str(e))
     except EnvironmentLost:
