@@ -80,6 +80,7 @@ Per-run limits (stored with the run; defaults shown):
 | `--model` | `$MSWEA_MODEL_NAME` | model for the agent |
 | `--trial-timeout` | 600 | seconds per trial |
 | `--cost-limit` | 1.0 | model spend per trial, USD |
+| `--max-run-cost` | none | budget for the whole run, USD: once spent, no more trials start; the rest end `skipped_budget` (trials in flight finish) |
 | `--max-steps` | 50 | model calls per trial |
 | `--memory` | 2g | memory per container (`docker --memory`) |
 | `--cpus` | 1.0 | CPUs per container (`docker --cpus`) |
@@ -88,50 +89,59 @@ Per-run limits (stored with the run; defaults shown):
 
 ```bash
 harness status                          # active runs + runs finished in the last hour (--all: every run)
-harness status --run_id <run_id>        # one row per trial
-harness results --run_id <run_id> --format summary   # or table, or json (the default)
+harness status --run_id <run_id>        # its spend and elapsed time, then one row per trial with cost and time
+harness results --run_id <run_id>       # summary (the default); --format table or json
 ```
 
-Example output (run ids, the in-progress state and the wall time are illustrative; accuracy, costs and trial times
-are from a real bash-operations run with mini-swe-agent on Claude Haiku 5.5):
+Example output (run ids, the in-progress state, token counts and the time breakdown are illustrative; accuracy,
+costs and trial times are from a real bash-operations run with mini-swe-agent on Claude Haiku 5.5):
 
 ```
 $ harness status
-RUN                   BENCHMARK        AGENT           PROGRESS    STARTED
-20261029-210501-3f2a  bash-operations  mini-swe-agent  3/5 done    2026-10-29 21:05:01
-20261029-210502-9c1e  python-tasks     mini-swe-agent  setting up  2026-10-29 21:05:02
+RUN                   BENCHMARK        AGENT           PROGRESS    SPEND             ELAPSED  STARTED
+20261029-210501-3f2a  bash-operations  mini-swe-agent  3/5 done    $0.0015 of $0.50  31.2s    2026-10-29 21:05:01
+20261029-210502-9c1e  python-tasks     mini-swe-agent  setting up  $0.0000           30.4s    2026-10-29 21:05:02
 
 $ harness status --run_id 20261029-210501-3f2a
-Run 20261029-210501-3f2a: bash-operations · mini-swe-agent (anthropic/claude-haiku-5-5), 2/5 done
+Run 20261029-210501-3f2a: bash-operations · mini-swe-agent (anthropic/claude-haiku-5-5), 2/5 done, $0.0011 of $0.50 spent, 24.0s elapsed
 
-TASK      STATE    OUTCOME  SCORE  ATTEMPTS
-bash-001  done     graded   True   1
-bash-002  done     graded   True   1
-bash-003  running                  2
-bash-004  pending                  0
-bash-005  pending                  0
+TASK      STATE    OUTCOME  SCORE  ATTEMPTS  COST     TIME
+bash-001  done     graded   True   1         $0.0003  6.3s
+bash-002  done     graded   True   1         $0.0005  5.0s
+bash-003  running                  2         $0.0003  4.2s
+bash-004  pending                  0         $0.0000  0.0s
+bash-005  pending                  0         $0.0000  0.0s
 
 $ harness results --run_id 20261029-210501-3f2a --format table
-TASK      OUTCOME  SCORE  COST     TIME  ATTEMPTS
-bash-001  graded   True   $0.0003  6.3s  1
-bash-002  graded   True   $0.0005  5.0s  1
-bash-003  graded   False  $0.0007  9.1s  1
-bash-004  graded   True   $0.0005  7.4s  1
-bash-005  graded   True   $0.0004  7.9s  1
+TASK      OUTCOME  SCORE  COST     TOKENS IN/OUT  AGENT  GRADING  TIME  ATTEMPTS
+bash-001  graded   True   $0.0003  2,310/118      4.9s   0.9s     6.3s  1
+bash-002  graded   True   $0.0005  3,902/201      3.6s   0.9s     5.0s  1
+bash-003  graded   False  $0.0007  5,644/260      7.6s   1.0s     9.1s  1
+bash-004  graded   True   $0.0005  3,870/190      6.0s   0.9s     7.4s  1
+bash-005  graded   True   $0.0004  3,120/164      6.5s   0.9s     7.9s  1
 
-$ harness results --run_id 20261029-210501-3f2a --format summary
+$ harness results --run_id 20261029-210501-3f2a
 bash-operations · mini-swe-agent (anthropic/claude-haiku-5-5)   run 20261029-210501-3f2a
-Accuracy: 0.80 (n=5 graded)
-Excluded: grader_error 0 · infra_error 0 · unsupported 0
-Cost: $0.0025 · Time: 35.8s in trials, 52.0s wall
+Accuracy: 0.80 (n=5 graded, 4 passed)
+Excluded: grader_error 0 · infra_error 0 · unsupported 0 · skipped_budget 0
+Cost: $0.0025 of $0.50 · $0.0005/task · $0.0006/passing task
+Tokens: 18,846 in · 933 out · 17 model calls
+Time per trial (avg): env start 0.5s · agent 5.7s · grading 0.9s
+Run: setup 14.2s · wall 52.0s (first trial start to last end) · queue wait 16.4s total · 5.8 trials/min
 ```
+
+Cost is recorded whatever happens: the agent's spend is saved at the end of every turn, also a turn it crashed or
+timed out in, so failed and interrupted attempts count toward the run's cost and its `--max-run-cost` budget. Each
+attempt stores timestamps at its phase boundaries (queued, claimed, world ready, agent start/end, grading
+start/end, finished); every duration above is derived from them.
 
 Known live results with mini-swe-agent on Haiku 5.5: **bash-operations 0.80** (bash-003 fails because its
 `input.txt` has no trailing newline, so `wc -l` reports 4 lines, not 5; a benchmark quirk we keep as is) and
 **python-tasks 1.00**, about half a cent for both runs together.
 
 `--format json` has everything: the run (versions: harness commit, agent commit, dataset and benchmark hashes,
-model; config: limits), accuracy, the excluded task ids, and every trial with its raw score and all its attempts.
+model; config: limits; budget), accuracy, the excluded task ids, every cost, token and time metric of the summary,
+and every trial with its raw score and all its attempts (spend and phase timestamps included).
 
 Each attempt also leaves files in `runs/<run_id>/<task_id>/attempt-<attempt_id>/`: `events.jsonl` (the
 agent-neutral trace: every message and command), `transcript.json` (the messages), `outcome.json`,
@@ -274,7 +284,7 @@ in [`benchmarks/__init__.py`](src/agentic_harness/benchmarks/__init__.py).
 | `Agent.name`, `Agent.model_env` | yes / no | registry key; the env var holding its default model |
 | `Agent.start(env, artifacts_dir, limits)` | yes | a fresh session that acts only through `env` and stops within `limits` |
 | `AgentSession.send(message)` | yes | give the agent a message, block until it hands back, return its reply |
-| `AgentSession.stats()` | no | exit status, cost, steps for the records |
+| `AgentSession.stats()` | no | exit status, cost, model calls, input/output tokens for the records (also after a crash) |
 | `Agent.preflight()` | no | cheap check at submit and worker start (model known, key set) |
 | `Agent.version()` | no | recorded in `runs.versions` |
 

@@ -10,9 +10,12 @@ writer, so `status` works while workers run). Only the harness writes it.
 ## Tables
 
 ```
-runs(id, benchmark, agent, model, versions json, config json, status, setup_claimed_by, setup_lease_until, created_at, finished_at)
+runs(id, benchmark, agent, model, versions json, config json, max_cost_usd, status, setup_claimed_by, setup_lease_until,
+     setup_started_at, setup_finished_at, created_at, finished_at)
 trials(id, run_id, task_id, state, claimed_by, lease_until, available_at, attempt_count, outcome, score_value json, score_float)
-attempts(id, trial_id, n, outcome, score json, exit_status, error, cost_usd, duration_s, artifacts_dir, started_at, finished_at)
+attempts(id, trial_id, n, outcome, score json, exit_status, error, cost_usd, model_calls, input_tokens, output_tokens,
+         duration_s, artifacts_dir, queued_at, started_at, env_ready_at, agent_start_at, agent_end_at, grade_start_at,
+         grade_end_at, finished_at)
 events(id, attempt_id, seq, turn, kind, payload json, ts)
 workers(id, started_at, heartbeat_at)
 ```
@@ -24,7 +27,8 @@ workers(id, started_at, heartbeat_at)
 - `workers` (2026-10-29 audit, schema version 2): one row per `harness worker` process (`host-pid`), heartbeat every 30 s, deleted on exit. `harness status` ends with a warning, e.g. "3 pending — no worker running; start one with `harness worker`", when trials of unfinished runs are not done and no heartbeat is newer than the 120 s lease (2026-10-29; a running trial counts: its lease lapses with its worker). `done` is final: the claim query only takes `pending`.
 - `runs.setup_lease_until`, `trials.available_at` (added 2026-10-29, #19): the setup claim's lease; the earliest time a re-queued trial may be claimed (retry backoff).
 - A `schema_version` table holds one number. Tables are created with `CREATE TABLE IF NOT EXISTS` on startup; if the stored version differs from the code's, the harness refuses to start and says to delete `runs/harness.db` (no migrations).
-- `trials.outcome` / `attempts.outcome` is one of the four statuses: `graded`, `grader_error`, `infra_error`, `unsupported`.
+- `trials.outcome` / `attempts.outcome` is one of the four statuses: `graded`, `grader_error`, `infra_error`, `unsupported`; a trial's can also be `skipped_budget` (#22; never an attempt's: such a trial has none).
+- **Schema version 4** (2026-10-29, cost + time tracking, #20–23): `attempts` gains the agent's spend (`model_calls`, `input_tokens`, `output_tokens`; `cost_usd` existed) and its phase boundaries (`queued_at`, `env_ready_at`, `agent_start_at`, `agent_end_at`, `grade_start_at`, `grade_end_at`; `started_at` = claimed and `finished_at` came with v3); `runs` gains `max_cost_usd`, `setup_started_at`, `setup_finished_at`. All times are `time.time()`; a phase an attempt never reached stays NULL.
 - No `benchmarks` or `agents` tables: the registries live in code (`BENCHMARKS`, `AGENTS`).
 
 ## Decisions
@@ -56,19 +60,29 @@ workers(id, started_at, heartbeat_at)
 | 19 | Queue correctness (architecture audit, 2026-10-29): (a) **fenced writes**: finishing an attempt or setup, and renewing a lease, only succeed `WHERE claimed_by = me AND attempt_count = my attempt` (setup: `setup_claimed_by = me`); otherwise the worker lost its lease and its result is discarded (logged), never written over the new owner's. (b) The heartbeat retries a renewal that fails with "database is locked" (after `busy_timeout`) instead of letting the lease lapse. (c) A lost worker's attempt counts toward the 3, so a trial that crashes its worker every time ends `infra_error` (no poison trial). (d) Backoff via `trials.available_at`. (e) Setup lease (#13). (f) Each attempt's folder is named by its attempt row id, created at claim time (`runs/<run>/<task>/attempt-<attempt_id>/`), so a retry or a reclaim never reuses one. `outcome.json` / `transcript.json` are written atomically (temp file + rename); files first, then one DB transaction (outcome, remaining events, trial update) is the attempt's commit point | A worker that was only slow (laptop asleep, long GC) must not overwrite the trial another worker now owns; every failure mode ends in a final state | Trusting that a worker that finishes still owns its trial |
 | 18 | `runs.versions` = harness git commit, agent version (`Agent.version()`: mini's submodule commit), benchmark dataset hash (sha256 of every task's fields), benchmark content hash (`Benchmark.version()`: its folder + Dockerfile template, also in its image tags, e.g. `harness-bash-operations:bash-001-<12 hex>`; 2026-10-29 audit), model. `runs.config` = the limits | Enough to reproduce or explain a run | — |
 
+## Cost and time tracking (2026-10-29, schema v4)
+
+| # | Decision | Why | Rejected |
+|---|---|---|---|
+| 20 | Agents report `cost_usd`, `model_calls`, `input_tokens`, `output_tokens` in `AgentSession.stats()` (`AgentStats`). mini: its own `cost` / `n_calls`, tokens summed from litellm's `usage` on each model message. Claude Code: per `claude -p` run, its result event's `usage` and `num_turns` (cost = `total_cost_usd`); a run cut off before its result event (deadline) counts its assistant messages' usage (last event per message id) and is priced from its tokens at litellm's prices (`estimate_cost`). Input tokens include cached prompt tokens (litellm's `prompt_tokens` does; Anthropic's `input_tokens` doesn't, so Claude Code's three counts are added) | One shape for every agent; tokens explain cost differences between models and agents | Pricing tokens ourselves for mini (litellm already does); reading only Claude Code's result event (a run cut off at the deadline would cost $0) |
+| 21 | Spend is always recorded: `RecordingSession.send` reports `stats()` to the worker in a `finally` at every turn's end (also a turn the agent crashed or timed out in), and the worker writes it at once (`Store.record_spend`), then again after the attempt (whatever its outcome, also if interrupted or its claim was lost). Unfenced (an attempt row is that attempt's own; money spent before a lost claim was still spent) and `MAX`ed (an outcome without stats, e.g. "worker interrupted", never erases it) | Money spent is spent: a crash, a timeout or Ctrl-C must not make a run look cheaper, and the budget (#22) needs live spend | Recording cost only with a finished attempt's outcome (a crashed or interrupted attempt's spend was lost) |
+| 22 | Run budget: `harness run --max-run-cost USD` → `runs.max_cost_usd`. The claim query skips a run whose attempts' recorded spend has reached it; whenever spend is recorded or a trial ends, a run over budget has every `pending` trial (a retry in its backoff too) set `done` with outcome `skipped_budget` (no attempt row: it never started), then the run is `done` once nothing is in flight. Trials in flight finish within their own per-trial limit, so a run can overshoot by what they spend. `skipped_budget` is excluded from accuracy and reported like the other excluded outcomes | A clear final state for every trial: the run finishes and says which tasks have no score and why | Leaving them `pending` (the run never finishes); `infra_error` (not infra's fault, not retryable); killing trials in flight (their spend is already sunk, their result would be lost) |
+| 23 | Time: each attempt records phase boundaries: `queued_at` (its trial became claimable: the later of setup done and the retry backoff's end), `started_at` (claimed), `env_ready_at` (world + sidecars up), `agent_start_at` / `agent_end_at` (the benchmark's turns), `grade_start_at` / `grade_end_at` (kill leftovers, save workspace, grader, `grade()`), `finished_at` (outcome recorded). Durations are derived: queue wait = started − queued, env start = env_ready − started, agent, grading, total. Run level: setup = `setup_finished_at − setup_started_at`; wall = first attempt start → last attempt end (now, while running); queue wait summed separately; throughput = trials run / wall minutes. Computed in `metrics.py` from the rows | Timestamps, not durations, so any breakdown can be derived later and they can be checked for order; queue wait from claimable (not submission) so setup time isn't counted twice | Storing durations (can't be re-derived or cross-checked); wall from submission (a run queued for an hour didn't take an hour) |
+
 ## Reading it back
 
 - **`harness status`** (no id): active runs plus runs finished in the last
-  hour (`--all` for every run): `RUN, BENCHMARK, AGENT, PROGRESS, STARTED`;
-  PROGRESS is e.g. `3/5 done`, `setting up`, `queued`, `setup failed`.
-- **`harness status --run_id X`**: one row per trial: `TASK, STATE, OUTCOME, SCORE, ATTEMPTS`.
+  hour (`--all` for every run): `RUN, BENCHMARK, AGENT, PROGRESS, SPEND, ELAPSED, STARTED`;
+  PROGRESS is e.g. `3/5 done`, `3/5 done (budget reached: 2 skipped)`, `setting up`, `queued`, `setup failed`;
+  SPEND is the live spend (recorded at each turn's end), `of $X` with a budget; ELAPSED is since submission.
+- **`harness status --run_id X`**: the run's spend and elapsed time, then one row per trial: `TASK, STATE, OUTCOME, SCORE, ATTEMPTS, COST, TIME` (TIME includes the attempt in flight so far).
 - **`harness results --run_id X --format summary|table|json`** (default `summary`, 2026-10-29):
   - `summary` = benchmark · agent (model); accuracy = mean `score_float` over
-    `graded` trials (n graded); the excluded counts `grader_error · infra_error
-    · unsupported` always shown, even when 0 (with their task ids); cost; time: summed
-    trial time, wall time from the first attempt's start to the last one's end
-    (`attempts.started_at` / `finished_at`, schema v3), and the queue wait before the
-    first attempt started (setup included) shown separately.
-  - `table` = one row per trial: task, outcome, score, cost, time, attempts.
-  - `json` = everything: run (versions, config), trials with raw
-    `score_value`, and their attempts.
+    `graded` trials (n graded, how many passed = full marks); the excluded counts `grader_error · infra_error
+    · unsupported · skipped_budget` always shown, even when 0 (with their task ids); cost (of the budget),
+    cost per task (trials that started) and per passing task; tokens in/out and model calls; average env start,
+    agent and grading time per attempt; setup time, wall time (first attempt start → last end), total queue
+    wait, throughput (#23).
+  - `table` = one row per trial: task, outcome, score, cost, tokens in/out, agent time, grading time, total time, attempts.
+  - `json` = everything: run (versions, config, budget), every metric of the summary, trials with raw
+    `score_value`, and their attempts with every timestamp.

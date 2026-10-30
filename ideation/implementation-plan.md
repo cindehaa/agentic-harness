@@ -137,8 +137,9 @@ Decisions and survey: `action-space.md`.
 - `kill_agent_processes` repeats its `/proc` pass (fork loops); workspace volume removal retried, leftovers logged.
 - `harness status` warns when trials wait and no worker is running.
 - Break-it cases covered by tests: bad image name, grader crash, fork loop, container killed from inside, worker killed (lease) or interrupted (signal).
+- Cost + time tracking (schema v4, `database.md` #20–23): tokens / model calls / cost per attempt, always recorded (error, timeout, interrupt); phase timestamps; `harness run --max-run-cost` (`skipped_budget`); `status` live spend + elapsed; `results` cost per (passing) task, tokens, time breakdown, throughput.
 
-**Not done:** per-trial token tracking (cost is tracked), `harness cancel`, a Docker daemon restart mid-run (untested; containers then read as gone → retryable `infra_error`).
+**Not done:** `harness cancel`, a Docker daemon restart mid-run (untested; containers then read as gone → retryable `infra_error`).
 
 ## Phase 7 — Extensions (pick by time left)
 
