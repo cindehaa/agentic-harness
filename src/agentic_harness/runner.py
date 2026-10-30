@@ -10,7 +10,7 @@ from pathlib import Path
 
 from agentic_harness.agents.base import Agent, AgentLimitation, TransientError, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError
-from agentic_harness.environments.base import Environment, EnvironmentFactory, EnvironmentLost
+from agentic_harness.environments.base import EndReason, Environment, EnvironmentFactory, EnvironmentLost
 from agentic_harness.recording import EventLog, RecordingEnvironment, RecordingSession, TurnLimit
 from agentic_harness.redact import redact, redact_file
 from agentic_harness.types import Limits, Outcome, Score, Task
@@ -87,11 +87,15 @@ def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
         return Outcome("infra_error", error="container lost: gone, or Docker unreachable", retryable=True)
     if state.running:
         return None
-    if state.exit_code == 0 and not state.oom_killed:  # the keep-alive ended on its own: its lifetime ran out, ours
+    if state.end_reason is EndReason.KILLED:  # something inside ended it: the agent's doing
+        why = "container died during agent turn"
+    elif state.end_reason is EndReason.RESOURCE_LIMIT:  # over limits we set (Limits): the agent's doing
+        why = "container exceeded its resource limits during agent turn"
+    elif state.end_reason is EndReason.EXPIRED:  # its lifetime ran out: we sized it, so ours
         return Outcome("infra_error", error="container lifetime expired", retryable=True)
-    # killed from inside, or over the memory limit we set (Limits.memory): the agent's doing
-    why = "container ran out of memory during agent turn" if state.oom_killed else "container died during agent turn"
-    score = Score(False, why, {"state": asdict(state)})
+    else:  # UNKNOWN: the backend can't tell, so the agent isn't blamed
+        return Outcome("infra_error", error="container ended for an unknown reason", retryable=True)
+    score = Score(False, why, {"end_reason": state.end_reason.value})
     return Outcome("graded", score, 0.0)  # decided by the harness, not the grader: 0 whatever the benchmark's scale
 
 

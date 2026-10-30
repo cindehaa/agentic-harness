@@ -8,7 +8,7 @@ import pytest
 
 from agentic_harness.agents import Agent, AgentSession, TransientError
 from agentic_harness.benchmarks import Benchmark
-from agentic_harness.environments import Environment, EnvironmentLost, EnvironmentState, ExecResult
+from agentic_harness.environments import EndReason, Environment, EnvironmentLost, EnvironmentState, ExecResult
 from agentic_harness.runner import run_trial
 from agentic_harness.types import Limits, Message, Score, Task, Text
 
@@ -22,7 +22,7 @@ class FakeEnvironment(Environment):
         super().__init__(image)
         self.lifetime_s, self.limits = lifetime_s, limits
         self.files: dict[str, bytes] = {}
-        self.state_now: EnvironmentState | None = EnvironmentState(running=True, exit_code=0, oom_killed=False)
+        self.state_now: EnvironmentState | None = EnvironmentState(running=True)
         self.lose_on_exec = False
         self.started = self.stopped = self.killed = False
         self.graders: list[FakeEnvironment] = []
@@ -102,9 +102,11 @@ def fake(env: Environment) -> FakeEnvironment:
     return env.env  # the agent is handed a RecordingEnvironment; the fake is behind it
 
 
-def die(**state) -> Callable[[Environment], None]:
+def die(reason: EndReason | None = None) -> Callable[[Environment], None]:
+    """The world ends during the agent's turn for `reason`; None: it vanishes (state() is None)."""
+
     def act(env: Environment) -> None:
-        fake(env).state_now = EnvironmentState(**state) if state else None
+        fake(env).state_now = EnvironmentState(running=False, end_reason=reason) if reason else None
 
     return act
 
@@ -130,7 +132,7 @@ def test_grading_runs_in_an_attached_grader_that_is_stopped(tmp_path):
 
 
 def test_main_process_killed_during_turn_is_graded_fail(tmp_path):
-    outcome, env = run(die(running=False, exit_code=137, oom_killed=False), tmp_path)
+    outcome, env = run(die(EndReason.KILLED), tmp_path)
     assert (outcome.status, outcome.score.value, outcome.score.explanation) == ("graded", False, "container died during agent turn")
     assert not env.killed  # nothing graded: the world is gone
 
@@ -150,8 +152,8 @@ def test_environment_lost_while_still_running_is_infra_error(tmp_path):
 
 
 def test_keep_alive_ending_normally_is_infra_error(tmp_path):
-    # exit code 0: the keep-alive's lifetime ran out, the harness sized it too short; not the agent's doing
-    outcome, _ = run(die(running=False, exit_code=0, oom_killed=False), tmp_path)
+    # the keep-alive's lifetime ran out, the harness sized it too short; not the agent's doing
+    outcome, _ = run(die(EndReason.EXPIRED), tmp_path)
     assert (outcome.status, outcome.error) == ("infra_error", "container lifetime expired")
 
 
@@ -161,9 +163,15 @@ def test_container_lifetime_is_several_times_the_trial_timeout(tmp_path):
 
 
 def test_out_of_memory_under_our_limit_is_graded_fail(tmp_path):
-    outcome, _ = run(die(running=False, exit_code=137, oom_killed=True), tmp_path)
+    outcome, _ = run(die(EndReason.RESOURCE_LIMIT), tmp_path)
     assert (outcome.status, outcome.score.value) == ("graded", False)
-    assert outcome.score.explanation == "container ran out of memory during agent turn"
+    assert outcome.score.explanation == "container exceeded its resource limits during agent turn"
+    assert outcome.score.metadata == {"end_reason": "resource_limit"}  # JSON, for the attempts row
+
+
+def test_world_that_ended_for_an_unknown_reason_is_infra_error(tmp_path):
+    outcome, _ = run(die(EndReason.UNKNOWN), tmp_path)
+    assert (outcome.status, outcome.retryable, outcome.error) == ("infra_error", True, "container ended for an unknown reason")
 
 
 def test_limits_reach_the_environment(tmp_path):
@@ -220,7 +228,7 @@ def test_harness_decided_failure_scores_0_without_asking_the_benchmark(tmp_path)
         def score_to_float(self, score):
             raise AssertionError("not for a failure the harness decided")
 
-    outcome = run_trial(OddScale(), ScriptedAgent(die(running=False, exit_code=137, oom_killed=False)), TASK, Limits(), tmp_path, Factory())
+    outcome = run_trial(OddScale(), ScriptedAgent(die(EndReason.KILLED)), TASK, Limits(), tmp_path, Factory())
     assert (outcome.status, outcome.score_float) == ("graded", 0.0)
 
 

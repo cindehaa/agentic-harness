@@ -6,7 +6,7 @@ A living doc: every place a trial can fail, and which outcome it ends in.
 Conditions are the code's own (`runner.py`, `worker.py`, `store.py`,
 `agents/mini_swe_agent.py`, `environments/docker.py`). The runner sees only the `Environment`
 port: `EnvironmentLost` (Docker raises its subclass `DockerError`) and `env.state()`
-(`EnvironmentState`: running, exit code, OOM-killed; None = gone). Outcome statuses: `task-input.md` → Outcome model.
+(`EnvironmentState`: running + `EndReason` once ended: EXPIRED / RESOURCE_LIMIT / KILLED / UNKNOWN; None = gone; the backend translates its own evidence, Docker: `_end_reason()`). Outcome statuses: `task-input.md` → Outcome model.
 Update this whenever error handling changes.
 
 ```mermaid
@@ -33,9 +33,10 @@ flowchart TB
 
   check{"after the turn: env.state() (Docker: docker inspect)"}
   check -->|"None (vanished, Docker unreachable)"| IE3
-  check -->|"exited, OOMKilled: over our --memory limit (Limits.memory, 2g)"| GF
-  check -->|"exited, exit code 0, not OOMKilled: the keep-alive's lifetime (3 x trial timeout + 600 s) ran out"| IE3
-  check -->|"exited, non-zero exit code: something inside killed the main process"| GF
+  check -->|"RESOURCE_LIMIT: over limits we set (Docker: OOMKilled under --memory, Limits.memory 2g)"| GF
+  check -->|"EXPIRED: the keep-alive's lifetime (3 x trial timeout + 600 s) ran out (Docker: exited 0, not OOMKilled)"| IE3
+  check -->|"KILLED: something inside ended the main process (Docker: exited non-zero)"| GF
+  check -->|"UNKNOWN: the backend can't tell (Docker: Status not exited, e.g. dead)"| IE3
   check -->|"Running, but the turn raised EnvironmentLost"| IE3
   check -->|"Running"| kill["env.kill_agent_processes()"]
 
@@ -47,9 +48,8 @@ flowchart TB
   kill -->|"EnvironmentLost"| recheck
   grade -->|"EnvironmentLost"| recheck{"env.state() again (the agent may have killed PID 1 just before handing back)"}
   recheck -->|"None"| IE3
-  recheck -->|"exited, OOMKilled"| GF
-  recheck -->|"exited, exit code 0"| IE3
-  recheck -->|"exited, non-zero"| GF
+  recheck -->|"RESOURCE_LIMIT, KILLED"| GF
+  recheck -->|"EXPIRED, UNKNOWN"| IE3
   recheck -->|"Running"| IE3
   grade -->|"GraderError: grader crashed, unparseable output"| GE["grader_error"]
   grade -->|"any other exception"| IE2
@@ -57,7 +57,7 @@ flowchart TB
   usable -->|"no: TypeError, ValueError"| GE
   usable -->|"yes"| G["graded (its score)"]
 
-  GF["graded: Score(False, container died / ran out of memory during agent turn), score_float 0"]
+  GF["graded: Score(False, container died / exceeded its resource limits during agent turn), score_float 0"]
   IE1["infra_error"]
   IE3["infra_error (container lost)"]
 

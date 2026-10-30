@@ -17,10 +17,14 @@
 
 ### Rule 6: container died during the agent's turn
 
+Since 2026-10-29 the runner reads only `EnvironmentState.end_reason` (`environment.md` #8); `DockerEnvironment`
+turns the `docker inspect` evidence below into `EndReason` (`RESOURCE_LIMIT`, `EXPIRED`, `KILLED`; a `Status` other
+than `exited` → `UNKNOWN` → `infra_error`).
+
 | Evidence from `docker inspect` | Outcome |
 |---|---|
 | Docker unreachable, or container vanished | `infra_error` |
-| `OOMKilled: true` | `graded`, failed ("container ran out of memory during agent turn"): every container has our `--memory` limit (`Limits.memory`, default 2g), so going over it is the agent's doing (2026-10-29 audit; was `infra_error` while there was no limit) |
+| `OOMKilled: true` | `graded`, failed ("container exceeded its resource limits during agent turn"; was "ran out of memory"): every container has our `--memory` limit (`Limits.memory`, default 2g), so going over it is the agent's doing (2026-10-29 audit; was `infra_error` while there was no limit) |
 | Exited with code 0: the keep-alive `sleep` ended on its own, i.e. its lifetime ran out (2026-10-29 audit) | `infra_error` (we sized it) |
 | Exited with a non-zero code (a process inside killed the main process) | `graded`, failed ("container died during agent turn") |
 | Container died before the agent's turn | `infra_error` |

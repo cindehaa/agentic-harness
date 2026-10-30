@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Self
 
@@ -26,13 +27,21 @@ class EnvironmentLost(RuntimeError):
     agent can cause."""
 
 
+class EndReason(Enum):
+    """Why a world ended, in the runner's terms. Each backend translates its own evidence (Docker: exit code, OOM)."""
+
+    EXPIRED = "expired"  # its lifetime ran out: ours to size -> infra_error, retried
+    RESOURCE_LIMIT = "resource_limit"  # it exceeded limits WE set (memory, pids, ...) -> graded fail
+    KILLED = "killed"  # something inside ended it -> graded fail
+    UNKNOWN = "unknown"  # the backend can't tell -> infra_error
+
+
 @dataclass(frozen=True)
 class EnvironmentState:
-    """Whether the world is still up, and if not, how its main process ended (the runner's container-death rule)."""
+    """Whether the world is still up, and if not, why it ended (the runner's container-death rule)."""
 
     running: bool
-    exit_code: int  # of the main process, once it has exited
-    oom_killed: bool  # the backend killed it for using more memory than allowed
+    end_reason: EndReason | None = None  # set once it has ended
 
 
 class Environment(ABC):

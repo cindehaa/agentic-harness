@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from agentic_harness.environments import DockerEnvironment, EnvironmentLost, EnvironmentState
-from agentic_harness.environments.docker import MAX_OUTPUT, DockerError
+from agentic_harness.environments import DockerEnvironment, EndReason, EnvironmentLost, EnvironmentState
+from agentic_harness.environments.docker import MAX_OUTPUT, DockerError, _end_reason
 from agentic_harness.types import Limits
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
@@ -187,7 +187,7 @@ def test_container_is_gone_after_stop():
 
 
 def test_state_of_running_container(env):
-    assert env.state() == EnvironmentState(running=True, exit_code=0, oom_killed=False)
+    assert env.state() == EnvironmentState(running=True)
 
 
 def test_state_after_main_process_dies():
@@ -195,7 +195,17 @@ def test_state_after_main_process_dies():
         env.exec("kill 1")  # the init forwards SIGTERM to the sleep; the container exits but is kept (no --rm)
         time.sleep(1)
         state = env.state()
-    assert not state.running and state.exit_code != 0 and not state.oom_killed
+    assert state == EnvironmentState(running=False, end_reason=EndReason.KILLED)  # exit code non-zero
+
+
+@pytest.mark.parametrize("status, exit_code, oom_killed, reason", [
+    ("exited", 0, False, EndReason.EXPIRED),  # the keep-alive sleep ran its course
+    ("exited", 143, False, EndReason.KILLED),  # e.g. `kill 1`: the init forwards the signal to the sleep
+    ("exited", 137, True, EndReason.RESOURCE_LIMIT),  # over our --memory
+    ("dead", 0, False, EndReason.UNKNOWN),  # Docker failed to stop or remove it
+])
+def test_docker_evidence_becomes_an_end_reason(status, exit_code, oom_killed, reason):
+    assert _end_reason({"Status": status, "ExitCode": exit_code, "OOMKilled": oom_killed}) is reason
 
 
 def test_state_after_removal_is_none():
@@ -221,7 +231,7 @@ def test_state_after_lifetime_expires_is_exit_code_0():
     with DockerEnvironment(IMAGE, lifetime_s=1) as env:
         while env.state().running:
             time.sleep(0.2)
-        assert env.state().exit_code == 0  # how the runner tells "lifetime ran out" from "killed"
+        assert env.state().end_reason is EndReason.EXPIRED  # the sleep exited 0: not "killed"
 
 
 def test_resource_limits_are_applied():

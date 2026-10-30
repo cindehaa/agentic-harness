@@ -5,9 +5,11 @@ injected by the worker), and `build_image(dockerfile, context, tag)` + `ensure_i
 setup() makes or pulls the images its tasks and graders name: the image port). Docker is today's only adapter.
 """
 
-from agentic_harness.environments.base import Environment, EnvironmentFactory, EnvironmentLost, EnvironmentState, ExecResult
+from agentic_harness.environments.base import (
+    EndReason, Environment, EnvironmentFactory, EnvironmentLost, EnvironmentState, ExecResult,
+)
 from agentic_harness.environments.docker import DockerEnvironment, build_image, ensure_image
 
 __all__ = [
-    "DockerEnvironment", "Environment", "EnvironmentFactory", "EnvironmentLost", "EnvironmentState", "ExecResult", "build_image", "ensure_image",
+    "DockerEnvironment", "EndReason", "Environment", "EnvironmentFactory", "EnvironmentLost", "EnvironmentState", "ExecResult", "build_image", "ensure_image",
 ]

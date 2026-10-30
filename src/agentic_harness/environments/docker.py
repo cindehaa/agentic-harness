@@ -8,7 +8,9 @@ import uuid
 from pathlib import Path
 from typing import IO
 
-from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, EnvironmentLost, EnvironmentState, ExecResult
+from agentic_harness.environments.base import (
+    DEFAULT_TIMEOUT, EndReason, Environment, EnvironmentLost, EnvironmentState, ExecResult,
+)
 from agentic_harness.types import Limits
 
 START_TIMEOUT = 600.0  # seconds; generous because the first run may pull the image
@@ -128,7 +130,9 @@ class DockerEnvironment(Environment):
         if result.returncode != 0:
             return None
         state = json.loads(result.stdout)
-        return EnvironmentState(running=state["Running"], exit_code=state["ExitCode"], oom_killed=state["OOMKilled"])
+        if state["Running"]:
+            return EnvironmentState(running=True)
+        return EnvironmentState(running=False, end_reason=_end_reason(state))
 
     def kill_agent_processes(self) -> None:
         """Kill every process the agent left running, before grading: all except PID 1 (the init) and its `sleep`.
@@ -219,6 +223,16 @@ class DockerEnvironment(Environment):
 def build_image(dockerfile: str, context: Path, tag: str) -> None:
     """Build `tag` from Dockerfile text (sent on stdin) with `context` as the build folder."""
     _docker("build", "-t", tag, "-f", "-", str(context), input=dockerfile.encode(), timeout=BUILD_TIMEOUT)
+
+
+def _end_reason(state: dict) -> EndReason:
+    """Docker's evidence in the runner's terms. The main process is our `sleep`: it exits 0 only when its lifetime
+    runs out; a signal (e.g. `kill 1`, forwarded by the init) makes the exit code non-zero."""
+    if state["Status"] != "exited":  # e.g. "dead" (Docker failed to stop or remove it): not the agent's doing
+        return EndReason.UNKNOWN
+    if state["OOMKilled"]:  # over our --memory limit
+        return EndReason.RESOURCE_LIMIT
+    return EndReason.EXPIRED if state["ExitCode"] == 0 else EndReason.KILLED
 
 
 def ensure_image(image: str) -> None:
