@@ -17,6 +17,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "mini-swe-agent" },
+    { name = "python-dotenv" },
 ]
 
 [package.dev-dependencies]
@@ -28,6 +29,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "mini-swe-agent", editable = "agents/mini-swe-agent" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
 ]
 
 [package.metadata.requires-dev]

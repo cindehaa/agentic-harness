@@ -181,7 +181,7 @@ def test_live_solves_bash_001(tmp_path):
     task = next(t for t in bench.tasks() if t.id == "bash-001")
     bench.setup([task])
     with DockerEnvironment(task.image) as env:
-        session = MiniSweAgent().start(env, tmp_path, Limits())
+        session = MiniSweAgent(os.environ["MSWEA_MODEL_NAME"]).start(env, tmp_path, Limits())
         bench.run_agent(task, session, env)
         score = bench.grade(task, env, ())
     print(f"live cost: ${session.cost_usd:.4f}, steps: {session.steps}, exit: {session.exit_status}")

@@ -6,6 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from agentic_harness import cli as cli_module
+from agentic_harness.agents import AGENTS, Agent, PreflightError
 from agentic_harness.cli import cli
 from agentic_harness.store import Store
 from agentic_harness.types import Outcome, Score
@@ -88,3 +89,50 @@ def test_results_json_has_everything(store):
 def test_unknown_run_is_an_error(store):
     result = CliRunner().invoke(cli, ["results", "--run_id", "nope"])
     assert result.exit_code != 0 and "no run 'nope'" in result.output
+
+
+class FakeAgent(Agent):
+    name = "fake"
+    model_env = "FAKE_MODEL"
+
+    def start(self, env, artifacts_dir, limits):
+        raise NotImplementedError  # never run here
+
+
+class NoKeyAgent(FakeAgent):
+    name = "no-key"
+
+    def preflight(self):
+        raise PreflightError("needs FAKE_API_KEY")
+
+
+@pytest.fixture
+def agents(monkeypatch):
+    for agent in (FakeAgent, NoKeyAgent):
+        monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")
+    monkeypatch.setenv("FAKE_MODEL", "fake/model-1")
+
+
+def submit(*args: str):
+    return CliRunner().invoke(cli, ["run", "--benchmark", "bash-operations", "--task_ids", "bash-001", *args])
+
+
+def test_run_resolves_the_model_at_submit_and_stores_the_limits(store, agents):
+    result = submit("--agent", "fake", "--trial-timeout", "30", "--cost-limit", "0.5", "--max-steps", "7", "--memory", "1g", "--cpus", "2")
+    assert result.exit_code == 0, result.output
+    run = store.run(result.output.split()[2].rstrip(":"))
+    assert run["model"] == "fake/model-1"  # from FAKE_MODEL, now fixed for the run
+    limits = json.loads(run["config"])["limits"]
+    assert (limits["trial_timeout_s"], limits["cost_usd"], limits["max_steps"], limits["memory"], limits["cpus"]) == (30, 0.5, 7, "1g", 2)
+
+
+def test_run_without_a_model_fails_clearly(store, agents, monkeypatch):
+    monkeypatch.delenv("FAKE_MODEL")
+    result = submit("--agent", "fake")
+    assert result.exit_code != 0 and "no model: pass --model or set FAKE_MODEL in .env" in result.output
+
+
+def test_run_whose_preflight_fails_submits_nothing(store, agents):
+    result = submit("--agent", "no-key")
+    assert result.exit_code != 0 and "pre-flight check failed, nothing submitted: needs FAKE_API_KEY" in result.output
+    assert [r["id"] for r in store.runs()] == ["run-a"]

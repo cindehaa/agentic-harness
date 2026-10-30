@@ -48,6 +48,10 @@ class Agent(ABC):
     """An agent the harness can run. One instance per run; start() gives each trial a fresh session."""
 
     name: ClassVar[str]  # registry key, e.g. "mini-swe-agent"
+    model_env: ClassVar[str | None] = None  # the environment variable with its default model, e.g. MSWEA_MODEL_NAME
+
+    def __init__(self, model: str) -> None:
+        self.model = model  # resolved once, when the run is submitted (runs.model); adapters never look it up again
 
     @abstractmethod
     def start(self, env: Environment, artifacts_dir: Path, limits: Limits) -> AgentSession:

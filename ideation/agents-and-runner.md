@@ -54,6 +54,18 @@ for a future `harness cleanup`.
 - **Trace on disk (Phase 4+5):** the recording session appends each event to `events.jsonl` (redacted) as it happens and calls the worker after each turn, which loads the file into the `events` table; `outcome.json` / `transcript.json` are written atomically and redacted, and every file in the attempt folder (e.g. mini's `trajectory.json`) is redacted after the trial.
 - **Score checks:** a non-JSON `Score.value`, or one `score_to_float` can't convert → `grader_error`.
 
+## Config (2026-10-29 audit)
+
+- The CLI loads the repo `.env` at entry (`python-dotenv`; variables already set in the shell win), so mini's
+  settings and API keys need no `set -a; . ./.env`.
+- The model is resolved once, at submit: `--model`, else the agent's `model_env` variable (`MSWEA_MODEL_NAME` for
+  mini), and stored in `runs.model`. Workers build the agent from that; adapters never read `os.environ` for it.
+  No model → a clear CLI error, nothing submitted.
+- `Agent.preflight()` (mini: litellm knows the model, its provider's key is set; no tokens spent) runs at submit and
+  when a worker starts, before it claims anything (`errors.md`).
+- `harness run` flags for the limits: `--trial-timeout` (600 s), `--cost-limit` ($1), `--max-steps` (50),
+  `--memory` (2g), `--cpus` (1.0); stored in `runs.config`. `--concurrency` stays on `harness worker` and `run --wait`.
+
 ## mini's own retry policy is left alone (2026-10-29)
 
 mini retries failed model calls itself (e.g. `ContentPolicyViolationError` up

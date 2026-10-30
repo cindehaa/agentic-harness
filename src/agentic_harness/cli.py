@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import time
 import uuid
@@ -10,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import click
+from dotenv import load_dotenv
 
 from agentic_harness import worker as worker_module
 from agentic_harness.agents import PreflightError, resolve_agent
@@ -22,7 +24,7 @@ from agentic_harness.types import Limits, Task
 @click.group()
 def cli():
     """Agentic Harness"""
-    pass
+    load_dotenv(REPO_ROOT / ".env")  # API keys and default models; variables already set in the shell win
 
 
 @cli.command()
@@ -44,11 +46,17 @@ def cli():
 @click.option(
     "--model",
     default=None,
-    help="Model for the agent (default: MSWEA_MODEL_NAME)",
+    help="Model for the agent (default: the agent's setting in .env, e.g. MSWEA_MODEL_NAME)",
 )
 @click.option("--wait", is_flag=True, help="Run the trials here (an inline worker) and print the results")
 @click.option("--concurrency", default=1, show_default=True, help="With --wait: trials run at the same time")
-def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int):
+@click.option("--trial-timeout", default=Limits().trial_timeout_s, show_default=True, help="Seconds per trial")
+@click.option("--cost-limit", default=Limits().cost_usd, show_default=True, help="Model spend per trial, USD")
+@click.option("--max-steps", default=Limits().max_steps, show_default=True, help="Model calls per trial")
+@click.option("--memory", default=Limits().memory, show_default=True, help="Memory per container (docker --memory)")
+@click.option("--cpus", default=Limits().cpus, show_default=True, help="CPUs per container (docker --cpus)")
+def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int,
+        trial_timeout: float, cost_limit: float, max_steps: int, memory: str, cpus: float):
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
     if benchmark not in BENCHMARKS:
         raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
@@ -57,7 +65,16 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
     except ValueError as e:
         raise click.BadParameter(str(e), param_hint="--agent") from None
     bench = BENCHMARKS[benchmark]()
+    model = model or (agent_class.model_env and os.environ.get(agent_class.model_env))  # resolved now, stored in runs.model
+    if not model:
+        hint = f" or set {agent_class.model_env} in .env" if agent_class.model_env else ""
+        raise click.BadParameter(f"no model: pass --model{hint}", param_hint="--model")
     the_agent = agent_class(model)
+    try:
+        the_agent.preflight()
+    except PreflightError as e:
+        raise click.ClickException(f"pre-flight check failed, nothing submitted: {e}") from None
+    limits = Limits(trial_timeout_s=trial_timeout, cost_usd=cost_limit, max_steps=max_steps, memory=memory, cpus=cpus)
     tasks = _select(bench.tasks(), task_ids)
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     versions = {
@@ -67,7 +84,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
         "model": the_agent.model,
     }
     store = _store()
-    store.create_run(run_id, benchmark, the_agent.name, the_agent.model, versions, {"limits": asdict(Limits())},
+    store.create_run(run_id, benchmark, the_agent.name, the_agent.model, versions, {"limits": asdict(limits)},
                      [t.id for t in tasks])
     click.echo(f"Submitted run {run_id}: {the_agent.name} ({the_agent.model}) on {benchmark}, {len(tasks)} task(s)")
     if not wait:

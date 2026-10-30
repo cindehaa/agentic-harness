@@ -134,9 +134,7 @@ class MiniSweSession(AgentSession):
 
 class MiniSweAgent(Agent):
     name = "mini-swe-agent"
-
-    def __init__(self, model: str | None = None) -> None:
-        self.model = model or os.environ["MSWEA_MODEL_NAME"]
+    model_env = "MSWEA_MODEL_NAME"  # mini's own setting, in .env
 
     def preflight(self) -> None:
         """The model is one litellm knows, and its provider's API key is set. No auth call: that would spend tokens."""
