@@ -18,18 +18,24 @@ flowchart TB
   preflight -->|"PreflightError"| refuse["worker refuses to start, names the run; nothing claimed"]
   preflight --> setup
   setup --> claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
-  claim --> startenv["run_trial: env_factory(image, lifetime_s, limits).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
+  claim --> caps{"run_trial: agent.capabilities.missing(benchmark.requirements(task)): content types, multi-turn, MCP"}
+  caps -->|"a gap (e.g. mini on a task with MCP servers)"| UN
+  caps --> prep["agent.prepare_image(task.image): Claude Code builds its cached derived image"]
+  prep -->|"DockerError (build failed, Docker down)"| IE1
+  prep --> startenv["env_factory(image, lifetime_s, limits).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
   claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
   startenv -->|"EnvironmentLost (DockerError): missing image, docker run fails, Docker down"| IE1
-  startenv --> turns["benchmark.run_agent(task, session, env)"]
+  startenv --> mcp["start each of benchmark.mcp_servers(task) as a network-only sidecar; ready = port LISTEN"]
+  mcp -->|"EnvironmentLost: image missing, not listening within 60 s (error has its logs)"| IE1
+  mcp --> turns["benchmark.run_agent(task, session, env)"]
 
   turns -->|"Unsupported: content the agent can't read, e.g. a File"| UN["unsupported"]
-  turns -->|"returns: mini exit Submitted, LimitsExceeded (steps, cost), TimeLimit"| check
+  turns -->|"returns: mini exit Submitted, LimitsExceeded (steps, cost), TimeLimit; Claude Code exit success, error_max_turns, error_max_budget_usd, TimeLimit (exec timeout: claude killed inside)"| check
   turns -->|"TurnLimit: more than max_turns messages"| check
-  turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError"| check
+  turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError; Claude Code prompt_too_long, refusal"| check
   turns -->|"EnvironmentLost"| check
-  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
-  turns -->|"any other exception: auth, permission, bad request, adapter or benchmark bug"| IE2["infra_error, NOT retryable: fails fast, logged as an error (traceback saved)"]
+  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries; Claude Code rate_limit, server_error, overloaded, HTTP 408/429/5xx/529 after its own retries), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
+  turns -->|"any other exception: auth, permission, bad request, adapter or benchmark bug; ClaudeCodeError (authentication_failed, billing_error, model_not_found, invalid_request, no result event, claude never ran)"| IE2["infra_error, NOT retryable: fails fast, logged as an error (traceback saved)"]
 
   check{"after the turn: env.state() (Docker: docker inspect)"}
   check -->|"None (vanished, Docker unreachable)"| IE3
@@ -98,7 +104,7 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
 | `graded` | yes (its `score_float`) | no | nobody's: the agent's result, including failures it caused (killed its container, hit a limit, context full, model refused) |
 | `grader_error` | no; reported prominently (count + list) | no | most likely the grader or the benchmark adapter |
 | `infra_error` | no | only if `retryable` (2026-10-29 audit): environment lost / Docker errors, network, provider 5xx / overloaded / rate limit, grader failed to start, container lost or lifetime expired, worker lost: up to 3 attempts in total (backoff 5 s × attempt number). Not retried (fail fast, logged as an error): auth / permission, bad request / misconfiguration, any unexpected exception in harness or adapter code; a setup failure | ours: harness, Docker, or our model-provider setup (key, quota, outage) |
-| `unsupported` | no; reported separately | no | a capability gap: the agent can't take this task's content |
+| `unsupported` | no; reported separately | no | a capability gap: `AgentCapabilities` vs `Benchmark.requirements(task)` (content types, multi-turn, MCP), checked once before the world starts; or the agent raised `Unsupported` for a message it can't read |
 
 ## Notes
 
@@ -119,6 +125,10 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   `GraderSetupError` is gone (was: `apk add python3` failing → `infra_error`). If the
   grader can't start, that is `EnvironmentLost` → the world's state is checked again
   (rule 6), and if the world still runs → `infra_error`, retried.
+- **Claude Code's errors** (2026-10-29, `action-space.md` #9) come from its stream-json: the result event's
+  `terminal_reason: api_error` and the failed message's `error` kind, classified like mini's litellm errors. Its own
+  model-call retries are left alone too. The trace it produced before failing is still written
+  (`AgentSession.new_events`, read in a `finally`).
 - **mini's own retries are left alone.** mini retries failed model calls
   itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
   agent's scaffolding, part of what is measured; we don't change it

@@ -1,7 +1,7 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** General grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
+**Now:** Action space + MCP + Claude Code built (2026-10-29, [`action-space.md`](action-space.md)): one `AgentCapabilities` check in the runner, MCP servers as network-only attached sidecars (`Benchmark.mcp_servers`, `Environment.attach(Sidecar)`), `exec(env=, user=)`, `ClaudeCode` adapter (in-world, cached derived image, `--mcp-config`, stream-json trace). Live on Haiku 5.5: bash-operations 0.80, python-tasks 1.00, MCP fixture pass. Awaiting Cindy's review. τ²-bench: designed, not built (out of scope). Before that: general grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
 **Next:** Phase 6: hardening.
 
@@ -118,6 +118,15 @@ flowchart TB
     a_small["Agent.version / AgentSession.stats; score 0 for harness-decided failures; image content hash; workers table; workspace.tar"]
   end
 
+  subgraph ACT["Action space + MCP + Claude Code (2026-10-29, action-space.md)"]
+    direction TB
+    x_caps["AgentCapabilities + Benchmark.requirements: one check in the runner → unsupported"]
+    x_mcp["Benchmark.mcp_servers: network-only attached sidecars (Environment.attach(Sidecar)); MCP test fixture"]
+    x_exec["Environment.exec(env=, user=): docker exec -e NAME (value never on the host command line)"]
+    x_cc["ClaudeCode adapter: in-world, cached derived image (prepare_image), --mcp-config, --resume, stream-json trace (new_events)"]
+    x_tau["τ²-bench via an MCP sidecar (designed, not built; out of scope)"]
+  end
+
   subgraph P6["Phase 6: hardening"]
     direction LR
     prepull["Image pre-pull"]
@@ -173,7 +182,8 @@ flowchart TB
   worker --> claim --> ttrials
   worker --> TR
   claim --> retry
-  P5 --> AUD --> P6
+  P5 --> AUD --> ACT --> P6
+  x_caps --> x_mcp --> x_exec --> x_cc -.-> x_tau
   agentabc --> claude
   nullor --> validate
   oracle --> nullor
@@ -238,5 +248,7 @@ flowchart TB
   class a_port,a_retry,a_life,a_lim,a_lazy,a_rec,a_cfg,a_small done
   class readme,diagram done
   class demo wip
-  class tasks,hcleanup,fb,prepull,cost,breakit,claude,validate,nullor,skill,parity todo
+  class x_caps,x_mcp,x_exec,x_cc,claude done
+  class x_tau open
+  class tasks,hcleanup,fb,prepull,cost,breakit,validate,nullor,skill,parity todo
 ```

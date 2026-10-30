@@ -97,13 +97,27 @@ Decisions A–H built; findings, decisions and commits: `audit-2026-10-29.md`.
 
 - **DEFERRED:** `Environment.exec(env=, user=)` parameters: add them with the second agent (Claude Code needs
   `forward_env` injected with `docker exec -e`, and the unprivileged `agent` user from `security.md` needs
-  `docker exec -u`). Not needed while mini runs on the host as root.
+  `docker exec -u`). Not needed while mini runs on the host as root. **Built 2026-10-29** with Claude Code
+  (`exec(env=, user=)`; values passed as `docker exec -e NAME`, so never on the host's command line).
 
 ## Grader sidecar (2026-10-29)
 
 - **DECIDED + built:** general grading via an attached grader sidecar (`environment-and-grading.md` #7):
   workspace = named volume per trial; `Environment.attach_grader(image)`; `Benchmark.grader_image(task)`;
   `grade(task, grader, env, transcript)`; grader files only ever in the grader.
+
+## Action space, MCP and Claude Code (2026-10-29)
+
+Decisions and survey: `action-space.md`.
+
+- **DECIDED + built:** agents act through their own native tools plus benchmark-specific actions from MCP servers
+  the task declares (`Benchmark.mcp_servers(task)`, run as network-only attached sidecars; `Environment.attach(Sidecar)`,
+  `attach_grader` kept as the grader case). One capability check in the runner (`AgentCapabilities` vs
+  `Benchmark.requirements(task)` → `unsupported`). mini stays bash-only (`mcp=False`).
+- **DECIDED + built:** `ClaudeCode` adapter (`agents/claude_code.py`, `"claude-code"`): runs inside the world from a
+  cached derived image (`Agent.prepare_image`), key forwarded per command, `--mcp-config` from the task's servers,
+  `--resume` for later turns, stream-json → `trajectory.jsonl` + `tool_call` / `tool_result` events
+  (`AgentSession.new_events`). Live: bash-operations 0.80, python-tasks 1.00, MCP fixture pass (Haiku 5.5, $0.012 total).
 
 ## Scale-up design (talking points, not built)
 
@@ -122,7 +136,12 @@ Decisions A–H built; findings, decisions and commits: `audit-2026-10-29.md`.
 
 ## Phase 7 — Extensions (pick by time left)
 
-- Claude Code agent adapter (installed in container, `claude -p --output-format stream-json`). See also `adapters.md`.
+- ~~Claude Code agent adapter~~ built 2026-10-29 (`action-space.md`).
+- **τ²-bench (designed, not built; out of scope for the take-home):** an adapter whose `mcp_servers(task)` serves
+  τ²'s own code from one MCP sidecar: the domain's tools (airline / retail / telecom) and the simulated user
+  (as a tool, or driven by `run_agent` as a second agent), graded by τ²'s own evaluator (reward from the final
+  domain database state + the conversation). Precedent: Harbor's tau3 adapter (MCP sidecar). Needs `grade()` to
+  reach the service sidecar's state (open question in `action-space.md`); mini is `unsupported` for it.
 - `harness validate --benchmark X` with `NullAgent` / `OracleAgent` (reuses Phase 1 oracle solutions).
 - "Add a benchmark" Claude Code skill gated on `harness validate`.
 - A GUI for the CLI (idea, 2026-10-29): e.g. `harness status --gui` serving a local live dashboard of runs/trials from `runs/harness.db`, or a terminal UI (live-updating `status`).

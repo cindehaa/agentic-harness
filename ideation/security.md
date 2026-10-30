@@ -47,6 +47,12 @@ The code needs only two mechanisms:
 
 mini-swe-agent runs on the host, so its key never enters a container.
 
+**Built 2026-10-29** (Claude Code, `action-space.md` #4): `ClaudeCode.forward_env = ("ANTHROPIC_API_KEY",)`;
+`Environment.exec(env=...)` passes it as `docker exec -e NAME` with the value in the docker client's own environment,
+so it is never on the host's command line nor in an image layer; the command event records names only (`***`); every
+attempt file is redacted. Cost: the key is inside the agent's world while Claude Code runs, so the agent could read it.
+`exec(user=)` is built too (for the unprivileged `agent` user), not used yet.
+
 ## (c) Judge model
 
 Default to the benchmark's prescribed model, overridable. Recorded in
