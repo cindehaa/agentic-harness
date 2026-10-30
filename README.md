@@ -136,9 +136,6 @@ Each attempt also leaves files in `runs/<run_id>/<task_id>/attempt-<attempt_id>/
 agent-neutral trace: every message and command), `transcript.json` (the messages), `outcome.json`,
 `trajectory.json` (mini's own log) and `workspace.tar` (the agent's final workspace, saved before grading).
 
-A rehearsable end-to-end demo (two runs, a worker killed mid-run and restarted) is in
-[`examples/demo.sh`](examples/demo.sh). It calls the model API, so it costs a little.
-
 ## Architecture
 
 ```mermaid
@@ -293,7 +290,7 @@ world is then graded as is), and `TransientError` for provider or network blips 
 ├── agents/mini-swe-agent/     # submodule
 ├── tests/                     # pytest (Docker required)
 ├── docs/                      # architecture.md, architecture.excalidraw
-├── examples/                  # demo.sh + the starter's mini CLI examples
+├── examples/                  # the starter's mini CLI examples
 ├── ideation/                  # design notes: one per decision area, plus progress.md
 └── runs/                      # harness.db + attempt folders (gitignored)
 ```
