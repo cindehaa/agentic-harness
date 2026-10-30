@@ -14,9 +14,10 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
+from agentic_harness import parity as parity_module
 from agentic_harness import validate as validate_module
 from agentic_harness import worker as worker_module
-from agentic_harness.agents import PreflightError, resolve_agent
+from agentic_harness.agents import Agent, PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
 from agentic_harness.dashboard import make_server
 from agentic_harness.environments import remove_images, remove_leftovers
@@ -65,36 +66,9 @@ def cli():
 def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int,
         trial_timeout: float, cost_limit: float, max_run_cost: float | None, max_steps: int, memory: str, cpus: float):
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
-    if benchmark not in BENCHMARKS:
-        raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
-    try:
-        agent_class = resolve_agent(agent)
-    except ValueError as e:
-        raise click.BadParameter(str(e), param_hint="--agent") from None
-    bench = BENCHMARKS[benchmark]()
-    model = model or (agent_class.model_env and os.environ.get(agent_class.model_env))  # resolved now, stored in runs.model
-    if not model:
-        hint = f" or set {agent_class.model_env} in .env" if agent_class.model_env else ""
-        raise click.BadParameter(f"no model: pass --model{hint}", param_hint="--model")
-    the_agent = agent_class(model)
-    try:
-        the_agent.preflight()
-    except PreflightError as e:
-        raise click.ClickException(f"pre-flight check failed, nothing submitted: {e}") from None
+    bench, the_agent = _benchmark_and_agent(benchmark, agent, model)
     limits = Limits(trial_timeout_s=trial_timeout, cost_usd=cost_limit, max_steps=max_steps, memory=memory, cpus=cpus)
-    tasks = _select(bench.tasks(), task_ids)
-    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-    versions = {
-        "harness": _git_sha(REPO_ROOT),
-        "agent": the_agent.version(),
-        "dataset": _dataset_hash(bench),
-        "benchmark": bench.version(),  # content hash of its files, also in its image tags
-        "model": the_agent.model,
-    }
-    store = _store()
-    store.create_run(run_id, benchmark, the_agent.name, the_agent.model, versions, {"limits": asdict(limits)},
-                     [t.id for t in tasks], max_run_cost)
-    click.echo(f"Submitted run {run_id}: {the_agent.name} ({the_agent.model}) on {benchmark}, {len(tasks)} task(s)")
+    run_id = _submit(bench, the_agent, _select(bench.tasks(), task_ids), limits, max_run_cost)
     if not wait:
         click.echo("Start a worker to run it: harness worker")
         return
@@ -106,6 +80,43 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
     click.get_current_context().invoke(results, run_id=run_id, format="table")
     click.echo()
     click.get_current_context().invoke(results, run_id=run_id, format="summary")
+
+
+def _benchmark_and_agent(benchmark: str, agent: str, model: str | None) -> tuple[Benchmark, Agent]:
+    """The benchmark and a pre-flight-checked agent, the model resolved now (stored in runs.model)."""
+    if benchmark not in BENCHMARKS:
+        raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
+    try:
+        agent_class = resolve_agent(agent)
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="--agent") from None
+    model = model or (agent_class.model_env and os.environ.get(agent_class.model_env))
+    if not model:
+        hint = f" or set {agent_class.model_env} in .env" if agent_class.model_env else ""
+        raise click.BadParameter(f"no model: pass --model{hint}", param_hint="--model")
+    the_agent = agent_class(model)
+    try:
+        the_agent.preflight()
+    except PreflightError as e:
+        raise click.ClickException(f"pre-flight check failed, nothing submitted: {e}") from None
+    return BENCHMARKS[benchmark](), the_agent
+
+
+def _submit(bench: Benchmark, the_agent: Agent, tasks: list[Task], limits: Limits, max_run_cost: float | None) -> str:
+    """Queue a run (one trial per task); its id."""
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    versions = {
+        "harness": _git_sha(REPO_ROOT),
+        "agent": the_agent.version(),
+        "dataset": _dataset_hash(bench),
+        "benchmark": bench.version(),  # content hash of its files, also in its image tags
+        "model": the_agent.model,
+    }
+    store = _store()
+    store.create_run(run_id, bench.name, the_agent.name, the_agent.model, versions, {"limits": asdict(limits)},
+                     [t.id for t in tasks], max_run_cost)
+    click.echo(f"Submitted run {run_id}: {the_agent.name} ({the_agent.model}) on {bench.name}, {len(tasks)} task(s)")
+    return run_id
 
 
 @cli.command()
@@ -137,6 +148,68 @@ def validate(benchmark: str, task_ids: str | None, concurrency: int):
     click.echo(f"Artifacts: {out_dir}")
     if failed:
         raise SystemExit(1)
+
+
+@cli.command()
+@click.option("--benchmark", required=True, help=f"Name of the benchmark ({', '.join(BENCHMARKS)})")
+@click.option("--agent", required=True, help="Agent name, e.g. mini-swe-agent")
+@click.option("--runs", default=3, show_default=True, help="Runs per side")
+@click.option("--task_ids", default=None, help="Comma-separated task IDs (all if not provided)")
+@click.option("--model", default=None, help="Model for the agent (default: the agent's setting in .env)")
+@click.option("--concurrency", default=4, show_default=True, help="Trials run at the same time, per side")
+def parity(benchmark: str, agent: str, runs: int, task_ids: str | None, model: str | None, concurrency: int):
+    """Does our harness score the agent the same as the benchmark's original workflow? Runs the agent N times each
+    way; the two sides' run-score ranges must overlap. Writes runs/parity/<benchmark>-<timestamp>/parity.json."""
+    bench, the_agent = _benchmark_and_agent(benchmark, agent, model)
+    tasks = _select(bench.tasks(), task_ids)
+    out_dir = RUNS_DIR / "parity" / f"{benchmark}-{time.strftime('%Y%m%d-%H%M%S')}"
+    _log_to_stderr()
+    run_ids, harness_scores = [], []
+    for _ in range(runs):
+        run_id = _submit(bench, the_agent, tasks, Limits(), None)
+        if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id):
+            raise SystemExit(130)
+        run_ids.append(run_id)
+        harness_scores.append({t["task_id"]: t["score_float"] if t["outcome"] == "graded" else None for t in _store().trials(run_id)})
+    harness_cost = sum(t["cost_usd"] for r in run_ids for t in _store().trials(r))
+    click.echo(f"Original workflow: {runs} run(s) of {len(tasks)} task(s)", err=True)
+    original_scores, original_cost, errors = parity_module.original_side(
+        bench, tasks, the_agent.name, the_agent.model, runs, out_dir / "original", concurrency)
+    sides = {"harness": parity_module.summarize(harness_scores), "original": parity_module.summarize(original_scores)}
+    report = {
+        "benchmark": benchmark, "agent": the_agent.name, "model": the_agent.model, "runs": runs,
+        "tasks": [t.id for t in tasks], "harness_run_ids": run_ids, **sides,
+        "overlap": parity_module.overlap(sides["harness"]["range"], sides["original"]["range"]),
+        "pass_rates": {"harness": parity_module.pass_rates(harness_scores), "original": parity_module.pass_rates(original_scores)},
+        "scores": {"harness": harness_scores, "original": original_scores},
+        "cost_usd": {"harness": harness_cost, "original": original_cost},
+        "original_errors": errors,
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "parity.json").write_text(json.dumps(report, indent=2))
+    click.echo()
+    _table(("SIDE", "MEAN ± SEM", "RUN ACCURACIES", "COST"),
+           [(side, _mean_sem(s), ", ".join(f"{a:.2f}" for a in s["run_accuracies"]), f"${report['cost_usd'][side]:.4f}")
+            for side, s in sides.items()])
+    click.echo()
+    _table(("TASK", "HARNESS PASS RATE", "ORIGINAL PASS RATE"),
+           [(t.id, _rate(report["pass_rates"]["harness"][t.id]), _rate(report["pass_rates"]["original"][t.id])) for t in tasks])
+    for e in errors:
+        click.echo(f"original workflow error (left out): {e}")
+    verdict = {True: "ranges overlap: no evidence of an adaptation error",
+               False: "ranges DO NOT overlap: treat as an adaptation error until shown otherwise",
+               None: "not comparable: a side has no scored run"}[report["overlap"]]
+    click.echo(f"\nParity: {verdict}\nReport: {out_dir / 'parity.json'}")
+
+
+def _mean_sem(side: dict) -> str:
+    if side["mean"] is None:
+        return "n/a"
+    return f"{side['mean']:.3f}" + ("" if side["sem"] is None else f" ± {side['sem']:.3f}")
+
+
+def _rate(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}"
 
 
 def _verdict(check) -> str:
