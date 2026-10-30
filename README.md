@@ -44,10 +44,11 @@ Optional: `make init-extra-benchmarks` fetches Terminal-Bench, SWE-bench, τ²-b
 ## Usage
 
 ```
-harness run      Submit a run (one queued trial per task); --wait runs it here and prints results
-harness worker   Take trials from the queue and run them
-harness status   Active and recent runs, or one run's trials
-harness results  Accuracy, per-trial table, or full JSON for a run
+harness run        Submit a run (one queued trial per task); --wait runs it here and prints results
+harness worker     Take trials from the queue and run them
+harness status     Active and recent runs, or one run's trials
+harness results    Accuracy, per-trial table, or full JSON for a run
+harness dashboard  Live web view of runs, trials and traces (read-only)
 ```
 
 ### One command: submit and wait
@@ -135,6 +136,15 @@ model; config: limits), accuracy, the excluded task ids, and every trial with it
 Each attempt also leaves files in `runs/<run_id>/<task_id>/attempt-<attempt_id>/`: `events.jsonl` (the
 agent-neutral trace: every message and command), `transcript.json` (the messages), `outcome.json`,
 `trajectory.json` (mini's own log) and `workspace.tar` (the agent's final workspace, saved before grading).
+
+### Dashboard
+
+```bash
+harness dashboard                # http://127.0.0.1:8000/, opens the browser (--port, --no-open)
+```
+
+A read-only local page that refreshes every 2 s: every run with its progress and accuracy, a run's trials, and each
+attempt's transcript, command trace, error and raw files.
 
 ## Architecture
 
@@ -276,7 +286,8 @@ world is then graded as is), and `TransientError` for provider or network blips 
 ```
 .
 ├── src/agentic_harness/
-│   ├── cli.py                 # harness run / worker / status / results
+│   ├── cli.py                 # harness run / worker / status / results / dashboard
+│   ├── dashboard.py           # read-only web server for dashboard/ (127.0.0.1, SQLite opened read-only)
 │   ├── worker.py              # worker threads: claim, setup, attempt, lease heartbeat
 │   ├── store.py               # SQLite schema and every query (handwritten SQL)
 │   ├── runner.py              # run_trial: one attempt, start to finish
@@ -286,6 +297,7 @@ world is then graded as is), and `TransientError` for provider or network blips 
 │   ├── benchmarks/            # Benchmark ABC, bash_operations.py, python_tasks.py, registry
 │   ├── agents/                # Agent / AgentSession ABCs, mini_swe_agent.py, registry
 │   └── environments/          # Environment ABC, docker.py
+├── dashboard/                 # the dashboard page: React + htm from a CDN, no build step
 ├── benchmarks/                # bash-operations, python-tasks (+ opt-in upstream submodules)
 ├── agents/mini-swe-agent/     # submodule
 ├── tests/                     # pytest (Docker required)

@@ -7,6 +7,7 @@ import os
 import subprocess
 import time
 import uuid
+import webbrowser
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 from agentic_harness import worker as worker_module
 from agentic_harness.agents import PreflightError, resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
+from agentic_harness.dashboard import make_server
 from agentic_harness.environments import remove_images, remove_leftovers
 from agentic_harness.paths import DB_PATH, REPO_ROOT
 from agentic_harness.store import SchemaMismatch, Store
@@ -323,6 +325,27 @@ def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
     widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *rows)]
     for row in (headers, *rows):
         click.echo("  ".join(str(cell).ljust(width) for cell, width in zip(row, widths)).rstrip())
+
+
+@cli.command()
+@click.option("--port", default=8000, show_default=True, help="Port on 127.0.0.1")
+@click.option("--open/--no-open", "open_browser", default=True, show_default=True, help="Open it in the browser")
+def dashboard(port: int, open_browser: bool):
+    """A live, read-only web view of runs, trials and traces, until Ctrl-C."""
+    try:
+        server = make_server(DB_PATH, port)
+    except OSError as e:
+        raise click.ClickException(f"can't listen on port {port} ({e.strerror}): pass another --port") from None
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    click.echo(f"Dashboard: {url} (Ctrl-C to stop)")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 def main():

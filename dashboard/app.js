@@ -157,7 +157,10 @@ function RunDetail({ runId, attemptId, noWorkers }) {
   const { data: run, error } = usePoll(`/api/runs/${encodeURIComponent(runId)}`);
   if (error && !run) return html`<p class="subtle">${error}</p>`;
   if (!run) return null;
-  const wall = (run.finished_at || Date.now() / 1000) - run.created_at;
+  // wall time spans the trials (first start to last finish); time spent queued or in setup is shown apart
+  const started = run.first_started_at;
+  const wall = started && (run.finished_at ? run.last_finished_at : Date.now() / 1000) - started;
+  const queued = started && started - run.created_at;
   const excluded = ["grader_error", "infra_error", "unsupported"].filter((k) => run[k] > 0);
   const open = (t) => t.attempts.length && (location.hash = `#/runs/${encodeURIComponent(run.id)}/attempts/${t.attempts[t.attempts.length - 1].id}`);
   return html`
@@ -173,7 +176,7 @@ function RunDetail({ runId, attemptId, noWorkers }) {
         <${Stat} value=${pct(run.accuracy)} label="accuracy" />
         <${Stat} value=${`${run.graded}`} label=${`graded of ${run.total}`} />
         <${Stat} value=${cost(run.cost_usd)} label="cost" />
-        <${Stat} value=${dur(wall)} label="wall time" />
+        <${Stat} value=${dur(wall)} label=${queued >= 5 ? `wall time · ${dur(queued)} queued` : "wall time"} />
       </div>
       ${excluded.length > 0 && html`
         <div class="excluded">
@@ -395,7 +398,9 @@ function App() {
   return html`
     <div class="app">
       <${TopBar} workers=${workers.data} offline=${offline} />
-      ${runs.data && !list.length
+      ${runs.error && runs.error !== "offline"
+        ? html`<div class="empty"><p class="subtle">${runs.error}</p></div>`
+        : runs.data && !list.length
         ? html`<${Empty} />`
         : html`
           <div class="main">

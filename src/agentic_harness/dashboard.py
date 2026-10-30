@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from agentic_harness.paths import REPO_ROOT
+from agentic_harness.store import SCHEMA_VERSION, SchemaMismatch
 
 STATIC_DIR = REPO_ROOT / "dashboard"
 STATIC_FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
@@ -25,8 +26,14 @@ RUN_ID = re.compile(r"[\w.-]+")
 FILE_NAME = re.compile(r"\w[\w.-]*")  # one name inside an attempt folder: no slashes, no leading dot
 
 RUNS_SQL = """
+WITH spent AS (
+    SELECT t.run_id, SUM(a.cost_usd) AS cost_usd, SUM(a.duration_s) AS trial_time_s,
+           MIN(a.started_at) AS first_started_at, MAX(a.finished_at) AS last_finished_at
+    FROM attempts a JOIN trials t ON t.id = a.trial_id GROUP BY t.run_id
+)
 SELECT r.id, r.benchmark, r.agent, r.model, r.status, r.setup_claimed_by IS NOT NULL AS setup_claimed,
-       r.created_at, r.finished_at,
+       r.created_at, r.finished_at, s.first_started_at, s.last_finished_at,
+       COALESCE(s.cost_usd, 0) AS cost_usd, COALESCE(s.trial_time_s, 0) AS trial_time_s,
        COUNT(t.id) AS total,
        COALESCE(SUM(t.state = 'done'), 0) AS done,
        COALESCE(SUM(t.state = 'running'), 0) AS running,
@@ -35,12 +42,8 @@ SELECT r.id, r.benchmark, r.agent, r.model, r.status, r.setup_claimed_by IS NOT 
        COALESCE(SUM(t.outcome = 'grader_error'), 0) AS grader_error,
        COALESCE(SUM(t.outcome = 'infra_error'), 0) AS infra_error,
        COALESCE(SUM(t.outcome = 'unsupported'), 0) AS unsupported,
-       AVG(CASE WHEN t.outcome = 'graded' THEN t.score_float END) AS accuracy,
-       (SELECT COALESCE(SUM(a.cost_usd), 0) FROM attempts a JOIN trials t2 ON t2.id = a.trial_id
-        WHERE t2.run_id = r.id) AS cost_usd,
-       (SELECT COALESCE(SUM(a.duration_s), 0) FROM attempts a JOIN trials t2 ON t2.id = a.trial_id
-        WHERE t2.run_id = r.id) AS trial_time_s
-FROM runs r LEFT JOIN trials t ON t.run_id = r.id
+       AVG(CASE WHEN t.outcome = 'graded' THEN t.score_float END) AS accuracy
+FROM runs r LEFT JOIN trials t ON t.run_id = r.id LEFT JOIN spent s ON s.run_id = r.id
 WHERE ? IS NULL OR r.id = ?
 GROUP BY r.id
 ORDER BY r.status IN ('pending', 'running') DESC, r.created_at DESC
@@ -77,6 +80,11 @@ class Dashboard:
         db = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=5000")
+        version = db.execute("SELECT version FROM schema_version").fetchone()[0]
+        if version != SCHEMA_VERSION:  # the queries below would fail on missing columns; say why instead
+            db.close()
+            raise SchemaMismatch(f"{self.db_path} has schema version {version}, this harness needs {SCHEMA_VERSION}: "
+                                 f"delete it (or check out the harness that made it)")
         try:
             yield db
         finally:
@@ -111,7 +119,7 @@ class Dashboard:
         events = _read_jsonl(folder / "events.jsonl") if folder else None
         return {
             **{k: a[k] for k in ("id", "trial_id", "run_id", "task_id", "n", "outcome", "exit_status", "error",
-                                 "cost_usd", "duration_s")},
+                                 "cost_usd", "duration_s", "started_at", "finished_at")},
             "score": _parse(a["score"]),
             "attempts": siblings,
             "outcome_file": _read_json(folder / "outcome.json") if folder else None,
@@ -172,8 +180,8 @@ class Handler(BaseHTTPRequestHandler):
             raise NotFound(path)
         except NotFound as e:
             self._send_json({"error": f"not found: {e}"}, HTTPStatus.NOT_FOUND)
-        except sqlite3.Error as e:  # e.g. a harness.db from another schema version
-            self._send_json({"error": f"database: {e}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+        except (sqlite3.Error, SchemaMismatch) as e:
+            self._send_json({"error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _host_ok(self) -> bool:
         # a web page elsewhere could point its own hostname at 127.0.0.1 (DNS rebinding); only answer to our names

@@ -161,3 +161,29 @@ def test_symlink_out_of_runs_is_not_served(db, get, tmp_path):
     folder = db.parent / "run-done" / "t1" / f"attempt-{attempt['id']}"
     (folder / "link.txt").symlink_to(tmp_path / "secret.txt")
     assert get(f"/api/attempts/{attempt['id']}/files/link.txt")[0] == 404
+
+
+def test_runs_carry_the_trial_span(get):
+    run = get("/api/runs")[1][1]
+    assert run["first_started_at"] <= run["last_finished_at"]
+
+
+def test_database_from_another_schema_version_says_so(db, get):
+    store = Store(db)
+    store.db.execute("UPDATE schema_version SET version = 1")
+    store.close()
+    status, body = get("/api/runs")
+    assert status == 500 and "schema version 1" in body["error"]
+
+
+def test_cli_says_when_the_port_is_taken(tmp_path):
+    from click.testing import CliRunner
+
+    from agentic_harness.cli import cli
+
+    taken = make_server(tmp_path / "harness.db", port=0)
+    try:
+        result = CliRunner().invoke(cli, ["dashboard", "--port", str(taken.server_address[1]), "--no-open"])
+    finally:
+        taken.server_close()
+    assert result.exit_code == 1 and "pass another --port" in result.output
