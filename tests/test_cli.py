@@ -54,9 +54,11 @@ def test_status_says_when_no_worker_is_running(store):
     store.create_run("run-b", "python-tasks", "mini-swe-agent", "haiku", {}, {"limits": {}}, ["p1"])
     assert "no worker running" not in harness("status")
     store.db.execute("UPDATE workers SET heartbeat_at = 0")  # its last heartbeat is long past: it died
-    lines = harness("status").splitlines()
-    assert "queued - no worker running (start one: harness worker)" in lines[2]
-    assert "3/4 done - no worker running" in harness("status", "--run_id", "run-a")
+    warning = "2 pending — no worker running; start one with `harness worker`"  # t4 and p1
+    assert harness("status").splitlines()[-1] == warning
+    assert harness("status", "--run_id", "run-a").splitlines()[-1] == warning
+    store.db.execute("UPDATE trials SET state = 'done'")
+    assert "no worker running" not in harness("status")  # nothing left to do: no warning
 
 
 def test_status_hides_runs_finished_over_an_hour_ago_unless_all(store):

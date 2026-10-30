@@ -359,6 +359,13 @@ class Store:
             (run_id, run_id),
         ).fetchall()
 
+    def waiting_trials(self) -> int:
+        """Trials a worker still has to finish: not done, in runs that are not over (pending setup or running)."""
+        return self._one(
+            "SELECT COUNT(*) FROM trials t JOIN runs r ON r.id = t.run_id"
+            " WHERE t.state != 'done' AND r.status IN ('pending', 'running')"
+        )[0]
+
     def unfinished(self, run_id: str | None = None) -> bool:
         """Is any run (or this one) still waiting for setup or running?"""
         return self._one(

@@ -167,17 +167,17 @@ def status(run_id: str | None, show_all: bool):
         if not runs:
             click.echo("No active or recent runs (--all lists every run)")
             return
-        no_worker = _no_worker(store)
         _table(("RUN", "BENCHMARK", "AGENT", "PROGRESS", "STARTED"),
-               [(r["id"], r["benchmark"], r["agent"], _progress(r, r["done"], r["total"], no_worker), _time(r["created_at"]))
-                for r in runs])
-        return
-    run = _find_run(store, run_id)
-    trials = store.trials(run_id)
-    click.echo(f"Run {run_id}: {run['benchmark']} · {run['agent']} ({run['model']}), "
-               f"{_progress(run, sum(t['state'] == 'done' for t in trials), len(trials), _no_worker(store))}\n")
-    _table(("TASK", "STATE", "OUTCOME", "SCORE", "ATTEMPTS"),
-           [(t["task_id"], t["state"], t["outcome"] or "", _score(t["score_value"]), str(t["attempt_count"])) for t in trials])
+               [(r["id"], r["benchmark"], r["agent"], _progress(r, r["done"], r["total"]), _time(r["created_at"])) for r in runs])
+    else:
+        run = _find_run(store, run_id)
+        trials = store.trials(run_id)
+        click.echo(f"Run {run_id}: {run['benchmark']} · {run['agent']} ({run['model']}), "
+                   f"{_progress(run, sum(t['state'] == 'done' for t in trials), len(trials))}\n")
+        _table(("TASK", "STATE", "OUTCOME", "SCORE", "ATTEMPTS"),
+               [(t["task_id"], t["state"], t["outcome"] or "", _score(t["score_value"]), str(t["attempt_count"])) for t in trials])
+    if (waiting := store.waiting_trials()) and _no_worker(store):
+        click.echo(f"\n{waiting} pending — no worker running; start one with `harness worker`")
 
 
 @cli.command()
@@ -252,20 +252,17 @@ def _find_run(store: Store, run_id: str):
     return run
 
 
-def _progress(run, done: int, total: int, no_worker: bool = False) -> str:
+def _progress(run, done: int, total: int) -> str:
     if run["status"] == "failed":
         return "setup failed"
     if run["status"] == "pending":
-        text = "setting up" if run["setup_claimed_by"] else "queued"
-    else:
-        text = f"{done}/{total} done"
-    if no_worker and run["status"] in ("pending", "running"):
-        text += " - no worker running (start one: harness worker)"
-    return text
+        return "setting up" if run["setup_claimed_by"] else "queued"
+    return f"{done}/{total} done"
 
 
 def _no_worker(store: Store) -> bool:
-    """No worker has sent a heartbeat within a lease (it renews every 30 s)."""
+    """No worker has sent a heartbeat within a lease (it renews every 30 s); a running trial's lease then lapses too,
+    so it counts as pending."""
     return store.live_workers(time.time() - worker_module.LEASE_S) == 0
 
 
