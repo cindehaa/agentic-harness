@@ -14,6 +14,11 @@ class GraderError(Exception):
     """The grader crashed or its output was unreadable -> outcome grader_error."""
 
 
+class GraderSetupError(Exception):
+    """Preparing the grader failed for an infrastructure reason, e.g. installing its dependencies needs the network
+    and there is none -> outcome infra_error (retried). Not a GraderError: the grader itself never ran."""
+
+
 class Benchmark(ABC, Generic[TaskT]):
     """One benchmark, adapted to the harness. Subclass as e.g. `BashOperations(Benchmark[BashTask])`."""
 

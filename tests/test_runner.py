@@ -9,7 +9,7 @@ import pytest
 from litellm.exceptions import AuthenticationError
 
 from agentic_harness.agents import Agent, AgentLimitation, AgentSession
-from agentic_harness.benchmarks import BashOperations, GraderError
+from agentic_harness.benchmarks import BashOperations, GraderError, GraderSetupError
 from agentic_harness.environments import DockerEnvironment, Environment
 from agentic_harness.runner import run_trial
 from agentic_harness.types import Limits, Message, Score, Text, score_to_float
@@ -55,6 +55,11 @@ def kill_container(env) -> None:
 class BrokenGrader(BashOperations):
     def grade(self, task, env, transcript):
         raise GraderError("grader crashed")
+
+
+class NoNetworkGrader(BashOperations):
+    def grade(self, task, env, transcript):
+        raise GraderSetupError("installing python3 failed: no network")
 
 
 class FixedGrader(BashOperations):
@@ -133,6 +138,11 @@ def test_grader_crash_is_grader_error(tmp_path):
     outcome = run_trial(BrokenGrader(), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path)
     assert (outcome.status, outcome.error, outcome.score) == ("grader_error", "grader crashed", None)
     assert json.loads((tmp_path / "outcome.json").read_text())["status"] == "grader_error"
+
+
+def test_grader_setup_failure_is_infra_error(tmp_path):
+    outcome = run_trial(NoNetworkGrader(), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path)
+    assert (outcome.status, outcome.error) == ("infra_error", "GraderSetupError: installing python3 failed: no network")
 
 
 def test_leftover_agent_process_is_killed_before_grading(tmp_path):

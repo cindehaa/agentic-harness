@@ -7,7 +7,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported
-from agentic_harness.benchmarks.base import Benchmark, GraderError
+from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
 from agentic_harness.environments.docker import DockerEnvironment, DockerError
 from agentic_harness.types import Limits, Message, Outcome, Score, Task
 
@@ -104,6 +104,8 @@ def _grade(benchmark: Benchmark, task: Task, env: DockerEnvironment, session: Re
     try:
         env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         score = benchmark.grade(task, env, tuple(session.transcript))
+    except GraderSetupError as e:  # e.g. no network to install the grader's deps: infra, retried
+        return Outcome("infra_error", error=f"GraderSetupError: {e}")
     except GraderError as e:
         return Outcome("grader_error", error=str(e))
     except DockerError:

@@ -122,3 +122,13 @@ Prior art: Terminal-Bench 2 / Harbor tasks install test deps inside
 hides scoring assets from the agent with user permissions (agent runs as a
 non-root user); SWE-bench bakes test deps into the instance image because they
 are the repo's own deps.
+
+## Known gaps
+
+- **Grading needs the network** (bash-operations: `apk add python3` at grade
+  time). With no network the install fails; since 2026-10-29 that is a
+  `GraderSetupError` → `infra_error` (retried), not a `grader_error`, because
+  the grader never ran. Phase 6 option B: install grader dependencies into a
+  root-only prefix (e.g. `/grader-deps`, mode 700) when the image is built, so
+  grading needs no network and the agent (once it runs as the unprivileged
+  `agent` user, `security.md`) still can't see or use them.

@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 
 from agentic_harness.agents.base import AgentSession
-from agentic_harness.benchmarks.base import Benchmark, GraderError
+from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
 from agentic_harness.environments import Environment, build_image
 from agentic_harness.paths import REPO_ROOT
 from agentic_harness.types import Message, Score, Task, Text, Transcript
@@ -55,10 +55,10 @@ class BashOperations(Benchmark[BashTask]):
         agent.send(Message("user", (Text(task.problem_statement),)))
 
     def grade(self, task: BashTask, env: Environment, transcript: Transcript) -> Score:
-        # Grader dependency, installed only after the agent is done
+        # Grader dependency, installed only after the agent is done. It needs the network: a failure is infra's
         r = env.exec("apk add --no-cache python3", timeout=300)
         if r.exit_code != 0:
-            raise GraderError(f"installing python3 failed: {r.stderr}")
+            raise GraderSetupError(f"installing python3 failed: {r.stderr}")
         env.upload(ROOT, "/grader")  # the benchmark's own evaluate.py + dataset.json, copied in late
         r = env.exec(["python3", "/grader/evaluate.py", "--workspace-dir", "/workspace", "--task", task.id])
         # evaluate.py exits 1 on a failed task, so judge by its JSON, not its exit code
