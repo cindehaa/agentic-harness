@@ -136,9 +136,9 @@ flowchart TB
 
   subgraph P8["Phase 8: deliverables"]
     direction LR
-    readme["README"]
-    diagram["Architecture diagram"]
-    demo["Demo script"]
+    readme["README: setup, usage, architecture, decisions, extending, limitations"]
+    diagram["Architecture diagram: Mermaid in README + docs/architecture.excalidraw + docs/architecture.md"]
+    demo["Demo script examples/demo.sh (syntax-checked; not yet rehearsed live)"]
   end
 
   %% flow between pieces
@@ -236,5 +236,7 @@ flowchart TB
   class truns,ttrials,tatt,tev,files,status,results,enqueue,claim,worker,retry done
   class traj done
   class a_port,a_retry,a_life,a_lim,a_lazy,a_rec,a_cfg,a_small done
-  class tasks,hcleanup,fb,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
+  class readme,diagram done
+  class demo wip
+  class tasks,hcleanup,fb,prepull,cost,breakit,claude,validate,nullor,skill,parity todo
 ```
