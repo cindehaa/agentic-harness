@@ -10,6 +10,7 @@ from agentic_harness.agents.base import (
 # name -> "module:Class", imported only when used, so `harness status` never loads litellm
 AGENTS: dict[str, str] = {
     "mini-swe-agent": "agentic_harness.agents.mini_swe_agent:MiniSweAgent",
+    "claude-code": "agentic_harness.agents.claude_code:ClaudeCode",
 }
 
 
