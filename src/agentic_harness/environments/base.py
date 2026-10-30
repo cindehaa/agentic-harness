@@ -1,9 +1,12 @@
 """The world a task runs in: somewhere to run commands and move files."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
+
+from agentic_harness.types import Limits
 
 DEFAULT_TIMEOUT = 60.0  # seconds per exec when the caller doesn't say; stops one hung command eating the whole budget
 
@@ -15,6 +18,21 @@ class ExecResult:
     stderr: str
     timed_out: bool = False
     truncated: bool = False  # stdout or stderr was cut to the environment's output cap
+
+
+class EnvironmentLost(RuntimeError):
+    """The world itself is gone or unreachable (not a command failing inside it) -> infra_error, retried.
+    Each backend raises it (or a subclass, e.g. DockerError) only when that is verified, never for anything the
+    agent can cause."""
+
+
+@dataclass(frozen=True)
+class EnvironmentState:
+    """Whether the world is still up, and if not, how its main process ended (the runner's container-death rule)."""
+
+    running: bool
+    exit_code: int  # of the main process, once it has exited
+    oom_killed: bool  # the backend killed it for using more memory than allowed
 
 
 class Environment(ABC):
@@ -37,6 +55,14 @@ class Environment(ABC):
         """
 
     @abstractmethod
+    def state(self) -> EnvironmentState | None:
+        """None if the world is gone or the backend is unreachable."""
+
+    @abstractmethod
+    def kill_agent_processes(self) -> None:
+        """Kill everything the agent left running (before grading), while the world itself stays up."""
+
+    @abstractmethod
     def write_file(self, path: str, content: str | bytes) -> None:
         """Create or overwrite one small file in the world from data in memory."""
 
@@ -57,3 +83,8 @@ class Environment(ABC):
 
     def __exit__(self, *exc_info) -> None:
         self.stop()
+
+
+# How the runner gets a world for a trial, without knowing the backend: (image, lifetime_s, limits) -> Environment.
+# DockerEnvironment's constructor is one.
+EnvironmentFactory = Callable[[str, int, Limits], Environment]

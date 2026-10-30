@@ -4,7 +4,9 @@
 
 A living doc: every place a trial can fail, and which outcome it ends in.
 Conditions are the code's own (`runner.py`, `worker.py`, `store.py`,
-`agents/mini_swe_agent.py`, `environments/docker.py`). Outcome statuses: `task-input.md` → Outcome model.
+`agents/mini_swe_agent.py`, `environments/docker.py`). The runner sees only the `Environment`
+port: `EnvironmentLost` (Docker raises its subclass `DockerError`) and `env.state()`
+(`EnvironmentState`: running, exit code, OOM-killed; None = gone). Outcome statuses: `task-input.md` → Outcome model.
 Update this whenever error handling changes.
 
 ```mermaid
@@ -13,27 +15,27 @@ flowchart TB
   setup -->|"raises"| abort["run failed (traceback + build log in runs/run/setup.log); every trial done as infra_error (not retried)"]
   setup -->|"setup worker's lease expires"| setup
   setup --> claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
-  claim --> startenv["run_trial: DockerEnvironment.start() (attempt row + folder attempt-id created with the claim)"]
+  claim --> startenv["run_trial: env_factory(image, lifetime_s, limits).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
   claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
-  startenv -->|"DockerError: missing image, docker run fails, Docker down"| IE1
+  startenv -->|"EnvironmentLost (DockerError): missing image, docker run fails, Docker down"| IE1
   startenv --> turns["benchmark.run_agent(task, session, env)"]
 
   turns -->|"Unsupported: content the agent can't read, e.g. a File"| UN["unsupported"]
   turns -->|"returns: mini exit Submitted, LimitsExceeded (steps, cost), TimeLimit"| check
   turns -->|"TurnLimit: more than max_turns messages"| check
   turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError"| check
-  turns -->|"DockerError"| check
+  turns -->|"EnvironmentLost"| check
   turns -->|"any other exception: auth, permission, bad request, provider down, rate limit after mini's retries, adapter or benchmark bug"| IE2["infra_error (traceback saved)"]
 
-  check{"after the turn: env.state() (docker inspect)"}
+  check{"after the turn: env.state() (Docker: docker inspect)"}
   check -->|"None (vanished, Docker unreachable) or OOMKilled"| IE3
   check -->|"exited (not Running)"| GF
-  check -->|"Running, but the turn raised DockerError"| IE3
+  check -->|"Running, but the turn raised EnvironmentLost"| IE3
   check -->|"Running"| kill["env.kill_agent_processes()"]
 
   kill --> grade["benchmark.grade(task, env, transcript)"]
-  kill -->|"DockerError"| recheck
-  grade -->|"DockerError"| recheck{"env.state() again (the agent may have killed PID 1 just before handing back)"}
+  kill -->|"EnvironmentLost"| recheck
+  grade -->|"EnvironmentLost"| recheck{"env.state() again (the agent may have killed PID 1 just before handing back)"}
   recheck -->|"None or OOMKilled"| IE3
   recheck -->|"exited"| GF
   recheck -->|"Running"| IE3

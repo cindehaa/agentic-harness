@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from agentic_harness.environments import DockerEnvironment
+from agentic_harness.environments import DockerEnvironment, EnvironmentLost, EnvironmentState
 from agentic_harness.environments.docker import MAX_OUTPUT, DockerError
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
@@ -184,7 +184,7 @@ def test_container_is_gone_after_stop():
 
 
 def test_state_of_running_container(env):
-    assert env.state() == {"Status": "running", "Running": True, "ExitCode": 0, "OOMKilled": False}
+    assert env.state() == EnvironmentState(running=True, exit_code=0, oom_killed=False)
 
 
 def test_state_after_main_process_dies():
@@ -192,7 +192,7 @@ def test_state_after_main_process_dies():
         env.exec("kill 1")  # the init forwards SIGTERM to the sleep; the container exits but is kept (no --rm)
         time.sleep(1)
         state = env.state()
-    assert state["Status"] == "exited" and not state["Running"] and not state["OOMKilled"]
+    assert not state.running and state.exit_code != 0 and not state.oom_killed
 
 
 def test_state_after_removal_is_none():
@@ -207,4 +207,8 @@ def test_kill_agent_processes_keeps_container_alive():
         assert "sleep 999" in env.exec("ps").stdout
         env.kill_agent_processes()
         assert "sleep 999" not in env.exec("ps").stdout
-        assert env.state()["Running"]
+        assert env.state().running
+
+
+def test_docker_error_is_the_backend_neutral_environment_lost():
+    assert issubclass(DockerError, EnvironmentLost)  # the runner only knows EnvironmentLost

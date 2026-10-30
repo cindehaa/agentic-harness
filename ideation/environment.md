@@ -28,6 +28,15 @@ benchmarks and agents only get a handle.
 | 6 | `image` in the constructor | One object = one container; no reuse across trials | `start(image)`, which lets one object hold different worlds over time |
 | 7 | Default `exec` timeout 60s, overridable per call; `None` = no timeout | Stops one hung command eating the whole trial budget | No default (a hang blocks until the trial limit) |
 
+### Ports and adapters (2026-10-29 audit)
+
+| # | Decision | Why |
+|---|---|---|
+| 8 | `state() -> EnvironmentState | None` (running, exit code, OOM-killed; None = gone) and `kill_agent_processes()` are on the ABC | The runner's container-death rule and pre-grade kill work for any backend |
+| 9 | `EnvironmentLost` (in `base.py`) is the backend-neutral "the world is gone" error; `DockerError` subclasses it | The runner catches `EnvironmentLost` and never imports Docker |
+| 10 | The runner takes an `EnvironmentFactory` = `(image, lifetime_s, limits) -> Environment`; the worker injects `DockerEnvironment` (its constructor is one) | The runner is testable with a fake environment (`tests/test_runner_rules.py`, no Docker) |
+| 11 | `build_image(dockerfile, context, tag)` is exported by the `environments` package as the image-building port; benchmarks import it from there, never from `docker.py` | Benchmarks name images, not a container backend |
+
 ## Prior art
 
 - **Harbor `BaseEnvironment`:** `start` / `stop` / `exec` / `upload` / `download`. Closest match; we add `write_file` / `read_file` and the str-or-list `exec`.

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from agentic_harness.agents.base import Agent, AgentLimitation, AgentSession, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError, GraderSetupError
-from agentic_harness.environments.docker import DockerEnvironment, DockerError
+from agentic_harness.environments.base import Environment, EnvironmentFactory, EnvironmentLost
 from agentic_harness.redact import redact, redact_file
 from agentic_harness.types import Limits, Message, Outcome, Score, Task
 
@@ -55,23 +55,23 @@ class RecordingSession(AgentSession):
 
 
 def run_trial(
-    benchmark: Benchmark, agent: Agent, task: Task, limits: Limits, attempt_dir: Path,
+    benchmark: Benchmark, agent: Agent, task: Task, limits: Limits, attempt_dir: Path, env_factory: EnvironmentFactory,
     on_turn_end: Callable[[], None] = lambda: None,
 ) -> Outcome:
-    """Run one attempt: events.jsonl as it goes, then outcome.json and transcript.json, all in attempt_dir, all
-    redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome."""
+    """Run one attempt in a world from `env_factory`: events.jsonl as it goes, then outcome.json and transcript.json,
+    all in attempt_dir, all redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome."""
     attempt_dir.mkdir(parents=True, exist_ok=True)
     began = time.monotonic()
     session: RecordingSession | None = None
     try:
-        with DockerEnvironment(task.image, lifetime_s=int(limits.trial_timeout_s + GRADE_MARGIN_S)) as env:
+        with env_factory(task.image, int(limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
             inner = agent.start(env, attempt_dir, limits)
             session = RecordingSession(inner, limits.max_turns, attempt_dir / "events.jsonl", on_turn_end)
             outcome = _agent_turns(benchmark, task, env, session)
             if outcome is None:
                 outcome = _grade(benchmark, task, env, session)
-    except DockerError as e:
-        outcome = Outcome("infra_error", error=f"DockerError: {e}")
+    except EnvironmentLost as e:
+        outcome = Outcome("infra_error", error=f"{type(e).__name__}: {e}")
     except Unsupported as e:
         outcome = Outcome("unsupported", error=str(e))
     except Exception:
@@ -89,36 +89,36 @@ def run_trial(
     return outcome
 
 
-def _agent_turns(benchmark: Benchmark, task: Task, env: DockerEnvironment, session: RecordingSession) -> Outcome | None:
+def _agent_turns(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession) -> Outcome | None:
     """Let the benchmark drive the agent. Returns an Outcome only if the container died meanwhile (rule 6)."""
-    docker_error = None
+    lost = None
     try:
         benchmark.run_agent(task, session, env)
     except TurnLimit:
         pass  # the agent's turns are over; grade what it did
     except AgentLimitation as e:  # the agent can't go on (context full, model refused): grade what it did, like a timeout
         session.inner.exit_status = session.inner.exit_status or f"AgentLimitation: {e}"
-    except DockerError as e:
-        docker_error = e  # maybe the agent killed its own container: the evidence below decides
+    except EnvironmentLost as e:
+        lost = e  # maybe the agent killed its own container: the evidence below decides
     if died := _container_death(benchmark, env):
         return died
-    if docker_error:
-        raise docker_error
+    if lost:
+        raise lost
     return None
 
 
-def _container_death(benchmark: Benchmark, env: DockerEnvironment) -> Outcome | None:
-    """Rule 6, from `docker inspect`: None if the container still runs, else how the trial ends."""
+def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
+    """Rule 6, from env.state(): None if the container still runs, else how the trial ends."""
     state = env.state()
-    if state is None or state["OOMKilled"]:  # gone, Docker unreachable, or out of memory (no limit of ours yet)
+    if state is None or state.oom_killed:  # gone, Docker unreachable, or out of memory (no limit of ours yet)
         return Outcome("infra_error", error=f"container lost: {state}")
-    if not state["Running"]:  # something inside killed the main process: the agent's doing
+    if not state.running:  # something inside killed the main process: the agent's doing
         score = Score(False, "container died during agent turn", {"state": state})
         return Outcome("graded", score, benchmark.score_to_float(score))
     return None
 
 
-def _grade(benchmark: Benchmark, task: Task, env: DockerEnvironment, session: RecordingSession) -> Outcome:
+def _grade(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession) -> Outcome:
     try:
         env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         score = benchmark.grade(task, env, tuple(session.transcript))
@@ -126,7 +126,7 @@ def _grade(benchmark: Benchmark, task: Task, env: DockerEnvironment, session: Re
         return Outcome("infra_error", error=f"GraderSetupError: {e}")
     except GraderError as e:
         return Outcome("grader_error", error=str(e))
-    except DockerError:
+    except EnvironmentLost:
         # The agent may have killed PID 1 as its last act and the container exited only now: rule 6 again
         if died := _container_death(benchmark, env):
             return died

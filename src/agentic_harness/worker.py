@@ -18,6 +18,7 @@ from pathlib import Path
 
 from agentic_harness.agents import resolve_agent
 from agentic_harness.benchmarks import BENCHMARKS
+from agentic_harness.environments import DockerEnvironment
 from agentic_harness.redact import redact
 from agentic_harness.runner import run_trial
 from agentic_harness.store import Claim, LostClaim, Store
@@ -28,6 +29,7 @@ RENEW_EVERY_S = 30
 MAX_ATTEMPTS = 3  # attempts per trial, counting lost workers; only infra_error is retried
 RETRY_BACKOFF_S = 5  # a retry waits this times the attempt number
 IDLE_SLEEP_S = 2  # how long a worker with nothing to do waits before looking again
+ENVIRONMENT = DockerEnvironment  # the EnvironmentFactory every trial runs in; the one place the worker picks a backend
 
 log = logging.getLogger("harness.worker")
 
@@ -111,7 +113,7 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim) -> None:
 
     log.info("run %s: %s attempt %s", claim.run_id, claim.task_id, claim.n)
     with _heartbeat(db_path, lambda s: s.renew_lease(claim, worker, LEASE_S)):
-        outcome = run_trial(benchmark, agent, task, limits, claim.artifacts_dir, on_turn_end=load_events)
+        outcome = run_trial(benchmark, agent, task, limits, claim.artifacts_dir, ENVIRONMENT, on_turn_end=load_events)
     retry = outcome.status == "infra_error" and claim.n < MAX_ATTEMPTS
     try:
         store.finish_attempt(claim, worker, outcome, retry_at=time.time() + RETRY_BACKOFF_S * claim.n if retry else None)

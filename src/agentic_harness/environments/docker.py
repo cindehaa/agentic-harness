@@ -8,7 +8,8 @@ import uuid
 from pathlib import Path
 from typing import IO
 
-from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, ExecResult
+from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, EnvironmentLost, EnvironmentState, ExecResult
+from agentic_harness.types import Limits
 
 START_TIMEOUT = 600.0  # seconds; generous because the first run may pull the image
 DOCKER_TIMEOUT = 120.0  # seconds; default for every other docker call, so a stuck daemon can't hang a worker
@@ -18,15 +19,16 @@ MAX_OUTPUT = 1_000_000  # bytes kept per stream of one exec; the rest is read an
 LABEL = "agentic-harness=1"  # on every container we start, so leftovers are easy to find
 
 
-class DockerError(RuntimeError):
-    """The docker CLI itself failed (not a command inside the container)."""
+class DockerError(EnvironmentLost):
+    """The docker CLI itself failed (not a command inside the container): the container is gone or Docker is down."""
 
 
 class DockerEnvironment(Environment):
     """One long-lived container. The workspace lives only inside it (no bind mount); use download() to get files out."""
 
-    def __init__(self, image: str, lifetime_s: int = 7200, workdir: str = "/workspace") -> None:
+    def __init__(self, image: str, lifetime_s: int = 7200, limits: Limits = Limits(), workdir: str = "/workspace") -> None:
         super().__init__(image)
+        self.limits = limits  # the trial's Limits; taken so the class itself is an EnvironmentFactory
         self.lifetime_s = lifetime_s  # the container's main process is `sleep lifetime_s`: a self-destruct timer if the harness dies
         self.workdir = workdir  # default cwd for exec; relative paths resolve here
         self.container_id: str | None = None
@@ -91,11 +93,8 @@ class DockerEnvironment(Environment):
                 raise DockerError("container is gone")
         return ExecResult(proc.returncode, stdout, stderr, truncated=truncated)
 
-    def state(self) -> dict | None:
-        """The container's `docker inspect` State fields we use (Status, Running, ExitCode, OOMKilled).
-
-        None if Docker is unreachable or the container is gone (both mean infra_error).
-        """
+    def state(self) -> EnvironmentState | None:
+        """From `docker inspect`'s State. None if Docker is unreachable or the container is gone (both infra_error)."""
         try:
             result = _docker("inspect", "-f", "{{json .State}}", self._id(), check=False)
         except DockerError:
@@ -103,7 +102,7 @@ class DockerEnvironment(Environment):
         if result.returncode != 0:
             return None
         state = json.loads(result.stdout)
-        return {k: state[k] for k in ("Status", "Running", "ExitCode", "OOMKilled")}
+        return EnvironmentState(running=state["Running"], exit_code=state["ExitCode"], oom_killed=state["OOMKilled"])
 
     def kill_agent_processes(self) -> None:
         """Kill every process the agent left running, before grading: all except PID 1 (the init) and its `sleep`.
