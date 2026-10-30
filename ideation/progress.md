@@ -1,7 +1,7 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 4+5 (merged 2026-10-29: database + queue + workers + status/results) decided (`database.md` #9–18); being built.
+**Now:** Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
 **Next:** Phase 6: hardening (incl. baking grader deps into the image, option B).
 
@@ -221,6 +221,7 @@ flowchart TB
   class q_status,d4_schema,d5_setup,d45 done
   class reg,bashad,pyad,oracle done
   class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync done
-  class truns,ttrials,tatt,tev,traj,files,status,results,enqueue,claim,worker,retry wip
+  class truns,ttrials,tatt,tev,files,status,results,enqueue,claim,worker,retry done
+  class traj todo
   class tasks,hcleanup,fb,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```

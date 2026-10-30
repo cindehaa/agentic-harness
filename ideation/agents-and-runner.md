@@ -50,6 +50,7 @@ for a future `harness cleanup`.
 - **`AgentLimitation`** (`agents/base.py`): the agent itself can't go on. mini raises it for litellm `ContextWindowExceededError` / `ContentPolicyViolationError`; the runner ends the turns and grades the world as it is (like a timeout), reason in `agent_exit_status`.
 - **Any other exception** from the agent or harness (e.g. a model API auth error, provider down, rate limit after mini's retries) → `infra_error` with the traceback. All error paths: `errors.md`.
 - **Container `lifetime_s`** = trial timeout + 600 s grading margin.
+- **Trace on disk (Phase 4+5):** the recording session appends each event to `events.jsonl` (redacted) as it happens and calls the worker after each turn, which loads the file into the `events` table; `outcome.json` / `transcript.json` are written atomically and redacted, and every file in the attempt folder (e.g. mini's `trajectory.json`) is redacted after the trial.
 - **Score checks:** a non-JSON `Score.value`, or one `score_to_float` can't convert → `grader_error`.
 
 ## mini's own retry policy is left alone (2026-10-29)
