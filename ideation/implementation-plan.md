@@ -91,6 +91,14 @@ Ownership: Claude drafts everything; you review line by line (claim query, lease
 - **DECIDED (2026-10-29):** threads, not processes, for `--concurrency` (I/O-bound; `database.md` #15).
 **Explain-back:** Why an attempts table? What's in the DB vs on disk, and why? How is accuracy computed when some trials errored? How do two workers never grab the same trial? What bounds concurrency? What happens to a trial whose worker died? Why threads?
 
+## Architecture audit (2026-10-29)
+
+Decisions A–H built; findings, decisions and commits: `audit-2026-10-29.md`.
+
+- **DEFERRED:** `Environment.exec(env=, user=)` parameters: add them with the second agent (Claude Code needs
+  `forward_env` injected with `docker exec -e`, and the unprivileged `agent` user from `security.md` needs
+  `docker exec -u`). Not needed while mini runs on the host as root.
+
 ## Phase 6 — Hardening
 
 - Image pre-pull per run, per-trial cost/token tracking, LLM rate-limit backoff, `harness cancel`.

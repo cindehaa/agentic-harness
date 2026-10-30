@@ -1,7 +1,7 @@
 # Progress
 
 **Last updated:** 2026-10-29
-**Now:** Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
+**Now:** Architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
 **Next:** Phase 6: hardening (incl. baking grader deps into the image, option B).
 
@@ -106,6 +106,18 @@ flowchart TB
     d45["Decided 2026-10-29 (database.md #9–18): run returns id (--wait = inline worker); sqlite3 + handwritten SQL in store.py; BEGIN IMMEDIATE claim; 120 s lease renewed every 30 s; infra_error retried up to 3 attempts; worker threads; events.jsonl → events per turn; secret redaction; GraderSetupError → infra_error"]
   end
 
+  subgraph AUD["Architecture audit (2026-10-29, audit-2026-10-29.md)"]
+    direction TB
+    a_port["Environment port: state / kill on the ABC, EnvironmentLost, injected env factory, fake-env runner tests"]
+    a_retry["infra_error.retryable: transient only; auth / bad request / bugs fail fast; worker + submit pre-flight"]
+    a_life["Lifetime = 3 x trial timeout + 600 s; keep-alive exit 0 = infra_error"]
+    a_lim["--memory 2g / --cpus 1 / --pids-limit 512; OOM under our limit = graded fail"]
+    a_lazy["Lazy agent registry (status / results never load litellm)"]
+    a_rec["RecordingEnvironment: every agent command in the trace"]
+    a_cfg["CLI: .env loaded, model resolved at submit, limit flags"]
+    a_small["Agent.version / AgentSession.stats; score 0 for harness-decided failures; image content hash; workers table; workspace.tar"]
+  end
+
   subgraph P6["Phase 6: hardening"]
     direction LR
     prepull["Image pre-pull"]
@@ -153,7 +165,7 @@ flowchart TB
   TR --> fb
   TR --> runsync
   record --> tatt
-  mini --> traj --> tev
+  a_rec --> traj --> tev
   record --> files --> tatt
   ttrials --> status
   tatt --> results
@@ -161,7 +173,7 @@ flowchart TB
   worker --> claim --> ttrials
   worker --> TR
   claim --> retry
-  P5 --> P6
+  P5 --> AUD --> P6
   agentabc --> claude
   nullor --> validate
   oracle --> nullor
@@ -222,6 +234,7 @@ flowchart TB
   class reg,bashad,pyad,oracle done
   class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync done
   class truns,ttrials,tatt,tev,files,status,results,enqueue,claim,worker,retry done
-  class traj todo
+  class traj done
+  class a_port,a_retry,a_life,a_lim,a_lazy,a_rec,a_cfg,a_small done
   class tasks,hcleanup,fb,prepull,cost,breakit,claude,validate,nullor,skill,parity,readme,diagram,demo todo
 ```
