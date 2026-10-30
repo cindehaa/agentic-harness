@@ -8,7 +8,7 @@ from typing import Generic, TypeVar
 
 from agentic_harness.agents.base import AgentCapabilities, AgentSession
 from agentic_harness.environments.base import Environment
-from agentic_harness.types import Score, Task, Transcript, score_to_float
+from agentic_harness.types import McpServer, Score, Task, Transcript, score_to_float
 
 TaskT = TypeVar("TaskT", bound=Task)  # each adapter's own Task subclass
 
@@ -35,8 +35,14 @@ class Benchmark(ABC, Generic[TaskT]):
 
     def requirements(self, task: TaskT) -> AgentCapabilities:
         """What an agent must be able to do for this task; the runner checks it against the agent's capabilities
-        before the trial starts. Default: one text message."""
-        return AgentCapabilities()
+        before the trial starts. Default: text messages, and MCP if the task declares MCP servers."""
+        return AgentCapabilities(mcp=bool(self.mcp_servers(task)))
+
+    def mcp_servers(self, task: TaskT) -> list[McpServer]:
+        """MCP servers serving this task's benchmark-specific actions. The runner starts each as a sidecar on the
+        trial's network before the agent's turn and stops it with the trial. Their images must be local (setup()).
+        Default: none (the agent acts only through its own tools)."""
+        return []
 
     def grader_image(self, task: TaskT) -> str:
         """The image grade() runs in, attached to the trial's world (sharing its workspace, network and processes).

@@ -4,12 +4,13 @@ import json
 import posixpath
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import IO
 
 from agentic_harness.environments.base import (
-    DEFAULT_TIMEOUT, EndReason, Environment, EnvironmentLost, EnvironmentState, ExecResult,
+    DEFAULT_TIMEOUT, EndReason, Environment, EnvironmentLost, EnvironmentState, ExecResult, Sidecar,
 )
 from agentic_harness.types import Limits
 
@@ -19,6 +20,7 @@ CP_TIMEOUT = 600.0  # seconds; copies can be large
 BUILD_TIMEOUT = 1800.0  # seconds; builds may pull base images and run setup scripts
 MAX_OUTPUT = 1_000_000  # bytes kept per stream of one exec; the rest is read and thrown away
 LABEL = "agentic-harness=1"  # on every container we start, so leftovers are easy to find
+SERVICE_START_TIMEOUT = 60.0  # seconds for an attached service to listen on its port
 
 
 class DockerError(EnvironmentLost):
@@ -27,7 +29,8 @@ class DockerError(EnvironmentLost):
 
 class DockerEnvironment(Environment):
     """One long-lived container. The workspace is a Docker volume of its own (not a host folder), so an attached
-    grader can share it; use download() or save_workspace() to get files out."""
+    grader can share it; use download() or save_workspace() to get files out. Attached sidecars join its network
+    namespace (`--network container:`), so localhost is the same in all of them."""
 
     def __init__(self, image: str, lifetime_s: int = 7200, limits: Limits = Limits(), workdir: str = "/workspace") -> None:
         super().__init__(image)
@@ -37,8 +40,9 @@ class DockerEnvironment(Environment):
         self.container_id: str | None = None
         self.volume: str | None = None  # the workspace volume, removed in stop(); None for an attached grader
         self.sleep_pid: str | None = None  # the main `sleep` (child of the init, PID 1); kill_agent_processes spares it
-        self.attached_to: str | None = None  # set by attach_grader(): the trial container this one shares a world with
-        self.graders: list[DockerEnvironment] = []  # attached to this one; stopped before it, or its volume stays in use
+        self.attached_to: str | None = None  # set by attach(): the trial container this one is attached to
+        self.sidecar: Sidecar | None = None  # set by attach(): what it shares and runs
+        self.attached: list[DockerEnvironment] = []  # sidecars attached to this one; stopped before it, or its volume stays in use
 
     def start(self) -> None:
         name = f"harness-{uuid.uuid4().hex[:8]}"
@@ -49,9 +53,10 @@ class DockerEnvironment(Environment):
                 self.volume = name
                 world = ["-v", f"{name}:{self.workdir}"]
             else:
-                # The trial's workspace volume, its network (localhost is the trial's) and its processes
                 t = self.attached_to
-                world = ["--volumes-from", t, "--network", f"container:{t}", "--pid", f"container:{t}"]
+                world = ["--network", f"container:{t}"]  # localhost is the trial's
+                if self.sidecar.shares_world:  # and the trial's workspace volume and processes
+                    world += ["--volumes-from", t, "--pid", f"container:{t}"]
             # No --rm: a container that dies mid-trial must stay inspectable (state()); stop() removes it.
             # --init: sleep as PID 1 would never reap zombies.
             # --entrypoint: images with their own ENTRYPOINT would otherwise wrap our sleep.
@@ -65,6 +70,8 @@ class DockerEnvironment(Environment):
             if self.attached_to is None:  # in an attached grader, PID 1 is the trial's init
                 _docker("exec", self.container_id, "mkdir", "-p", self.workdir)
                 self.sleep_pid = _decode(_docker("exec", self.container_id, "cat", "/proc/1/task/1/children").stdout).split()[0]
+            elif self.sidecar.command:
+                self._start_service()
         except BaseException:
             # __exit__ won't run if start() fails; the name is known even if `run` never returned an id
             _rm(name)
@@ -73,9 +80,9 @@ class DockerEnvironment(Environment):
             raise
 
     def stop(self) -> None:
-        """Remove attached graders, then the container and its workspace volume. Safe to call twice or before start()."""
-        for grader in self.graders:
-            grader.stop()
+        """Remove attached sidecars, then the container and its workspace volume. Safe to call twice or before start()."""
+        for sidecar in self.attached:
+            sidecar.stop()
         if self.container_id is None:
             return
         _rm(self.container_id)
@@ -83,11 +90,32 @@ class DockerEnvironment(Environment):
         self.sleep_pid = None
         self._remove_volume()
 
-    def attach_grader(self, image: str) -> "DockerEnvironment":
-        grader = DockerEnvironment(image, self.lifetime_s, self.limits, self.workdir)
-        grader.attached_to = self._id()
-        self.graders.append(grader)
-        return grader
+    def attach(self, sidecar: Sidecar) -> "DockerEnvironment":
+        env = DockerEnvironment(sidecar.image, self.lifetime_s, self.limits, self.workdir)
+        env.attached_to = self._id()
+        env.sidecar = sidecar
+        self.attached.append(env)
+        return env
+
+    def _start_service(self) -> None:
+        """Run the sidecar's command beside its keep-alive sleep (which stays the self-destruct timer), then wait until
+        it listens on its port. Its output goes to PID 1's, so `docker logs` shows it."""
+        _docker("exec", "-d", self._id(), "sh", "-c", 'exec "$@" > /proc/1/fd/1 2> /proc/1/fd/2', "sh", *self.sidecar.command)
+        if self.sidecar.port is None:
+            return
+        deadline = time.monotonic() + SERVICE_START_TIMEOUT
+        while not self._listening(self.sidecar.port):
+            if time.monotonic() > deadline:
+                logs = _docker("logs", "--tail", "20", self._id(), check=False)
+                raise DockerError(f"{self.image} not listening on port {self.sidecar.port} after {SERVICE_START_TIMEOUT:.0f}s: "
+                                  f"{_decode(logs.stdout + logs.stderr).strip()}")
+            time.sleep(0.2)
+
+    def _listening(self, port: int) -> bool:
+        """Whether a TCP socket listens on `port`, from the kernel's own table: no tool (nc, curl) needed in the image."""
+        table = _decode(_docker("exec", self._id(), "cat", "/proc/net/tcp", "/proc/net/tcp6", check=False).stdout)
+        # each row: sl local_address(hex ip:hex port) rem_address st(0A = LISTEN) ...
+        return any(f[1].endswith(f":{port:04X}") and f[3] == "0A" for f in (line.split() for line in table.splitlines()[1:]) if len(f) > 3)
 
     def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None) -> ExecResult:
         argv = ["sh", "-c", cmd] if isinstance(cmd, str) else cmd

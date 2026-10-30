@@ -61,6 +61,21 @@ class Task:
 
 
 @dataclass(frozen=True)
+class McpServer:
+    """An MCP server a benchmark serves to the agent (its benchmark-specific actions), run as a sidecar on the trial's
+    network and reached over streamable HTTP at `url` from inside the agent's world."""
+
+    name: str  # what the agent knows it by, e.g. "airline"
+    image: str
+    command: tuple[str, ...]  # starts the server, listening on `port`
+    port: int
+
+    @property
+    def url(self) -> str:
+        return f"http://localhost:{self.port}/mcp"
+
+
+@dataclass(frozen=True)
 class Limits:
     """What one trial may spend."""
 

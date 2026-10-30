@@ -44,6 +44,19 @@ class EnvironmentState:
     end_reason: EndReason | None = None  # set once it has ended
 
 
+@dataclass(frozen=True)
+class Sidecar:
+    """A second world attached to a trial's world. It always shares the trial's network, so `localhost` is the same
+    in both (a service one listens on, the other reaches)."""
+
+    image: str
+    command: tuple[str, ...] = ()  # its long-running process, e.g. a server; empty: none (it is exec'd into)
+    port: int | None = None  # with a command: start() returns once something listens here
+    # Also the trial's workspace and processes (a grader inspecting the world). False for a service the agent uses:
+    # sharing processes would let the agent reach into it (e.g. through /proc/<pid>/root).
+    shares_world: bool = True
+
+
 class Environment(ABC):
     """One isolated world (e.g. one Docker container). Use as a context manager so it is always stopped."""
 
@@ -75,10 +88,13 @@ class Environment(ABC):
         reach a host path). Stops at `max_bytes`; True if cut short. OSError if it can't be read."""
 
     @abstractmethod
+    def attach(self, sidecar: Sidecar) -> "Environment":
+        """A second world attached to this one, with the same limits. Not started yet: use it as a context manager
+        (or start() it). It is stopped with this world at the latest."""
+
     def attach_grader(self, image: str) -> "Environment":
-        """A second world from `image`, attached to this one: it sees this world's workspace, network (e.g. a service
-        on localhost) and processes, with the same limits. Not started yet: use it as a context manager. It is
-        stopped with this world at the latest."""
+        """A grader: sees this world's workspace, network (e.g. a service on localhost) and processes."""
+        return self.attach(Sidecar(image))
 
     @abstractmethod
     def write_file(self, path: str, content: str | bytes) -> None:

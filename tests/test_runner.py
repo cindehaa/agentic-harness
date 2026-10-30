@@ -36,7 +36,7 @@ class ScriptedAgent(Agent):
     def __init__(self, act: Callable[[Environment], None]) -> None:
         self.act = act
 
-    def start(self, env, artifacts_dir, limits) -> AgentSession:
+    def start(self, env, artifacts_dir, limits, mcp_servers=()) -> AgentSession:
         agent = self
 
         class Session(AgentSession):
@@ -183,7 +183,7 @@ def test_grader_and_workspace_volume_are_removed_after_the_trial(tmp_path):
 
     outcome = run_trial(bench, ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, factory)
     [env] = made
-    [grader] = env.graders
+    [grader] = env.attached
     assert outcome.status == "graded" and grader.image == "python:3.11-slim"
     assert env.container_id is None and grader.container_id is None and env.volume is None
     assert _labelled("ps", "-a") == "" and _labelled("volume", "ls") == ""

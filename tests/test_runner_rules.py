@@ -25,7 +25,7 @@ class FakeEnvironment(Environment):
         self.state_now: EnvironmentState | None = EnvironmentState(running=True)
         self.lose_on_exec = False
         self.started = self.stopped = self.killed = False
-        self.graders: list[FakeEnvironment] = []
+        self.attached: list[FakeEnvironment] = []
 
     def start(self):
         if self.image == "missing:image":
@@ -44,11 +44,13 @@ class FakeEnvironment(Environment):
     def read_file(self, path): return self.files[path]
     def upload(self, local, remote): ...
 
-    def attach_grader(self, image):
-        grader = FakeEnvironment(image, self.lifetime_s, self.limits)
-        grader.files = self.files  # the shared workspace
-        self.graders.append(grader)
-        return grader
+    def attach(self, sidecar):
+        attached = FakeEnvironment(sidecar.image, self.lifetime_s, self.limits)
+        attached.sidecar = sidecar
+        if sidecar.shares_world:
+            attached.files = self.files  # the shared workspace
+        self.attached.append(attached)
+        return attached
     def download(self, remote, local): ...
 
     def exec(self, cmd, timeout=60, cwd=None) -> ExecResult:
@@ -83,7 +85,7 @@ class ScriptedAgent(Agent):
     def __init__(self, act: Callable[[Environment], None]) -> None:
         self.act = act
 
-    def start(self, env, artifacts_dir, limits) -> AgentSession:
+    def start(self, env, artifacts_dir, limits, mcp_servers=()) -> AgentSession:
         act = self.act
 
         class Session(AgentSession):
@@ -125,7 +127,7 @@ def test_runner_uses_the_injected_factory_and_always_stops(tmp_path):
 
 def test_grading_runs_in_an_attached_grader_that_is_stopped(tmp_path):
     outcome, env = run(write_ok, tmp_path)
-    [grader] = env.graders
+    [grader] = env.attached
     assert outcome.score.value is True  # the grader saw the trial's workspace
     assert grader.image == "fake:image" and grader.started and grader.stopped  # default grader_image: the task's
     assert (grader.lifetime_s, grader.limits) == (env.lifetime_s, env.limits)

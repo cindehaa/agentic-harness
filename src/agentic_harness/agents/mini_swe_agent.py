@@ -29,7 +29,7 @@ from agentic_harness.agents.base import (  # noqa: E402
 )
 from agentic_harness.environments.base import Environment  # noqa: E402
 from agentic_harness.paths import REPO_ROOT  # noqa: E402
-from agentic_harness.types import Limits, Message, Text  # noqa: E402
+from agentic_harness.types import Limits, McpServer, Message, Text  # noqa: E402
 
 MODEL_TIMEOUT_S = 120  # one model call (litellm `timeout`); mini retries failed calls itself
 # litellm errors that mean the model itself can't go on (not our setup or the provider): grade the world as it is.
@@ -157,7 +157,7 @@ class MiniSweAgent(Agent):
                                 capture_output=True, text=True)
         return result.stdout.strip() or None
 
-    def start(self, env: Environment, artifacts_dir: Path, limits: Limits) -> MiniSweSession:
+    def start(self, env: Environment, artifacts_dir: Path, limits: Limits, mcp_servers: tuple[McpServer, ...] = ()) -> MiniSweSession:
         config = get_config_from_spec("mini.yaml")
         model_config = config["model"] | {"model_kwargs": config["model"].get("model_kwargs", {}) | {"timeout": MODEL_TIMEOUT_S}}
         agent = MiniAgent(

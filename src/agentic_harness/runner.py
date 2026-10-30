@@ -10,7 +10,7 @@ from pathlib import Path
 
 from agentic_harness.agents.base import Agent, AgentLimitation, TransientError, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError
-from agentic_harness.environments.base import EndReason, Environment, EnvironmentFactory, EnvironmentLost
+from agentic_harness.environments.base import EndReason, Environment, EnvironmentFactory, EnvironmentLost, Sidecar
 from agentic_harness.recording import EventLog, RecordingEnvironment, RecordingSession, TurnLimit
 from agentic_harness.redact import redact, redact_file
 from agentic_harness.types import Limits, Outcome, Score, Task
@@ -37,7 +37,10 @@ def run_trial(
             raise Unsupported(f"{agent.name} can't do what this task needs: {', '.join(missing)}")
         with env_factory(task.image, int(LIFETIME_FACTOR * limits.trial_timeout_s + GRADE_MARGIN_S), limits) as env:
             log = EventLog(attempt_dir / "events.jsonl")
-            inner = agent.start(RecordingEnvironment(env, log), attempt_dir, limits)
+            servers = tuple(benchmark.mcp_servers(task))
+            for s in servers:  # network only: the agent reaches the server, never its files or processes; stopped with env
+                env.attach(Sidecar(s.image, s.command, s.port, shares_world=False)).start()
+            inner = agent.start(RecordingEnvironment(env, log), attempt_dir, limits, mcp_servers=servers)
             session = RecordingSession(inner, limits.max_turns, log, on_turn_end)
             outcome = _agent_turns(benchmark, task, env, session)
             if outcome is None:

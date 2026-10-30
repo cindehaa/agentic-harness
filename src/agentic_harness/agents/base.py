@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from agentic_harness.environments.base import Environment
-from agentic_harness.types import Limits, Message
+from agentic_harness.types import Limits, McpServer, Message
 
 
 class Unsupported(Exception):
@@ -79,9 +79,10 @@ class Agent(ABC):
         self.model = model  # resolved at submit time (runs.model); adapters never read model_env themselves
 
     @abstractmethod
-    def start(self, env: Environment, artifacts_dir: Path, limits: Limits) -> AgentSession:
+    def start(self, env: Environment, artifacts_dir: Path, limits: Limits, mcp_servers: tuple[McpServer, ...] = ()) -> AgentSession:
         """A new session that acts only through `env`, saves its own files (e.g. a trajectory) in `artifacts_dir`,
-        and stops itself within `limits`."""
+        and stops itself within `limits`. `mcp_servers` are already running, reachable at their `url` from inside
+        `env` (only an agent with capabilities.mcp gets any)."""
 
     def preflight(self) -> None:
         """Raise PreflightError if this agent can't run at all. Must be cheap and spend no model tokens."""

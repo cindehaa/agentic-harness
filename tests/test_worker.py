@@ -53,7 +53,7 @@ class Oracle(Agent):
     name = "oracle"
     calls = 0
 
-    def start(self, env, artifacts_dir, limits) -> AgentSession:
+    def start(self, env, artifacts_dir, limits, mcp_servers=()) -> AgentSession:
         agent = self
 
         class Session(AgentSession):

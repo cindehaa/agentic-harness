@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from agentic_harness.agents.base import AgentSession, AgentStats
-from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, EnvironmentState, ExecResult
+from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, EnvironmentState, ExecResult, Sidecar
 from agentic_harness.redact import redact
 from agentic_harness.types import Message
 
@@ -109,8 +109,8 @@ class RecordingEnvironment(Environment):
     def save_workspace(self, local: Path, max_bytes: int) -> bool:
         return self.env.save_workspace(local, max_bytes)
 
-    def attach_grader(self, image: str) -> Environment:
-        return self.env.attach_grader(image)
+    def attach(self, sidecar: Sidecar) -> Environment:
+        return self.env.attach(sidecar)
 
     def write_file(self, path: str, content: str | bytes) -> None:
         self.env.write_file(path, content)

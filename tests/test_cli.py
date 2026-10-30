@@ -107,7 +107,7 @@ class FakeAgent(Agent):
     name = "fake"
     model_env = "FAKE_MODEL"
 
-    def start(self, env, artifacts_dir, limits):
+    def start(self, env, artifacts_dir, limits, mcp_servers=()):
         raise NotImplementedError  # never run here
 
 
