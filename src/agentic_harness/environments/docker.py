@@ -1,6 +1,7 @@
 """An Environment backed by one Docker container, driven through the `docker` CLI (no SDK dependency)."""
 
 import json
+import logging
 import os
 import posixpath
 import subprocess
@@ -21,8 +22,12 @@ CP_TIMEOUT = 600.0  # seconds; copies can be large
 BUILD_TIMEOUT = 1800.0  # seconds; builds may pull base images and run setup scripts
 MAX_OUTPUT = 1_000_000  # bytes kept per stream of one exec; the rest is read and thrown away
 LABEL = "agentic-harness=1"  # on every container we start, so leftovers are easy to find
+VOLUME_RM_TRIES = 4  # removing a workspace volume; waits VOLUME_RM_DELAY_S x try number between tries
+VOLUME_RM_DELAY_S = 0.5
 KILL_PASSES = 5  # kill_agent_processes: passes over /proc at most, so a fork loop can't keep it busy forever
 SERVICE_START_TIMEOUT = 60.0  # seconds for an attached service to listen on its port
+
+log = logging.getLogger("harness.docker")
 
 
 class DockerError(EnvironmentLost):
@@ -240,13 +245,24 @@ class DockerEnvironment(Environment):
         return self.container_id
 
     def _remove_volume(self) -> None:
-        """Best effort, like _rm: a volume still in use by a container is left (found later by its label)."""
+        """Retried: a container that used it may still be going away. A volume that stays is logged, not raised
+        (`harness cleanup` removes it later, by its label)."""
         if self.volume is None:
             return
-        try:
-            _docker("volume", "rm", "-f", self.volume, check=False)
-        except DockerError:
-            pass
+        error = ""
+        for attempt in range(VOLUME_RM_TRIES):
+            if attempt:
+                time.sleep(VOLUME_RM_DELAY_S * attempt)
+            try:
+                result = _docker("volume", "rm", "-f", self.volume, check=False)
+            except DockerError as e:  # timed out
+                error = str(e)
+                continue
+            if result.returncode == 0:
+                break
+            error = _decode(result.stderr).strip()
+        else:
+            log.warning("leftover volume %s (harness cleanup removes it): %s", self.volume, error)
         self.volume = None
 
     def _alive(self) -> bool:

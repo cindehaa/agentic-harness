@@ -51,7 +51,7 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | # | Decision | Why |
 |---|---|---|
 | 1 | Drive the `docker` CLI via `subprocess` | No docker SDK dependency; same approach as mini-swe-agent |
-| 2 | No bind mount; the workspace is a Docker named volume per trial container (2026-10-29; was: only in the container's own filesystem), created at `start()` with label `agentic-harness=1`, removed in `stop()`. A new volume starts with the image's own `/workspace` files (Docker copies them in) | An attached grader can share it (`--volumes-from`); callers still use `download()` / `save_workspace()` to get it out. Side effect: `rm -rf /workspace` only empties it, the mount point stays |
+| 2 | No bind mount; the workspace is a Docker named volume per trial container (2026-10-29; was: only in the container's own filesystem), created at `start()` with label `agentic-harness=1`, removed in `stop()` after its sidecars and container (retried 4 times with a short backoff; a volume that stays is logged as leftover and `harness cleanup` removes it). A new volume starts with the image's own `/workspace` files (Docker copies them in) | An attached grader can share it (`--volumes-from`); callers still use `download()` / `save_workspace()` to get it out. Side effect: `rm -rf /workspace` only empties it, the mount point stays |
 | 3 | Main process is `sleep <lifetime_s>` (default 7200) | Keeps the container alive; self-destruct timer if the harness dies |
 | 4 | Every container gets `--label agentic-harness=1` and name `harness-<8 hex>` | Leftovers are easy to find and remove |
 | 5 | `/workspace` is the working directory (`-w`, created at start) and `exec`'s default cwd | One predictable place for task files |

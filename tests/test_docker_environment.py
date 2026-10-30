@@ -8,6 +8,7 @@ import time
 import pytest
 
 from agentic_harness.environments import DockerEnvironment, EndReason, EnvironmentLost, EnvironmentState
+from agentic_harness.environments import docker as docker_module
 from agentic_harness.environments.docker import MAX_OUTPUT, DockerError, _end_reason
 from agentic_harness.types import Limits
 
@@ -357,3 +358,18 @@ def test_exec_env_reaches_the_command_but_never_the_docker_command_line(env, mon
 def test_exec_as_another_user(env):
     assert env.exec(["id", "-un"], user="nobody").stdout == "nobody\n"
     assert env.exec(["id", "-un"]).stdout == "root\n"
+
+
+def test_a_volume_still_in_use_is_retried_then_reported(monkeypatch, caplog):
+    monkeypatch.setattr(docker_module, "VOLUME_RM_DELAY_S", 0)
+    env = DockerEnvironment(IMAGE)
+    env.start()
+    volume = env.volume
+    user = subprocess.run(["docker", "run", "-d", "--label", "agentic-harness=1", "-v", f"{volume}:/x", IMAGE, "sleep", "60"],
+                          capture_output=True, text=True, check=True).stdout.strip()  # not ours: stop() can't remove it
+    try:
+        env.stop()
+        assert f"leftover volume {volume}" in caplog.text and volume in _volumes()
+    finally:
+        subprocess.run(["docker", "rm", "-f", user], capture_output=True)
+        subprocess.run(["docker", "volume", "rm", volume], capture_output=True)
