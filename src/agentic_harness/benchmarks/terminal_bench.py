@@ -27,7 +27,7 @@ from pathlib import Path
 import yaml
 
 from agentic_harness.agents.base import AgentSession
-from agentic_harness.benchmarks.base import Benchmark, GraderError, content_hash
+from agentic_harness.benchmarks.base import Benchmark, BenchmarkUnavailable, GraderError, content_hash
 from agentic_harness.environments import Environment, build_image, ensure_image
 from agentic_harness.paths import REPO_ROOT
 from agentic_harness.types import Message, ReferenceSolution, Score, Task, Text, Transcript
@@ -49,6 +49,8 @@ class TerminalBench(Benchmark[TerminalBenchTask]):
     name = "terminal-bench"
 
     def tasks(self) -> list[TerminalBenchTask]:
+        if not ROOT.is_dir():  # the submodule is opt-in (update = none): a fresh clone doesn't have it
+            raise BenchmarkUnavailable(f"{ROOT} is missing: run `make init-extra-benchmarks BENCH=benchmarks/terminal-bench`")
         tasks = []
         for task_id in TASK_IDS:
             meta = yaml.safe_load((ROOT / task_id / "task.yaml").read_text())

@@ -17,6 +17,10 @@ class GraderError(Exception):
     """The grader crashed or its output was unreadable -> outcome grader_error."""
 
 
+class BenchmarkUnavailable(Exception):
+    """The benchmark's files aren't on disk (e.g. an opt-in submodule not fetched); the message says how to get them."""
+
+
 class Benchmark(ABC, Generic[TaskT]):
     """One benchmark, adapted to the harness. Subclass as e.g. `BashOperations(Benchmark[BashTask])`."""
 

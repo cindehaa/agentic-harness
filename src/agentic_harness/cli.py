@@ -17,7 +17,7 @@ from agentic_harness import parity as parity_module
 from agentic_harness import validate as validate_module
 from agentic_harness import worker as worker_module
 from agentic_harness.agents import MODEL_ENV, Agent, PreflightError, resolve_agent, resolve_model
-from agentic_harness.benchmarks import BENCHMARKS, Benchmark
+from agentic_harness.benchmarks import BENCHMARKS, Benchmark, BenchmarkUnavailable
 from agentic_harness.dashboard import make_server
 from agentic_harness.environments import remove_images, remove_leftovers
 from agentic_harness.metrics import run_metrics
@@ -67,7 +67,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
     bench, the_agent = _benchmark_and_agent(benchmark, agent, model)
     limits = Limits(trial_timeout_s=trial_timeout, cost_usd=cost_limit, max_steps=max_steps, memory=memory, cpus=cpus)
-    run_id = _submit(bench, the_agent, _select(bench.tasks(), task_ids), limits, max_run_cost)
+    run_id = _submit(bench, the_agent, _select(bench, task_ids), limits, max_run_cost)
     if not wait:
         click.echo("Start a worker to run it: harness worker")
         return
@@ -127,7 +127,7 @@ def validate(benchmark: str, task_ids: str | None, concurrency: int):
     if benchmark not in BENCHMARKS:
         raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
     bench = BENCHMARKS[benchmark]()
-    tasks = _select(bench.tasks(), task_ids)
+    tasks = _select(bench, task_ids)
     out_dir = RUNS_DIR / "validate" / f"{benchmark}-{time.strftime('%Y%m%d-%H%M%S')}"
     checks = validate_module.validate(bench, tasks, out_dir, concurrency)
     by_task = {t.id: {c.kind: c for c in checks if c.task_id == t.id} for t in tasks}
@@ -159,7 +159,7 @@ def parity(benchmark: str, agent: str, runs: int, task_ids: str | None, model: s
     """Does our harness score the agent the same as the benchmark's original workflow? Runs the agent N times each
     way; the two sides' run-score ranges must overlap. Writes runs/parity/<benchmark>-<timestamp>/parity.json."""
     bench, the_agent = _benchmark_and_agent(benchmark, agent, model)
-    tasks = _select(bench.tasks(), task_ids)
+    tasks = _select(bench, task_ids)
     out_dir = RUNS_DIR / "parity" / f"{benchmark}-{time.strftime('%Y%m%d-%H%M%S')}"
     _log_to_stderr()
     run_ids, harness_scores = [], []
@@ -300,7 +300,11 @@ def _needed_images(store: Store) -> set[str]:
     for run in store.unfinished_runs():
         bench, agent = BENCHMARKS[run["benchmark"]](), resolve_agent(run["agent"])(run["model"])
         waiting = {t["task_id"] for t in store.trials(run["id"]) if t["state"] != "done"}
-        for task in (t for t in bench.tasks() if t.id in waiting):
+        try:
+            tasks = bench.tasks()
+        except BenchmarkUnavailable:  # its trials can't start anyway, so no image of theirs is worth keeping
+            continue
+        for task in (t for t in tasks if t.id in waiting):
             needed |= {task.image, bench.grader_image(task), agent.image_for(task.image)}
             needed |= {s.image for s in bench.mcp_servers(task)}
     return needed
@@ -328,7 +332,11 @@ def _log_to_stderr() -> None:
         logger.setLevel(logging.INFO)
 
 
-def _select(tasks: list[Task], task_ids: str | None) -> list[Task]:
+def _select(bench: Benchmark, task_ids: str | None) -> list[Task]:
+    try:
+        tasks = bench.tasks()
+    except BenchmarkUnavailable as e:
+        raise click.ClickException(str(e)) from None
     if not task_ids:
         return tasks
     wanted = task_ids.split(",")
