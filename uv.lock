@@ -18,6 +18,7 @@ dependencies = [
     { name = "click" },
     { name = "mini-swe-agent" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -30,6 +31,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "mini-swe-agent", editable = "agents/mini-swe-agent" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [package.metadata.requires-dev]
