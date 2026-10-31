@@ -14,6 +14,7 @@ from litellm.exceptions import (  # noqa: E402
     InternalServerError,
     RateLimitError,
     ServiceUnavailableError,
+    Timeout,
 )
 from minisweagent.agents.default import DefaultAgent  # noqa: E402
 from minisweagent.config import get_config_from_spec  # noqa: E402
@@ -29,7 +30,7 @@ from agentic_harness.types import Limits, McpServer, Message, Text  # noqa: E402
 
 MODEL_TIMEOUT_S = 120
 LIMITATIONS = (ContextWindowExceededError, ContentPolicyViolationError)
-TRANSIENT = (APIConnectionError, RateLimitError, InternalServerError, ServiceUnavailableError, BadGatewayError)
+TRANSIENT = (APIConnectionError, RateLimitError, InternalServerError, ServiceUnavailableError, BadGatewayError, Timeout)
 
 
 class TimeLimit(LimitsExceeded):

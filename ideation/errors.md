@@ -37,7 +37,7 @@ flowchart TB
   turns -->|"TurnLimit: more than max_turns messages"| check
   turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError; ACP agent: stopReason refusal, or an error message about prompt length / context window"| check
   turns -->|"EnvironmentLost"| check
-  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries; ACP agent: an error message saying overloaded, rate limit, server_error, 502/503/529, after its own retries, or an exception in our own handler session_update / request_permission, raised from send() when the prompt ends), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
+  turns -->|"TransientError (mini: litellm APIConnectionError, Timeout, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries; ACP agent: an error message saying overloaded, rate limit, server_error, 502/503/529, after its own retries, or an exception in our own handler session_update / request_permission, raised from send() when the prompt ends), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
   turns -->|"any other exception: auth, permission, bad request, adapter or benchmark bug; AcpAgentError (any other error message, e.g. a bad key or unknown model; the agent process ended with the world still up; a definition the agent contradicts)"| IE2["infra_error, NOT retryable: fails fast, logged as an error (traceback saved)"]
 
   check{"after the turn: env.state() (Docker: docker inspect)"}

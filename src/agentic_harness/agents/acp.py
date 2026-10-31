@@ -301,7 +301,7 @@ class AcpSession(AgentSession):
 
     async def request_permission(self, session_id: str, tool_call, options, **kwargs) -> RequestPermissionResponse:
         try:
-            # allow once, never "always": an always-rule may be saved in the workspace
+            # prefer "allow once" (an always-rule may be saved in the workspace); "always" only if once isn't offered
             chosen = next((o for kind in ("allow_once", "allow_always") for o in options if o.kind == kind), None)
             self._trace("permission", {"tool_call": tool_call.tool_call_id, "granted": chosen.kind if chosen else None})
             if chosen is None:
