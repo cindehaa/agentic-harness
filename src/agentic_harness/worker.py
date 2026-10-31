@@ -269,10 +269,10 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
         except sqlite3.Error as e:
             log.warning("%s attempt %s: recording the turn failed (%s); retried at the end", claim.task_id, claim.n, e)
 
-    def environment(image: str, lifetime_s: int, limits: Limits) -> Environment:  # ENVIRONMENT, known to Stop
+    def environment(image: str, lifetime_s: int, limits: Limits, workdir: str) -> Environment:  # ENVIRONMENT, known to Stop
         if stop.requested.is_set():
             raise EnvironmentLost("worker interrupted")
-        env = ENVIRONMENT(image, lifetime_s, limits, labels={ATTEMPT_LABEL: str(claim.attempt_id)})  # for `harness cleanup`
+        env = ENVIRONMENT(image, lifetime_s, limits, workdir, labels={ATTEMPT_LABEL: str(claim.attempt_id)})  # for `harness cleanup`
         stop.track_world(claim, env)
         return env
 

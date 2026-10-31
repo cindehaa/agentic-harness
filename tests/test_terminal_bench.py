@@ -77,7 +77,7 @@ def test_run_agent_sends_instruction_verbatim(tasks):
 @pytest.mark.parametrize("task_id", TASK_IDS)
 def test_reference_solution_passes(task_id, tasks):
     task = tasks[task_id]
-    with DockerEnvironment(task.image) as env:
+    with DockerEnvironment(task.image, workdir=task.workdir) as env:
         apply_reference(task, env)
         score = grade(task, env)
     assert score.value is True, score.explanation
@@ -87,7 +87,7 @@ def test_reference_solution_passes(task_id, tasks):
 @pytest.mark.parametrize("task_id", TASK_IDS)
 def test_doing_nothing_fails(task_id, tasks):
     task = tasks[task_id]
-    with DockerEnvironment(task.image) as env:
+    with DockerEnvironment(task.image, workdir=task.workdir) as env:
         score = grade(task, env)
     assert score.value is False, score.explanation
 
@@ -100,18 +100,20 @@ def test_reference_solutions_are_the_benchmarks_own(tasks):
 @needs_world
 @pytest.mark.parametrize("task_id", TASK_IDS)
 def test_images_work_in_the_assumed_workdir(task_id, tasks):
-    """The adapter runs solutions and tests from WORKDIR: a task whose image sets another one must not slip in."""
+    """Tasks declare WORKDIR as their workdir, and solutions and tests run from it: a task whose image sets another
+    one must not slip in."""
     workdir = subprocess.run(["docker", "image", "inspect", "-f", "{{.Config.WorkingDir}}", tasks[task_id].image],
                              capture_output=True, text=True, check=True).stdout.strip()
-    assert workdir == WORKDIR
+    assert workdir == WORKDIR == tasks[task_id].workdir
 
 
 @needs_world
 def test_tests_enter_the_world_only_at_grade_time(tasks):
     task = tasks["hello-world"]
-    with DockerEnvironment(task.image) as env:
+    with DockerEnvironment(task.image, workdir=task.workdir) as env:
         assert env.exec("test -e /tests").exit_code != 0
         assert env.exec("ls /app").stdout.strip() == ""
+        assert env.exec("pwd").stdout.strip() == "/app"  # where the agent starts, as in Terminal-Bench
 
 
 def test_parser_reads_pytest_summary():

@@ -178,8 +178,8 @@ def test_grader_that_cannot_start_is_infra_error(tmp_path):
 def test_grader_and_workspace_volume_are_removed_after_the_trial(tmp_path):
     made = []
 
-    def factory(image, lifetime_s, limits):
-        made.append(DockerEnvironment(image, lifetime_s, limits))
+    def factory(image, lifetime_s, limits, workdir):
+        made.append(DockerEnvironment(image, lifetime_s, limits, workdir))
         return made[-1]
 
     outcome = run_trial(bench, ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, factory)

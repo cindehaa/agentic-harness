@@ -121,6 +121,6 @@ class Environment(ABC):
         self.stop()
 
 
-# How the runner gets a world for a trial, without knowing the backend: (image, lifetime_s, limits) -> Environment.
-# DockerEnvironment's constructor is one.
-EnvironmentFactory = Callable[[str, int, Limits], Environment]
+# How the runner gets a world for a trial, without knowing the backend:
+# (image, lifetime_s, limits, workdir) -> Environment. DockerEnvironment's constructor is one.
+EnvironmentFactory = Callable[[str, int, Limits, str], Environment]

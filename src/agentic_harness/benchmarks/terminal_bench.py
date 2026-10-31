@@ -13,8 +13,9 @@ Fidelity note:
   summary is a fail (Terminal-Bench's all() over no tests would pass it).
 - Kept as they are: run-tests.sh installs curl and uv from the network at grade time (so grading needs internet);
   sqlite-db-truncate is a "medium" task.
-- Differences: the agent starts in /workspace, not in the image's WORKDIR (/app); the instructions name /app paths
-  absolutely. The agent is mini-swe-agent / Claude Code, not Terminal-Bench's terminus (tmux) agents. Terminal-Bench's
+- As in Terminal-Bench, the agent starts in the image's WORKDIR, /app (each task declares it as its workdir, so the
+  trial's workspace volume is /app, starting with the image's own files there).
+- Differences: the agent is mini-swe-agent / Claude Code, not Terminal-Bench's terminus (tmux) agents. Terminal-Bench's
   per-task max_agent_timeout_sec is not applied (the harness has its own trial limits); max_test_timeout_sec is.
   The grader sidecar (the task's own image) is started but unused: grading runs in the world, as the benchmark's does.
 """
@@ -60,6 +61,7 @@ class TerminalBench(Benchmark[TerminalBenchTask]):
                 image=f"harness-terminal-bench:{task_id}-{self.version()}",
                 instruction=meta["instruction"],
                 max_test_timeout_s=float(meta["max_test_timeout_sec"]),
+                workdir=WORKDIR,
             ))
         return tasks
 
@@ -86,8 +88,8 @@ class TerminalBench(Benchmark[TerminalBenchTask]):
                                  script="bash /oracle/solution.sh", cwd=WORKDIR)
 
     def grade(self, task: TerminalBenchTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
-        # Terminal-Bench's own design: tests are copied into the agent's container only after the agent is done, and
-        # the task's files (e.g. /app) live in that container, not in the shared /workspace, so grade through `env`
+        # Terminal-Bench's own design: tests are copied into the agent's container only after the agent is done and
+        # run there, with the image's own tools (the grader sidecar sees /app too, but not what the agent installed)
         env.upload(ROOT / task.id / "tests", TESTS_DIR)
         env.upload(ROOT / task.id / "run-tests.sh", f"{TESTS_DIR}/run-tests.sh")
         r = env.exec(["bash", f"{TESTS_DIR}/run-tests.sh"], timeout=task.max_test_timeout_s, cwd=WORKDIR,

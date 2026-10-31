@@ -18,9 +18,9 @@ TASK = Task("fake", "t1", "fake:image")
 class FakeEnvironment(Environment):
     """A world that is a dict of files. `state_now` is what state() reports; `lose_on_exec` makes exec raise."""
 
-    def __init__(self, image: str, lifetime_s: int, limits: Limits) -> None:
+    def __init__(self, image: str, lifetime_s: int, limits: Limits, workdir: str = "/workspace") -> None:
         super().__init__(image)
-        self.lifetime_s, self.limits = lifetime_s, limits
+        self.lifetime_s, self.limits, self.workdir = lifetime_s, limits, workdir
         self.files: dict[str, bytes] = {}
         self.state_now: EnvironmentState | None = EnvironmentState(running=True)
         self.lose_on_exec = False
@@ -62,8 +62,8 @@ class FakeEnvironment(Environment):
 class Factory:
     """An EnvironmentFactory that remembers the one environment it made."""
 
-    def __call__(self, image: str, lifetime_s: int, limits: Limits) -> FakeEnvironment:
-        self.env = FakeEnvironment(image, lifetime_s, limits)
+    def __call__(self, image: str, lifetime_s: int, limits: Limits, workdir: str) -> FakeEnvironment:
+        self.env = FakeEnvironment(image, lifetime_s, limits, workdir)
         return self.env
 
 
@@ -323,3 +323,11 @@ def test_events_the_agent_recorded_itself_are_traced_even_when_it_raises(tmp_pat
     assert outcome.status == "infra_error"
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [(e["turn"], e["kind"]) for e in events] == [(1, "message_sent"), (1, "tool_call")]
+
+
+def test_the_world_starts_in_the_tasks_workdir(tmp_path):
+    factory = Factory()
+    run_trial(OneMessage(), ScriptedAgent(write_ok), Task("fake", "t1", "fake:image", workdir="/app"), Limits(), tmp_path, factory)
+    assert factory.env.workdir == "/app"
+    run_trial(OneMessage(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path / "default", factory)
+    assert factory.env.workdir == "/workspace"

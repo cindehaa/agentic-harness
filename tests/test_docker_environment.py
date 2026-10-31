@@ -302,6 +302,28 @@ def test_workspace_is_a_volume_that_keeps_the_image_files_and_is_removed_on_stop
         subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
 
 
+def test_another_workdir_keeps_the_image_files_there_and_is_the_grader_and_workspace_tar_root(tmp_path):
+    """A task's own workdir (e.g. Terminal-Bench's /app, where its image ships files): the volume is mounted there and
+    starts with those files; commands start there; the grader sees it at the same path; workspace.tar is taken from it."""
+    tag = "harness-test-workdir"
+    dockerfile = b"FROM alpine:latest\nRUN mkdir -p /app/sub && echo from-image > /app/sub/f.txt\nWORKDIR /app\n"
+    subprocess.run(["docker", "build", "-t", tag, "-"], input=dockerfile, capture_output=True, check=True)
+    try:
+        with DockerEnvironment(tag, workdir="/app") as env:
+            mounts = json.loads(subprocess.run(["docker", "inspect", "-f", "{{json .Mounts}}", env.container_id],
+                                               capture_output=True, text=True, check=True).stdout)
+            assert [(m["Name"], m["Destination"]) for m in mounts] == [(env.volume, "/app")]
+            assert env.exec("pwd; cat sub/f.txt").stdout == "/app\nfrom-image\n"
+            env.exec("echo by-agent > new.txt")
+            with env.attach_grader(tag) as grader:
+                assert grader.exec("pwd; cat new.txt sub/f.txt").stdout == "/app\nby-agent\nfrom-image\n"
+            env.save_workspace(tmp_path / "w.tar", 10**6)
+        with tarfile.open(tmp_path / "w.tar") as tar:
+            assert {"./new.txt", "./sub/f.txt"} <= set(tar.getnames())
+    finally:
+        subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
+
+
 def test_attached_grader_sees_the_workspace_a_live_service_and_the_processes():
     with DockerEnvironment(IMAGE) as env:
         env.write_file("answer.txt", "42")

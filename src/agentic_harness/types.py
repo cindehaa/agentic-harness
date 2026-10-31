@@ -53,11 +53,14 @@ Transcript = tuple[Message, ...]
 @dataclass(frozen=True)
 class Task:
     """One task from a benchmark. Adapters subclass it with their own fields, so these have no defaults (otherwise
-    every subclass field would need one too)."""
+    every subclass field would need one too); `workdir` is keyword-only, which keeps that rule out of its way."""
 
     benchmark: str  # e.g. "bash-operations"; makes a Task self-describing in logs and the DB
     id: str  # e.g. "bash-001"
     image: str  # Docker image for the world (prebuilt by the benchmark, or built in Benchmark.setup())
+    # The world's working directory: the trial's workspace volume is mounted here (starting with the image's own
+    # files at that path), commands run here by default, agents start here, and workspace.tar is taken from here
+    workdir: str = field(default="/workspace", kw_only=True)
 
 
 @dataclass(frozen=True)
