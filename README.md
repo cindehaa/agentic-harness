@@ -331,7 +331,8 @@ and the queue's state machine.
 - **Per-container resource limits.** `--memory`, `--cpus`, `--pids-limit`; going over them is the agent's
   failure, not infra. ([environment](ideation/environment.md))
 - **Credentials.** An allowlist at the container boundary (an agent's `forward_env`, injected at exec time, never
-  in image layers) and redaction in every trace, file and DB row: `.env` secrets, secret-named variables in the
+  in image layers) and redaction in every trace, file and DB row of a finished attempt (files the agent writes
+  itself are masked at trial end; see known gaps): `.env` secrets, secret-named variables in the
   harness's environment, and every forwarded variable. mini runs on the host, so its
   key never enters a container. ([security](ideation/security.md))
 - **MCP as the action layer beyond the shell.** Tools a benchmark exposes as MCP servers in network-only sidecars,
@@ -486,7 +487,7 @@ The runner's outcome rules are also tested without Docker against a fake environ
 **Known gaps**
 
 - A timed-out command keeps running inside the container until the pre-grade kill (repeated `/proc` passes, at
-  most 5).
+  most 5), or through grading for a benchmark with `kill_before_grading = False` (Terminal-Bench).
 - A fork bomb that fills `--pids-limit` can stop `docker exec` from starting, so the pre-grade kill may not run
   (grading still starts: the grader is its own container).
 - ACP agents: a step limit only where the agent keeps one itself (Claude Code: per prompt, so a multi-turn benchmark
@@ -501,6 +502,11 @@ The runner's outcome rules are also tested without Docker against a fake environ
   needs internet (kept as the benchmark ships it; a failed download is a `grader_error`).
 - mini's own retry backoff (4-60 s between attempts) can still run past the trial deadline; each model call is
   capped to the time left, and none starts after it.
+- If a worker is killed mid-trial, files the agent writes into the attempt folder itself (mini's `trajectory.json`,
+  `acp.jsonl`, `agent-stderr.log`) stay unmasked: they are redacted when the trial ends. `events.jsonl` is redacted
+  per event.
+- The grade timeout caps grading commands, but `upload()` / `download()` inside `grade()` use `docker cp`'s own
+  600 s timeout.
 - No migrations: a schema change means deleting `runs/harness.db`.
 - `harness cleanup` treats every container labelled `agentic-harness=1` that isn't a live attempt's as leftover,
   including one started by hand with that label (the test suite labels its own differently, per test module).

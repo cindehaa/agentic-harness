@@ -2,7 +2,7 @@
 
 **Status:** Decided and built 2026-10-29. Phases 4 and 5 merged (2026-10-29): the
 database, the queue, the workers and `status` / `results` are built together
-in `store.py`, `worker.py` and `cli.py`. Schema version 4 (cost + time tracking, #20–23).
+in `store.py`, `worker.py` and `cli.py`. Schema version 5 (limits per attempt, below; v4: cost + time tracking, #20–23).
 
 One SQLite file, `runs/harness.db`, in WAL mode (readers don't block the one
 writer, so `status` works while workers run). Only the harness writes it.
@@ -14,7 +14,7 @@ runs(id, benchmark, agent, model, versions json, config json, max_cost_usd, stat
      setup_started_at, setup_finished_at, created_at, finished_at)
 trials(id, run_id, task_id, state, claimed_by, lease_until, available_at, attempt_count, outcome, score_value json, score_float)
 attempts(id, trial_id, n, outcome, score json, exit_status, error, cost_usd, model_calls, input_tokens, output_tokens,
-         duration_s, artifacts_dir, queued_at, started_at, env_ready_at, agent_start_at, agent_end_at, grade_start_at,
+         duration_s, limits json, artifacts_dir, queued_at, started_at, env_ready_at, agent_start_at, agent_end_at, grade_start_at,
          grade_end_at, finished_at)
 events(id, attempt_id, seq, turn, kind, payload json, ts)
 workers(id, started_at, heartbeat_at)

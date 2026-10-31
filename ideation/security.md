@@ -59,6 +59,9 @@ mini-swe-agent runs on the host, so its key never enters a container.
 is never on the host's command line nor in an image layer; the `command` / `process` events record names only
 (`***`); every attempt file (incl. the raw ACP log `acp.jsonl`) is redacted. Cost: the key is inside the agent's world
 while an in-world agent runs, so the agent could read it.
+Gap: files are redacted when the trial ends (`run_trial`), so a worker killed mid-trial leaves the files the agent
+writes itself (mini's `trajectory.json`, `acp.jsonl`, `agent-stderr.log`) unmasked; `events.jsonl` is redacted per
+event and the DB at write (`Store.finish_attempt`).
 `exec(user=)` is built too (for the unprivileged `agent` user), not used yet.
 
 ## Network (designed 2026-10-30, not built)

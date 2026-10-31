@@ -104,6 +104,14 @@ As built today (`runner.py`; every failure point: `errors.md`):
 - A failure the harness decides (container died / out of memory during the turn) gets `score_float = 0.0` directly,
   not via `Benchmark.score_to_float`.
 
+## `cap_model_calls` stays in the mini adapter (Cindy, 2026-10-31)
+
+Correctness doesn't need it: `ContainerEnv.execute` refuses commands past the deadline. It exists because the trial
+timeout is a wall-clock limit for every agent (ACP agents get cancel-then-kill): without it, mini's own retries (up to
+10 tries × 120 s plus backoff, `agents/mini-swe-agent/src/minisweagent/models/utils/retry.py`) can run ~25 min past a
+10-min deadline during a provider outage. Rejected: lowering `MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT` (cheaper, but it
+changes mini's own behaviour).
+
 ## mini's own retry policy is left alone (2026-10-29)
 
 mini retries failed model calls itself (e.g. `ContentPolicyViolationError` up

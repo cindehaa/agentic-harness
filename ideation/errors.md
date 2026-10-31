@@ -144,6 +144,7 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   timeout (Terminal-Bench: the task fails, as in Terminal-Bench; bash-operations / python-tasks: no JSON →
   `GraderError`); a command started after it raises `GraderError` → `grader_error`. Classification is unchanged:
   a grader too slow to answer was already a `grader_error` (bash-operations under the 60 s exec default).
+  Gap: `upload()` / `download()` inside `grade()` are not capped by it; they keep `docker cp`'s own 600 s timeout.
 - **mini's own retries are left alone.** mini retries failed model calls
   itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
   agent's scaffolding, part of what is measured; we don't change it

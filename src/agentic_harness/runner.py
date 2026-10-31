@@ -84,14 +84,14 @@ def _agent_turns(benchmark: Benchmark, task: Task, env: Environment, session: Re
         session.limitation = f"AgentLimitation: {e}"
     except EnvironmentLost as e:
         lost = e
-    if died := _container_death(benchmark, env):
+    if died := _container_death(env):
         return died
     if lost:
         raise lost
     return None
 
 
-def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
+def _container_death(env: Environment) -> Outcome | None:
     state = env.state()
     if state is None:
         return Outcome("infra_error", error="container lost: gone, or Docker unreachable", retryable=True)
@@ -137,7 +137,7 @@ def _graded(benchmark: Benchmark, task: Task, env: Environment, session: Recordi
         return Outcome("grader_error", error=str(e))
     except EnvironmentLost:
         # the agent may have killed PID 1 as its last act
-        if died := _container_death(benchmark, env):
+        if died := _container_death(env):
             return died
         raise
     try:
