@@ -62,6 +62,9 @@ class AgentSession(ABC):
         """Trace events the agent recorded itself since the last call."""
         return []
 
+    def close(self) -> None:
+        """Stop the agent before grading; it gets no more messages."""
+
 
 class Agent(ABC):
     name: ClassVar[str]

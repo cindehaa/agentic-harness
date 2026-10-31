@@ -59,6 +59,9 @@ class RecordingSession(AgentSession):
     def stats(self) -> AgentStats:
         return self.inner.stats()
 
+    def close(self) -> None:
+        self.inner.close()
+
     def _record(self, kind: str, message: Message) -> None:
         self.transcript.append(message)
         self.log.write(kind, asdict(message))

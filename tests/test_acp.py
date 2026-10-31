@@ -140,6 +140,12 @@ def test_an_agent_ignoring_the_cancel_is_killed(tmp_path, monkeypatch):
     assert say(session, "work") == "" and session.stats().exit_status == "TimeLimit"
 
 
+def test_close_ends_the_agent_without_killing_the_world(tmp_path, monkeypatch):
+    world, session = start(tmp_path, monkeypatch)
+    session.close()
+    assert session.proc.poll() is not None and not world.killed
+
+
 def test_spending_past_the_budget_cancels_the_turn(tmp_path, monkeypatch):
     _, session = start(tmp_path, monkeypatch, limits=Limits(cost_usd=1.0))
     say(session, "spend")

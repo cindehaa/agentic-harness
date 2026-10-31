@@ -125,7 +125,9 @@ def _grade(benchmark: Benchmark, task: Task, env: Environment, session: Recordin
 
 def _graded(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession, grade_timeout_s: float) -> Outcome:
     try:
-        env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
+        session.close()
+        if benchmark.kill_before_grading:
+            env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         _save_workspace(env, session)  # the agent's end state, before the grader adds anything
         with env.attach_grader(benchmark.grader_image(task)) as grader:
             deadline = time.monotonic() + grade_timeout_s

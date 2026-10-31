@@ -11,7 +11,7 @@ Agents never start containers. They receive an `Environment` handle
 writes to the DB. Neither the agent nor anything inside the container does.
 
 - Each trial container starts with `sleep <lifetime>` as its
-  main process (lifetime = 3 × trial timeout + grade timeout + 600 s since the 2026-10-29 audit; was trial timeout + margin). A container lives only while its main process runs, so this
+  main process (lifetime = 3 × trial timeout + 600 s since the 2026-10-29 audit, + grade timeout since 2026-10-31; was trial timeout + margin). A container lives only while its main process runs, so this
   keeps it alive for `docker exec`. It also acts as a self-destruct timer:
   if the harness crashes without cleaning up, the container still exits
   shortly after the trial would have timed out.
@@ -69,7 +69,8 @@ onsite talking point.
 ## 3. Pre-grade step (in order)
 
 > **Updated 2026-10-29 (#7):** steps 2–3 below are gone. Grader files go only into the attached
-> grader, and its image already has the grader's tools. Today: kill leftovers → save
+> grader, and its image already has the grader's tools. Today: stop the agent → kill leftovers (unless the
+> benchmark opts out, #8) → save
 > `workspace.tar` → start the grader from `grader_image(task)` → `grade(task, grader, env, transcript)`
 > → stop the grader, then the world.
 
@@ -78,7 +79,8 @@ onsite talking point.
    `sleep` (not a plain `kill -9 -1`: that also kills the sleep, and the container
    dies before grading; `environment.md` #9); `pkill -9 -u agent`
    when the agent runs as the unprivileged `agent` user (see `security.md`; not built).
-   Either way, nothing the agent left running can interfere with grading.
+   Either way, nothing the agent left running can interfere with grading. A benchmark can opt out
+   (`kill_before_grading = False`, #8); the agent itself is still stopped.
 2. **Copy the benchmark's grader files in late.** They enter the container
    only now, so the agent never saw them and couldn't edit them.
 3. **Install grader dependencies**, e.g. `apk add python3` on alpine.
@@ -157,7 +159,8 @@ are the repo's own deps.
 Supersedes #2 (same container), the grade-time install, and "copy grader files in late".
 
 **Problem.** Grading needs two things at once: the grader's own tools (python for
-`evaluate.py`) and access to the evidence (files, live services, processes).
+`evaluate.py`) and access to the evidence (files; live services and processes only for a benchmark that opts
+out of the pre-grade kill, #8).
 Same-container grading had the evidence but not the tools: it forced `apk add python3`,
 i.e. the adapter picking dependencies for an OS, plus a network dependency at grade
 time. Host grading has the tools but no live state, and runs agent-written code on the host.
@@ -176,7 +179,7 @@ time. Host grading has the tools but no live state, and runs agent-written code 
 - `Benchmark.grader_image(task) -> str`, default `task.image` (the world's own tools).
   `grade(task, grader, env, transcript)`: `grader` is the sidecar; `env` (the trial
   container) stays available for checks only the world's own programs can do.
-- Runner: agent turn → container-death check → kill leftovers → save `workspace.tar` →
+- Runner: agent turn → container-death check → stop the agent → kill leftovers (default; #8) → save `workspace.tar` →
   start the grader → `grade` → stop both. The grader failing to start is
   `EnvironmentLost` → `infra_error` (retryable; if the trial itself died, rule 6 decides
   instead). `GraderError` → `grader_error`. `GraderSetupError` removed: nothing is set up.
@@ -197,8 +200,8 @@ time. Host grading has the tools but no live state, and runs agent-written code 
 | Agent's world unchanged (no extra tools for the agent) | no (after grading only) | **no**: the agent sees python on a bash-only benchmark | yes | yes |
 | Grader files hidden from the agent | copied in late | need root-only files + unprivileged agent | yes | yes: never in the world |
 | Files | yes | yes | via `download()` | yes (shared volume) |
-| Live services (`localhost:8080`) | yes | yes | no | yes (shared network namespace) |
-| Processes (`ps`) | yes | yes | no | yes (shared PID namespace) |
+| Live services (`localhost:8080`) | yes | yes | no | yes (shared network namespace), if the benchmark opts out of the pre-grade kill (#8) |
+| Processes (`ps`) | yes | yes | no | yes (shared PID namespace), same condition |
 | Network at grade time | needed (install) | no | no | no (grader image pre-pulled) |
 | Agent-written code on the host | no | no | **yes** (pytest imports `solution.py`) | no |
 | Cost | install time per trial | one derived image per task | none | ~1 s container start |
@@ -208,3 +211,18 @@ SWE-bench uses a fresh container but only because its evidence is a patch; Harbo
 METR and Inspect grade in the same environment.
 
 **Deferred (talking point):** pipelining grading — `implementation-plan.md` → Scale-up.
+
+## 8. The pre-grade kill is the default; a benchmark can opt out (DECIDED 2026-10-31)
+
+**Problem.** The runner killed every process the agent left running before grading, so a task like "start a web
+server" failed under us. Terminal-Bench's own harness doesn't kill: `harness.py` `_run_trial` runs `run-tests.sh`
+in a new tmux session in the same container, with the agent's processes still running.
+
+**Decision (Cindy).** Keep the kill by default (nothing the agent left behind tampers with grading); a benchmark
+opts out with one class attribute, `Benchmark.kill_before_grading = False`. `TerminalBench` sets it. Either way the
+agent itself is stopped first: `AgentSession.close()` (default no-op; mini runs on the host, so nothing is left).
+An ACP agent's `close()` closes its stdin, which ends it (claude-agent-acp and its `claude` child exit at once,
+checked in a container); one still running after 10 s is killed, and then so is everything else in the world.
+
+**Caveats.** With the opt-out, a command that timed out keeps running during grading, as in Terminal-Bench. Our
+three Terminal-Bench tasks check only files, so the opt-out changes nothing for them today.

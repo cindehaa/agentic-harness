@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ from agentic_harness.types import Limits, McpServer, Message, Text
 BUILT_IN = Path(__file__).with_name("acp_agents.toml")
 STARTUP_TIMEOUT_S = 120.0
 CANCEL_GRACE_S = 15.0
+CLOSE_GRACE_S = 10.0
 STDERR_CAP = 1_000_000
 # ACP errors have no kinds, only a message: match these words in it
 TRANSIENT_HINTS = ("overloaded", "rate limit", "rate_limit", "server_error", "529", "503", "502")
@@ -186,8 +188,8 @@ class AcpSession(AgentSession):
         await self.loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stdout), self.proc.stdout)
         await self.loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stderr), self.proc.stderr)
         transport, protocol = await self.loop.connect_write_pipe(asyncio.streams.FlowControlMixin, self.proc.stdin)
-        stdin = asyncio.StreamWriter(transport, protocol, None, self.loop)
-        self.conn = acp.connect_to_agent(self, stdin, stdout, observers=[self._log])
+        self.stdin = asyncio.StreamWriter(transport, protocol, None, self.loop)
+        self.conn = acp.connect_to_agent(self, self.stdin, stdout, observers=[self._log])
         ready.set_result(None)
         await self._drain_stderr(stderr, stderr_path)
         self.ended = True
@@ -245,6 +247,15 @@ class AcpSession(AgentSession):
         with self.lock:
             events, self.events = self.events, []
         return events
+
+    def close(self) -> None:
+        with contextlib.suppress(RuntimeError):  # the loop is already gone if the agent ended
+            self.loop.call_soon_threadsafe(self.stdin.close)
+        try:
+            self.proc.wait(CLOSE_GRACE_S)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.env.kill_agent_processes()
 
     def _submit(self, method: str, call, **params) -> Future:
         if self.ended:

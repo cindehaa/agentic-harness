@@ -40,7 +40,10 @@ the live environment (installed packages, running services, permissions).
 - The agent must run in the live container anyway (world setup is baked
   into the image), so only grading could ever be split off.
 - Not every benchmark can be graded from a snapshot (e.g. "start a server
-  on port 80"), and the harness should run any agentic benchmark.
+  on port 80"), and the harness should run any agentic benchmark. (The agent's
+  processes survive into grading only for a benchmark that opts out of the
+  default pre-grade kill, `kill_before_grading = False`;
+  `environment-and-grading.md` #8.)
 - Splitting adds a job-kind dispatcher, snapshot storage, and cross-job
   state for benefits we don't need for the take-home.
 

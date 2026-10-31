@@ -197,6 +197,20 @@ def test_leftover_agent_process_is_killed_before_grading(tmp_path):
     assert outcome.score.value is True
 
 
+class ChecksLeftover(BashOperations):
+    def grade(self, task, grader, env, transcript):
+        return Score(env.exec("kill -0 $(cat leftover.pid)").exit_code == 0)
+
+
+@pytest.mark.parametrize("kill", [True, False])
+def test_agent_processes_survive_into_grading_only_without_kill_before_grading(tmp_path, kill):
+    bench_ = ChecksLeftover()
+    bench_.kill_before_grading = kill
+    act = lambda env: env.exec("sleep 300 > /dev/null 2>&1 & echo $! > leftover.pid")
+    outcome = run_trial(bench_, ScriptedAgent(act), TASK, Limits(), tmp_path, DockerEnvironment)
+    assert outcome.score.value is not kill
+
+
 def test_missing_image_is_infra_error(tmp_path):
     task = type(TASK)(**{**TASK.__dict__, "image": "harness-no-such-image:nope"})
     outcome = run_trial(bench, ScriptedAgent(lambda env: None), task, Limits(), tmp_path, DockerEnvironment)

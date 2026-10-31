@@ -1,7 +1,6 @@
 import hashlib
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 import yaml
 
@@ -28,6 +27,7 @@ class TerminalBenchTask(Task):
 
 class TerminalBench(Benchmark[TerminalBenchTask]):
     name = "terminal-bench"
+    kill_before_grading = False  # as Terminal-Bench's own harness: tests may check what the agent left running
 
     def tasks(self) -> list[TerminalBenchTask]:
         if not ROOT.is_dir():

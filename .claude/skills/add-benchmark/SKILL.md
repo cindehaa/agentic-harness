@@ -48,6 +48,7 @@ Read both, plus `src/agentic_harness/benchmarks/base.py` (the interface) and
 | `version()` | `content_hash(folder, DOCKERFILE_TEMPLATE)`: changes whenever anything that builds images changes |
 | `run_agent(task, agent, env)` | usually one line: `agent.send(Message("user", (Text(task.instruction),)))` |
 | `grader_image(task)` | the image grading runs in, attached to the world (shares `/workspace`, network, processes). Default: the task's own image. |
+| `kill_before_grading` | optional class attribute: set `False` only if the benchmark's own harness grades with the agent's processes still running (its tests check a server the agent started). Default `True`: they are killed. |
 | `grade(task, grader, env, transcript)` | run the benchmark's own grader; return `Score(value=passed, explanation=..., metadata=...)`. Raise `GraderError` when its output can't be read (never return False for "couldn't parse"). |
 | `limits(task)` | optional: the limits the benchmark itself declares (e.g. Terminal-Bench's `max_agent_timeout_sec` → `LimitOverrides(trial_timeout_s=...)`, `max_test_timeout_sec` → `grade_timeout_s`). Don't pass your own timeout to the grader's `exec`: with none it gets the rest of the grade timeout. |
 | `mcp_servers(task)` | optional: only if the benchmark serves its own tools to the agent |

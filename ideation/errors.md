@@ -47,7 +47,7 @@ flowchart TB
   check -->|"KILLED: something inside ended the main process (Docker: exited non-zero)"| GF
   check -->|"UNKNOWN: the backend can't tell (Docker: Status not exited, e.g. dead)"| IE3
   check -->|"Running, but the turn raised EnvironmentLost"| IE3
-  check -->|"Running"| kill["env.kill_agent_processes()"]
+  check -->|"Running"| kill["session.close() (ACP: stdin closed; still running after 10 s -> killed with everything), then env.kill_agent_processes() unless Benchmark.kill_before_grading is False"]
 
   kill --> save["save workspace.tar (size-capped tar via exec); OSError (e.g. workspace deleted) is noted in the trace, not fatal"]
   save --> gstart["start the attached grader: env.attach_grader(benchmark.grader_image(task)) (shares the world's workspace, network, processes)"]

@@ -298,9 +298,11 @@ and the queue's state machine.
    at every turn's end.
 5. **Container-death check.** If the world ended during the turn, its `EndReason` decides: the agent killed it or
    exceeded our limits → graded fail; it expired, vanished or the reason is unknown → `infra_error` (retried).
-6. **Kill leftovers.** Every process the agent left running is killed, then `workspace.tar` is saved.
+6. **Kill leftovers.** The agent is stopped (`AgentSession.close()`), then by default every process it left running
+   is killed; a benchmark that sets `kill_before_grading = False` (Terminal-Bench: its tests may check a server the
+   agent started) keeps them. Then `workspace.tar` is saved.
 7. **Attached grader.** A grader sidecar starts from `grader_image(task)`, sharing the world's workspace, network
-   and processes; `grade()` runs the benchmark's own grader there and returns a `Score`, within the grade timeout
+   and processes (the agent's own only if the benchmark kept them); `grade()` runs the benchmark's own grader there and returns a `Score`, within the grade timeout
    (a command with no timeout gets the rest of it). The grader's files never enter the agent's world.
 8. **Outcome.** `graded`, `grader_error`, `infra_error` (with `retryable`) or `unsupported`.
 9. **Files, then DB.** `outcome.json` and `transcript.json` are written (redacted, atomically), then one fenced
@@ -317,7 +319,8 @@ and the queue's state machine.
   harness adds nothing to prompts. ([fidelity vs integrity](ideation/fidelity-vs-integrity.md),
   [task-input](ideation/task-input.md))
 - **Attached grader sidecar.** Grading gets its own tools (e.g. python for an alpine task) and still sees the
-  world's files, `localhost` and processes; nothing is installed at grade time.
+  world's files, `localhost` and processes (services the agent started only with `kill_before_grading = False`);
+  nothing is installed at grade time.
   ([environment and grading](ideation/environment-and-grading.md))
 - **Outcome model.** `graded` / `grader_error` / `infra_error` / `unsupported`; accuracy is the mean over `graded`
   only, the rest are always reported; only a retryable `infra_error` is retried (up to 3 attempts).
@@ -359,6 +362,7 @@ in [`benchmarks/__init__.py`](src/agentic_harness/benchmarks/__init__.py).
 | `grade(task, grader, env, transcript)` | yes | run the benchmark's grader in `grader`, return a `Score`; raise `GraderError` on unreadable output |
 | `setup(tasks)` | no | once per run: build/pull images (`build_image`, `ensure_image` from `agentic_harness.environments`) |
 | `grader_image(task)` | no | the grader's image; default `task.image` |
+| `kill_before_grading` | no | class attribute; `False` keeps the processes the agent left running (servers its tests check) into grading; default `True` |
 | `limits(task)` | no | the limits the benchmark declares for the task (`LimitOverrides`, e.g. its own timeouts); explicit run flags still override them; default none |
 | `requirements(task)` | no | what the agent must support (`AgentCapabilities`); default text, single turn, MCP iff it declares servers |
 | `mcp_servers(task)` | no | `McpServer`s (name, image, command, port) the runner starts as network-only sidecars; default none |

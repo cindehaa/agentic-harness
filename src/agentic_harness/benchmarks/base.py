@@ -21,6 +21,7 @@ class BenchmarkUnavailable(Exception):
 
 class Benchmark(ABC, Generic[TaskT]):
     name: str
+    kill_before_grading: bool = True
 
     @abstractmethod
     def tasks(self) -> list[TaskT]:
