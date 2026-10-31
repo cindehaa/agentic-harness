@@ -3,10 +3,11 @@
 **Last updated:** 2026-10-30
 **Now:** Parts 1–2 and the chosen extensions are built: every phase 0–8, the Claude Code agent, MCP sidecars, cost + time tracking, the dashboard, `validate` / `parity` / `adapt` and the Terminal-Bench proof. Docs checked against the code (2026-10-30). Awaiting Cindy's line-by-line review of everything from Phase 4+5 on.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md).
-**Next:** Cindy's review and explain-back; one open question (mini's `environment.env`, which parity showed we drop, [`adapters.md`](adapters.md) → Built); the extensions in [`implementation-plan.md`](implementation-plan.md) → Remaining (gray below).
+**Next:** Cindy's review and explain-back; one open question (our `sh -c` vs mini's own `bash -lc`, a difference parity exposed, [`adapters.md`](adapters.md) → Built); the extensions in [`implementation-plan.md`](implementation-plan.md) → Remaining (gray below).
 
 ## Log (newest first)
 
+- 2026-10-30: mini gets `mini.yaml`'s `environment.env` (PAGER=cat etc.) through `exec(env=)`, as mini's own Docker mode sets it (a difference parity exposed).
 - 2026-10-30: `harness worker --max-running N` (global cap on running trials across workers, checked inside the claim); mini's model calls capped at the trial's remaining time; `run --concurrency` without `--wait` is a usage error.
 - 2026-10-30: one harness-wide model setting: `--model`, else `HARNESS_MODEL`, translated per agent by `Agent.native_model()`; `MSWEA_MODEL_NAME` only for the `mini` CLI examples ([`agents-and-runner.md`](agents-and-runner.md) → Config). Network as a benchmark-declared world property: designed, not built ([`environment.md`](environment.md) → Network).
 - 2026-10-30: `TerminalBench` adapter (hello-world, log-summary, sqlite-db-truncate) drafted by `harness adapt`, hand-fixed; validate 3/3 + 3/3 ([`adapters.md`](adapters.md) → Proof).
@@ -169,7 +170,8 @@ flowchart TB
     tbench["TerminalBench adapter (3 tasks), drafted by harness adapt, hand-fixed, validates"]
     model["One model setting: --model / HARNESS_MODEL, Agent.native_model (2026-10-30)"]
     origmore["original_workflow for Claude Code and Terminal-Bench (not built)"]
-    q_env["Open: mini.yaml environment.env (PAGER=cat ...) dropped by our MiniSweAgent; parity found it"]
+    envfix["mini gets mini.yaml environment.env (PAGER=cat ...) via exec env= (2026-10-30; parity found it)"]
+    q_env["Open: our sh -c vs mini's own bash -lc (parity found it)"]
   end
 
   subgraph SCALE["Scale-up (designed, not built)"]
@@ -227,6 +229,7 @@ flowchart TB
   validate -.-> parity
   skill --> tbench
   parity -.-> origmore
+  parity -.-> envfix
   parity -.-> q_env
   P7 -.-> SCALE
   d_own -.-> envabc
@@ -287,7 +290,7 @@ flowchart TB
   class a_port,a_retry,a_life,a_lim,a_lazy,a_rec,a_cfg,a_small done
   class x_caps,x_mcp,x_exec,x_cc done
   class prepull,p6_stop,p6_res,p6_status,p6_kill,p6_vol,cost,dash,breakit,maxrun,p6_mtime done
-  class validate,nullor,skill,parity,tbench,model done
+  class validate,nullor,skill,parity,tbench,model,envfix done
   class readme,diagram done
   class d_metr,d_net,tasks,regrade,x_tau,cancel,origmore,pipe,pg,gui todo
   class q_env open

@@ -2,8 +2,8 @@
 
 **Status:** built 2026-10-29/30: `harness validate`, `harness parity` (baseline C), the
 `add-benchmark` skill, `harness adapt`, and the Terminal-Bench proof. Sections 1–2 were the design; "Built" below
-records what changed while building (it supersedes 1–2 where they differ). Open: mini's `environment.env`
-difference parity found; no `original_workflow` for Claude Code or Terminal-Bench.
+records what changed while building (it supersedes 1–2 where they differ). Open: the shell difference parity
+found (below); no `original_workflow` for Claude Code or Terminal-Bench.
 
 Both are optional extensions on top of the core harness. They build on the
 `Benchmark` adapter interface (`tasks`, `setup`, `run_agent`, `grade`) and answer the
@@ -110,11 +110,12 @@ container, copied in only to run).
 - Live, 2026-10-29, bash-operations × mini-swe-agent (Haiku 5.5), 3 runs per side: harness
   1.000 ± 0.000, original 1.000 ± 0.000, ranges overlap; every task 1.00 on both sides; cost
   $0.0069 + $0.0080.
-- Differences parity exposed while building (not fixed; for Cindy): our `MiniSweAgent` drops
+- Differences parity exposed while building: our `MiniSweAgent` dropped
   `mini.yaml`'s `environment.env` (`PAGER=cat`, `MANPAGER=cat`, `LESS=-R`, `PIP_PROGRESS_BAR=off`,
-  `TQDM_DISABLE=1`), which mini's own environments set; mini's own `DockerEnvironment` reports the
-  host's OS (macOS) in its prompt where ours reports the container's; mini's default shell is
-  `bash -lc` (falls back to `sh -lc` on alpine) where ours is `sh -c`.
+  `TQDM_DISABLE=1`), which mini's own environments set (**fixed 2026-10-30**, `0f813cf`: passed to every command
+  through `exec(env=)`); mini's own `DockerEnvironment` reports the
+  host's OS (macOS) in its prompt where ours reports the container's (ours on purpose, `agents-and-runner.md` #2);
+  mini's default shell is `bash -lc` (falls back to `sh -lc` on alpine) where ours is `sh -c` (open, for Cindy).
 
 ### Skill + `harness adapt`
 

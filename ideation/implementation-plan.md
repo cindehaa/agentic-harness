@@ -189,5 +189,5 @@ Each is designed or noted in the linked doc; none is needed for Parts 1–2.
 - τ²-bench via an MCP sidecar (Phase 7); GUI / desktop benchmarks (`action-space.md` → Still open).
 - Parity beyond mini-swe-agent on the two starter benchmarks: `original_workflow` for Claude Code and for
   Terminal-Bench (`adapters.md` → Built).
-- Open for Cindy: mini's `environment.env` (PAGER=cat etc.) that parity showed our `MiniSweAgent` drops
-  (`adapters.md` → Built).
+- Open for Cindy: our `MiniSweAgent` runs commands with `sh -c`, mini's own Docker mode with `bash -lc`, a
+  difference parity exposed (`adapters.md` → Built; its `environment.env` difference was fixed 2026-10-30).

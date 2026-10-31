@@ -52,7 +52,7 @@ As built today (`runner.py`; every failure point: `errors.md`):
 ## Built (2026-10-29): details and deviations to review
 
 - **Pre-grade kill is not `kill -9 -1`.** Under `--init`, `kill -9 -1` also kills the main `sleep`, the init exits with it, and the container dies before grading. `kill_agent_processes()` kills everything except PID 1 and the sleep (`environment.md` #9).
-- **mini config:** `mini.yaml` (what the `mini` CLI uses: tool calls, `LitellmModel`). Its `environment.env` (PAGER=cat etc.) isn't applied: our exec has no TTY, so pagers don't page. `harness parity` flagged this as a difference from mini's own Docker mode (open for Cindy, `adapters.md` → Built).
+- **mini config:** `mini.yaml` (what the `mini` CLI uses: tool calls, `LitellmModel`). Its `environment.env` (PAGER=cat etc.) wasn't applied (the reasoning then: our exec has no TTY, so pagers don't page); `harness parity` flagged it as a difference from mini's own Docker mode, and since 2026-10-30 every command gets it through `exec(env=)` (`adapters.md` → Built).
 - **Continuation:** mini ends a run with an `exit` message and, after a submit, an unanswered tool call. `MiniAgent.resume()` drops the `exit` marker, answers the pending tool call with the command's real output, appends the user message, and runs mini's loop again.
 - **`Limits.max_turns` = 20** (new): the recording session raises `TurnLimit` past it; the runner then grades what the agent did.
 - **Model-call timeout:** 120 s per call (`MODEL_TIMEOUT_S`); mini retries failed calls itself. Since 2026-10-30 each

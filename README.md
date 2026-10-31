@@ -421,8 +421,8 @@ The runner's outcome rules are also tested without Docker against a fake environ
   (grading still starts: the grader is its own container).
 - Claude Code's API key is inside the world while it runs (the agent could read it); it is never in an image layer,
   on the host command line, or in our logs.
-- `harness parity` found that our `MiniSweAgent` drops `mini.yaml`'s `environment.env` (`PAGER=cat`, ...), which
-  mini's own environments set; open ([adapters](ideation/adapters.md) → Built).
+- Our `MiniSweAgent` runs commands with `sh -c` where mini's own Docker mode uses `bash -lc`, a difference
+  `harness parity` exposed and left open ([adapters](ideation/adapters.md) → Built).
 - No migrations: a schema change means deleting `runs/harness.db`.
 - `harness cleanup` treats every labelled container that isn't a live attempt's as leftover, including one a test
   started by hand.
