@@ -383,6 +383,7 @@ world is then graded as is), and `TransientError` for provider or network blips 
 │   ├── recording.py           # RecordingSession / RecordingEnvironment → events.jsonl
 │   ├── redact.py              # secret redaction
 │   ├── types.py               # Task, Message, Score, Limits, Outcome, ReferenceSolution
+│   ├── paths.py               # REPO_ROOT, RUNS_DIR, DB_PATH
 │   ├── validate.py            # harness validate: null + oracle checks through run_trial
 │   ├── parity.py, original.py # harness parity: statistics; the original way (agent's own Docker mode)
 │   ├── benchmarks/            # Benchmark ABC, bash_operations.py, python_tasks.py, terminal_bench.py, registry
