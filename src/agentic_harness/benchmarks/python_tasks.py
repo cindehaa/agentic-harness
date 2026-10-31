@@ -13,7 +13,6 @@ from agentic_harness.paths import REPO_ROOT
 from agentic_harness.types import Message, OriginalResult, ReferenceSolution, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "python-tasks"
-GRADE_TIMEOUT = 120  # seconds; grade.py stops pytest at 30s itself, the rest is python startup + slack
 
 # The benchmark ships no solutions: ours, a solution.py written from each prompt and its test_code
 SOLUTIONS = {
@@ -71,7 +70,8 @@ class PythonTasks(Benchmark[PythonTask]):
 
     def grade(self, task: PythonTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
         grader.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, only in the grader
-        r = grader.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=GRADE_TIMEOUT)
+        # no timeout given: the rest of the grade timeout (default 120 s); grade.py stops pytest at 30 s itself
+        r = grader.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=None)
         return _score(r.stdout, r.stderr)
 
     def original_workflow(self, task: PythonTask, agent_name: str, model: str, out_dir: Path) -> OriginalResult:

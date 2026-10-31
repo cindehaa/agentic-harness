@@ -15,8 +15,10 @@ Fidelity note:
   sqlite-db-truncate is a "medium" task.
 - As in Terminal-Bench, the agent starts in the image's WORKDIR, /app (each task declares it as its workdir, so the
   trial's workspace volume is /app, starting with the image's own files there).
-- Differences: the agent is mini-swe-agent / Claude Code, not Terminal-Bench's terminus (tmux) agents. Terminal-Bench's
-  per-task max_agent_timeout_sec is not applied (the harness has its own trial limits); max_test_timeout_sec is.
+- Limits, as Terminal-Bench applies them: task.yaml's max_agent_timeout_sec is the trial timeout and
+  max_test_timeout_sec the grade timeout (Benchmark.limits; Terminal-Bench's defaults, 360 s and 60 s, when a task
+  omits them). Its task.yaml declares no memory or CPU limits.
+- Differences: the agent is mini-swe-agent / an ACP agent, not Terminal-Bench's terminus (tmux) agents.
   The grader sidecar (the task's own image) is started but unused: grading runs in the world, as the benchmark's does.
 """
 
@@ -31,18 +33,21 @@ from agentic_harness.agents.base import AgentSession
 from agentic_harness.benchmarks.base import Benchmark, BenchmarkUnavailable, GraderError, content_hash
 from agentic_harness.environments import Environment, build_image, ensure_image
 from agentic_harness.paths import REPO_ROOT
-from agentic_harness.types import Message, ReferenceSolution, Score, Task, Text, Transcript
+from agentic_harness.types import LimitOverrides, Message, ReferenceSolution, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "terminal-bench" / "original-tasks"
 TASK_IDS = ("hello-world", "log-summary", "sqlite-db-truncate")  # few dependencies, quick to build; each ships solution.sh
 TESTS_DIR = "/tests"  # where Terminal-Bench puts tests/ and run-tests.sh in the agent's container
 WORKDIR = "/app"  # the WORKDIR of these tasks' images (a test checks it); run-tests.sh refuses to run from /
 PASSING = {"PASSED", "SKIPPED", "XFAIL"}  # pytest_parser.py: these map to UnitTestStatus.PASSED
+# Terminal-Bench's own defaults (terminal_bench/handlers/trial_handler.py) for a task.yaml that omits them
+DEFAULT_AGENT_TIMEOUT_S, DEFAULT_TEST_TIMEOUT_S = 360.0, 60.0
 
 
 @dataclass(frozen=True)
 class TerminalBenchTask(Task):
     instruction: str  # the benchmark's own wording (task.yaml), sent to the agent verbatim
+    max_agent_timeout_s: float  # task.yaml's max_agent_timeout_sec: how long the agent may take
     max_test_timeout_s: float  # task.yaml's max_test_timeout_sec: how long run-tests.sh may take
 
 
@@ -60,7 +65,8 @@ class TerminalBench(Benchmark[TerminalBenchTask]):
                 id=task_id,
                 image=f"harness-terminal-bench:{task_id}-{self.version()}",
                 instruction=meta["instruction"],
-                max_test_timeout_s=float(meta["max_test_timeout_sec"]),
+                max_agent_timeout_s=float(meta.get("max_agent_timeout_sec", DEFAULT_AGENT_TIMEOUT_S)),
+                max_test_timeout_s=float(meta.get("max_test_timeout_sec", DEFAULT_TEST_TIMEOUT_S)),
                 workdir=WORKDIR,
             ))
         return tasks
@@ -75,6 +81,9 @@ class TerminalBench(Benchmark[TerminalBenchTask]):
                     ensure_image(line.split()[1])
         for t in tasks:
             build_image((ROOT / t.id / "Dockerfile").read_text(), context=ROOT / t.id, tag=t.image)
+
+    def limits(self, task: TerminalBenchTask) -> LimitOverrides:
+        return LimitOverrides(trial_timeout_s=task.max_agent_timeout_s, grade_timeout_s=task.max_test_timeout_s)
 
     def run_agent(self, task: TerminalBenchTask, agent: AgentSession, env: Environment) -> None:
         agent.send(Message("user", (Text(task.instruction),)))
@@ -92,10 +101,10 @@ class TerminalBench(Benchmark[TerminalBenchTask]):
         # run there, with the image's own tools (the grader sidecar sees /app too, but not what the agent installed)
         env.upload(ROOT / task.id / "tests", TESTS_DIR)
         env.upload(ROOT / task.id / "run-tests.sh", f"{TESTS_DIR}/run-tests.sh")
-        r = env.exec(["bash", f"{TESTS_DIR}/run-tests.sh"], timeout=task.max_test_timeout_s, cwd=WORKDIR,
-                     env={"TEST_DIR": TESTS_DIR})
-        if r.timed_out:
-            return Score(value=False, explanation=f"tests timed out after {task.max_test_timeout_s:g}s",
+        # no timeout given: the rest of the grade timeout, i.e. max_test_timeout_sec unless a flag changed it
+        r = env.exec(["bash", f"{TESTS_DIR}/run-tests.sh"], timeout=None, cwd=WORKDIR, env={"TEST_DIR": TESTS_DIR})
+        if r.timed_out:  # as Terminal-Bench: a test timeout fails the task
+            return Score(value=False, explanation="tests timed out (grade timeout)",
                          metadata={"timed_out": True, "stdout": r.stdout[-4000:], "stderr": r.stderr[-2000:]})
         results = _parse_pytest(r.stdout, r.stderr)
         failed = sorted(name for name, status in results.items() if status not in PASSING)

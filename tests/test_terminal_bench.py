@@ -64,6 +64,26 @@ def test_tasks_match_task_files(tasks):
         assert (t.instruction, t.max_test_timeout_s) == (meta["instruction"], float(meta["max_test_timeout_sec"]))
 
 
+@pytest.mark.skipif(not ROOT.is_dir(), reason="needs the terminal-bench submodule (make init-extra-benchmarks BENCH=benchmarks/terminal-bench)")
+def test_task_yaml_timeouts_are_the_trial_and_grade_timeouts():
+    for t in bench.tasks():
+        meta = yaml.safe_load((ROOT / t.id / "task.yaml").read_text())
+        declared = bench.limits(t)
+        assert declared.trial_timeout_s == float(meta["max_agent_timeout_sec"])
+        assert declared.grade_timeout_s == float(meta["max_test_timeout_sec"])
+        assert set(declared.given()) == {"trial_timeout_s", "grade_timeout_s"}  # task.yaml declares no memory or CPUs
+
+
+def test_task_yaml_without_timeouts_gets_terminal_benchs_defaults(tmp_path, monkeypatch):
+    for task_id in TASK_IDS:
+        (tmp_path / task_id).mkdir()
+        (tmp_path / task_id / "task.yaml").write_text("instruction: do it\n")
+    monkeypatch.setattr(terminal_bench_module, "ROOT", tmp_path)
+    monkeypatch.setattr(TerminalBench, "version", lambda self: "v")
+    declared = bench.limits(bench.tasks()[0])
+    assert (declared.trial_timeout_s, declared.grade_timeout_s) == (360.0, 60.0)
+
+
 @needs_world
 def test_run_agent_sends_instruction_verbatim(tasks):
     task = tasks["hello-world"]
