@@ -1,9 +1,10 @@
 """Any agent that speaks the Agent Client Protocol (ACP), run inside the trial's world. Agents differ only in data
 (an AcpDefinition: how to install it, how to launch it, which variables it needs), so a new or private agent needs
-no code here. The harness launches the agent with `docker exec -i` and speaks ACP over its stdin/stdout: one ACP
-session per trial, one session/prompt per turn. The agent acts with its own tools (we offer no fs/terminal
-capabilities); its session/update notifications are our trace."""
+no code here. The harness launches the agent with `docker exec -i` and speaks ACP over its stdin/stdout (the official
+`agent-client-protocol` library): one ACP session per trial, one session/prompt per turn. The agent acts with its
+own tools (we offer no fs/terminal capabilities); its session/update notifications are our trace."""
 
+import asyncio
 import hashlib
 import json
 import os
@@ -13,10 +14,16 @@ import tempfile
 import threading
 import time
 import tomllib
+from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
-from agentic_harness.agents.acp_client import AcpClosed, AcpConnection, AcpError
+import acp
+from acp.connection import StreamEvent
+from acp.schema import (
+    AllowedOutcome, DeniedOutcome, HttpMcpServer, Implementation, PromptResponse, RequestPermissionResponse, Usage,
+)
+
 from agentic_harness.agents.base import (
     Agent, AgentCapabilities, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
 )
@@ -24,7 +31,6 @@ from agentic_harness.environments import Environment, EnvironmentLost, build_ima
 from agentic_harness.recording import OUTPUT_CAP
 from agentic_harness.types import Limits, McpServer, Message, Text
 
-PROTOCOL_VERSION = 1
 BUILT_IN = Path(__file__).with_name("acp_agents.toml")
 STARTUP_TIMEOUT_S = 120.0  # initialize + session/new: the agent's own start-up (Claude Code's takes seconds)
 CANCEL_GRACE_S = 15.0  # after session/cancel, how long the agent gets to end its turn before it is killed
@@ -168,6 +174,10 @@ class AcpAgent(Agent):
 
 
 class AcpSession(AgentSession):
+    """Also the ACP client the library calls back (session_update, request_permission). The library is asyncio: it
+    runs on this session's own event loop thread, alive as long as the agent's process; send() and the other public
+    methods run on the caller's thread and wait for the loop's answers."""
+
     def __init__(self, env: Environment, proc: subprocess.Popen, model: str, artifacts_dir: Path, limits: Limits) -> None:
         self.env = env
         self.proc = proc
@@ -176,9 +186,7 @@ class AcpSession(AgentSession):
         self.deadline = time.monotonic() + limits.trial_timeout_s
         self.raw_log = (artifacts_dir / "acp.jsonl").open("a")  # every ACP message, both ways
         self.stderr_tail = b""  # the end of the agent's own log, for error messages
-        self.stderr_thread = threading.Thread(target=self._drain_stderr, args=(artifacts_dir / "agent-stderr.log",), daemon=True)
-        self.stderr_thread.start()
-        self.lock = threading.Lock()  # the reader thread adds to the trace while send() / new_events() run
+        self.lock = threading.Lock()  # the loop thread adds to the trace while send() / new_events() run
         self.session_id: str | None = None
         self.events: list[tuple[str, dict]] = []
         self.calls: dict[str, dict] = {}  # tool calls of this turn not finished yet, by id
@@ -186,36 +194,52 @@ class AcpSession(AgentSession):
         self.thought: list[str] = []
         self.ended_by: str | None = None  # set when the harness ends a turn: TimeLimit / LimitsExceeded
         self.dead = False  # killed at the deadline: no more turns
+        self.ended = False  # the agent's process has ended: nothing more can be asked
         self.exit_status: str | None = None
         self.cost = 0.0
         self.cost_reported = False
         self.input_tokens = 0
         self.output_tokens = 0
-        self.conn = AcpConnection(proc.stdin, proc.stdout, self._on_request, self._on_notification, self._log)
+        ready: Future = Future()
+        serve = self._serve(ready, artifacts_dir / "agent-stderr.log")
+        threading.Thread(target=asyncio.run, args=(serve,), daemon=True).start()
+        ready.result(STARTUP_TIMEOUT_S)
+
+    async def _serve(self, ready: Future, stderr_path: Path) -> None:
+        """The loop thread's whole life: the library's connection over the process's pipes, then the agent's own log
+        until the process ends."""
+        self.loop = asyncio.get_running_loop()
+        stdout, stderr = asyncio.StreamReader(), asyncio.StreamReader()
+        await self.loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stdout), self.proc.stdout)
+        await self.loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stderr), self.proc.stderr)
+        transport, protocol = await self.loop.connect_write_pipe(asyncio.streams.FlowControlMixin, self.proc.stdin)
+        stdin = asyncio.StreamWriter(transport, protocol, None, self.loop)
+        self.conn = acp.connect_to_agent(self, stdin, stdout, observers=[self._log])
+        ready.set_result(None)
+        await self._drain_stderr(stderr, stderr_path)
+        self.ended = True
+        while not stdout.at_eof():  # what the agent wrote before it ended (e.g. an error answer) is handled first
+            await asyncio.sleep(0.05)
+        await self.conn.close()  # requests still waiting fail with ConnectionError; asyncio.run then ends the loop
+        self.raw_log.close()
 
     def open(self, cwd: str, mcp_servers: tuple[McpServer, ...], meta: dict | None = None) -> None:
         """initialize + session/new. The definition said what the agent can do (the runner checked that); the agent's
         own answer must agree, or the definition is wrong."""
-        init = self._call("initialize", {
-            "protocolVersion": PROTOCOL_VERSION,
-            # No fs / terminal: the agent works in the world with its own tools, so we serve no files or commands
-            "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
-            "clientInfo": {"name": "agentic-harness", "version": "0"},
-        })
-        if init.get("protocolVersion") != PROTOCOL_VERSION:
-            raise AcpAgentError(f"agent speaks ACP version {init.get('protocolVersion')}, we speak {PROTOCOL_VERSION}")
-        caps = init.get("agentCapabilities") or {}
-        if mcp_servers and not (caps.get("mcpCapabilities") or {}).get("http"):
+        # No client capabilities (no fs / terminal): the agent works in the world with its own tools
+        init = self._call("initialize", self.conn.initialize, protocol_version=acp.PROTOCOL_VERSION,
+                          client_info=Implementation(name="agentic-harness", version="0"))
+        if init.protocol_version != acp.PROTOCOL_VERSION:
+            raise AcpAgentError(f"agent speaks ACP version {init.protocol_version}, we speak {acp.PROTOCOL_VERSION}")
+        if mcp_servers and not init.agent_capabilities.mcp_capabilities.http:
             raise AcpAgentError("the definition says mcp, but the agent doesn't take MCP servers over HTTP")
-        new = self._call("session/new", {
-            "cwd": cwd,
-            "mcpServers": [{"type": "http", "name": s.name, "url": s.url, "headers": []} for s in mcp_servers],
-            **({"_meta": meta} if meta else {}),
-        })
-        self.session_id = new["sessionId"]
+        servers = [HttpMcpServer(type="http", name=s.name, url=s.url, headers=[]) for s in mcp_servers]
+        new = self._call("session/new", self.conn.new_session, cwd=cwd, mcp_servers=servers, **(meta or {}))
+        self.session_id = new.session_id
         # the model the agent says it runs: a session config option of category "model" (ACP's generic form)
-        model = next((o.get("currentValue") for o in new.get("configOptions") or [] if o.get("category") == "model"), None)
-        self._trace("session", {"agent": init.get("agentInfo"), "session_id": self.session_id, "model": model})
+        model = next((o.current_value for o in new.config_options or [] if o.category == "model"), None)
+        agent = init.agent_info.model_dump(by_alias=True, exclude_none=True) if init.agent_info else None
+        self._trace("session", {"agent": agent, "session_id": self.session_id, "model": model})
 
     def send(self, message: Message) -> Message:
         if not all(isinstance(c, Text) for c in message.content):
@@ -225,21 +249,19 @@ class AcpSession(AgentSession):
             self.exit_status = "TimeLimit" if self.dead or remaining <= 0 else "LimitsExceeded"
             return Message("agent", (Text(""),))
         self.text, self.thought, self.ended_by = [], [], None
-        prompt = [{"type": "text", "text": c.text} for c in message.content]
-        id_ = self._start("session/prompt", {"sessionId": self.session_id, "prompt": prompt})
+        prompt = [acp.text_block(c.text) for c in message.content]
+        future = self._submit("session/prompt", self.conn.prompt, session_id=self.session_id, prompt=prompt)
         try:
-            result = self._wait(id_, "session/prompt", remaining)
+            result = self._wait(future, "session/prompt", remaining)
         except TimeoutError:
             self.ended_by = "TimeLimit"
-            result = self._cancel(id_)
+            result = self._cancel(future)
         except StepLimitReached:
-            self.ended_by, result = "LimitsExceeded", {}
+            self.ended_by, result = "LimitsExceeded", None
         finally:
             self._end_turn()
-        if self.conn.failure:  # a bug in our handlers, not the agent's doing
-            raise self.conn.failure
-        self._count(result.get("usage") or {})
-        stop = result.get("stopReason")
+        self._count(result.usage if result else None)
+        stop = result.stop_reason if result else None
         self.exit_status = self.ended_by or stop  # end_turn, max_tokens, max_turn_requests, refusal, cancelled
         if stop == "refusal":
             raise AgentLimitation("refusal")
@@ -256,29 +278,31 @@ class AcpSession(AgentSession):
 
     # --- requests and their failures
 
-    def _call(self, method: str, params: dict) -> dict:
-        return self._wait(self._start(method, params), method, min(STARTUP_TIMEOUT_S, self.deadline - time.monotonic()))
+    def _submit(self, method: str, call, **params) -> Future:
+        """Runs one of the library's calls on the loop thread; its answer (or exception) comes back in the Future."""
+        if self.ended:
+            self._lost(f"{method}: the agent's process has ended")
+        return asyncio.run_coroutine_threadsafe(call(**params), self.loop)
 
-    def _start(self, method: str, params: dict) -> int:
-        try:
-            return self.conn.start_request(method, params)
-        except AcpClosed as e:
-            self._lost(str(e))
+    def _call(self, method: str, call, **params):
+        timeout = min(STARTUP_TIMEOUT_S, self.deadline - time.monotonic())
+        return self._wait(self._submit(method, call, **params), method, timeout)
 
-    def _wait(self, id_: int, method: str, timeout: float) -> dict:
+    def _wait(self, future: Future, method: str, timeout: float):
         try:
-            return self.conn.wait(id_, method, max(timeout, 0))
-        except AcpClosed as e:
-            self._lost(str(e))
-        except AcpError as e:
-            text = str(e).lower()
+            return future.result(max(timeout, 0))  # TimeoutError: the request stays open (the caller may cancel)
+        except (ConnectionError, CancelledError):
+            self._lost(f"{method}: the agent's process ended before answering")
+        except acp.RequestError as e:
+            error = f"{method}: {e} (code {e.code})" + (f": {json.dumps(e.data)}" if e.data is not None else "")
+            text = error.lower()
             if any(h in text for h in STEP_LIMIT_HINTS):
-                raise StepLimitReached(str(e)) from None
+                raise StepLimitReached(error) from None
             if any(h in text for h in LIMITATION_HINTS):
-                raise AgentLimitation(str(e)) from None
+                raise AgentLimitation(error) from None
             if any(h in text for h in TRANSIENT_HINTS):
-                raise TransientError(str(e)) from None
-            raise AcpAgentError(f"{e}{self._stderr_tail()}") from None
+                raise TransientError(error) from None
+            raise AcpAgentError(f"{error}{self._stderr_tail()}") from None
 
     def _lost(self, what: str):
         """The agent's process ended. If the world went with it, the runner decides whose fault that was."""
@@ -287,38 +311,35 @@ class AcpSession(AgentSession):
             raise EnvironmentLost(f"{what}: the world is gone")
         raise AcpAgentError(f"{what}{self._stderr_tail()}")
 
-    def _cancel(self, id_: int) -> dict:
+    def _cancel(self, prompt: Future) -> PromptResponse | None:
         """End the turn: session/cancel, and if the agent doesn't end it in CANCEL_GRACE_S, kill it (killing the
         docker exec client leaves the agent running inside, hence kill_agent_processes)."""
         try:
-            self.conn.notify("session/cancel", {"sessionId": self.session_id})
-            return self.conn.wait(id_, "session/prompt", CANCEL_GRACE_S)
-        except (TimeoutError, AcpClosed, AcpError):
+            asyncio.run_coroutine_threadsafe(self.conn.cancel(session_id=self.session_id), self.loop)
+            return prompt.result(CANCEL_GRACE_S)
+        except (TimeoutError, ConnectionError, CancelledError, acp.RequestError):
             self.dead = True
             self.proc.kill()
             self.env.kill_agent_processes()
-            return {}
+            return None
 
-    # --- what the agent sends us (reader thread)
+    # --- what the agent sends us (the library calls these on the loop thread)
 
-    def _on_request(self, method: str, params: dict) -> dict:
-        if method == "session/request_permission":
-            # The world is the sandbox: everything inside it is allowed. Once, never "always": an always-rule may be
-            # written into the workspace (e.g. Claude Code's .claude/settings.local.json) and graded with it.
-            options = params.get("options") or []
-            chosen = next((o for kind in ("allow_once", "allow_always") for o in options if o.get("kind") == kind), None)
-            self._trace("permission", {"tool_call": (params.get("toolCall") or {}).get("toolCallId"),
-                                       "granted": chosen["kind"] if chosen else None})
-            if chosen is None:
-                return {"outcome": {"outcome": "cancelled"}}
-            return {"outcome": {"outcome": "selected", "optionId": chosen["optionId"]}}
-        raise LookupError(method)  # fs/*, terminal/*, ...: not offered in initialize
+    async def request_permission(self, session_id: str, tool_call, options, **kwargs) -> RequestPermissionResponse:
+        # The world is the sandbox: everything inside it is allowed. Once, never "always": an always-rule may be
+        # written into the workspace (e.g. Claude Code's .claude/settings.local.json) and graded with it.
+        chosen = next((o for kind in ("allow_once", "allow_always") for o in options if o.kind == kind), None)
+        self._trace("permission", {"tool_call": tool_call.tool_call_id, "granted": chosen.kind if chosen else None})
+        if chosen is None:
+            return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+        return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=chosen.option_id))
 
-    def _on_notification(self, method: str, params: dict) -> None:
-        if method != "session/update" or params.get("sessionId") != self.session_id:
+    async def session_update(self, session_id: str, update, **kwargs) -> None:
+        if session_id != self.session_id:
             return
-        u = params.get("update") or {}
+        u = update.model_dump(mode="json", by_alias=True, exclude_unset=True)  # the fields the agent sent
         kind = u.get("sessionUpdate")
+        cancel = False
         with self.lock:
             if kind == "agent_message_chunk":
                 self.text.append(_text(u.get("content")))
@@ -332,8 +353,9 @@ class AcpSession(AgentSession):
                 self.cost = max(self.cost, float(u["cost"].get("amount") or 0))  # cumulative over the session
                 self.cost_reported = True
                 if self.cost >= self.limits.cost_usd and self.ended_by is None:
-                    self.ended_by = "LimitsExceeded"
-                    self.conn.notify("session/cancel", {"sessionId": self.session_id})
+                    self.ended_by, cancel = "LimitsExceeded", True
+        if cancel:  # outside the lock: send() may be waiting for it
+            await self.conn.cancel(session_id=self.session_id)
 
     def _tool(self, u: dict) -> None:
         """Gathers a tool call's updates (its input may arrive after the call itself); traced once it ends."""
@@ -377,12 +399,14 @@ class AcpSession(AgentSession):
         with self.lock:
             self.events.append((kind, payload))
 
-    def _count(self, usage: dict) -> None:
+    def _count(self, usage: Usage | None) -> None:
         """One turn's tokens (cached ones counted as input, as litellm's prompt_tokens do), and its cost if the agent
         reported none: priced with litellm, 0 if litellm doesn't know the model."""
-        cached_read, cached_write = usage.get("cachedReadTokens") or 0, usage.get("cachedWriteTokens") or 0
-        tokens_in = (usage.get("inputTokens") or 0) + cached_read + cached_write
-        tokens_out = usage.get("outputTokens") or 0
+        if usage is None:
+            return
+        cached_read, cached_write = usage.cached_read_tokens or 0, usage.cached_write_tokens or 0
+        tokens_in = usage.input_tokens + cached_read + cached_write
+        tokens_out = usage.output_tokens
         self.input_tokens += tokens_in
         self.output_tokens += tokens_out
         if self.cost_reported or not (tokens_in or tokens_out):
@@ -396,15 +420,17 @@ class AcpSession(AgentSession):
             return
         self.cost += prompt + completion
 
-    def _log(self, direction: str, message: dict) -> None:
-        self.raw_log.write(json.dumps({"dir": direction, "ts": time.time(), "message": message}) + "\n")
+    def _log(self, event: StreamEvent) -> None:
+        entry = {"dir": event.direction.value, "ts": time.time(), "message": event.message}  # dir: outgoing / incoming
+        self.raw_log.write(json.dumps(entry) + "\n")
         self.raw_log.flush()
 
-    def _drain_stderr(self, path: Path) -> None:
-        """The agent's own log, read as it comes (a full pipe would block the agent): kept to STDERR_CAP bytes."""
+    async def _drain_stderr(self, stderr: asyncio.StreamReader, path: Path) -> None:
+        """The agent's own log, read as it comes (a full pipe would block the agent) until the process ends: kept to
+        STDERR_CAP bytes."""
         kept = 0
         with path.open("wb") as f:
-            for chunk in iter(lambda: self.proc.stderr.read1(65536), b""):
+            while chunk := await stderr.read(65536):
                 f.write(chunk[: STDERR_CAP - kept])
                 f.flush()
                 kept = min(STDERR_CAP, kept + len(chunk))

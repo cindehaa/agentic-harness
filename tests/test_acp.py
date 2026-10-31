@@ -1,5 +1,5 @@
-"""ACP agents: the JSON-RPC client and the session against a scripted fake agent (tests/fixtures/fake_acp_agent.py),
-run on the host and, once, inside a real container over `docker exec -i`; the definitions and their images' recipe.
+"""ACP agents: the session against a scripted fake agent (tests/fixtures/fake_acp_agent.py), run on the host and,
+once, inside a real container over `docker exec -i`; the definitions and their images' recipe.
 Live tests (RUN_LIVE=1 and an API key): Claude Code through its ACP adapter on bash-001, the MCP fixture, two turns."""
 
 import json
@@ -16,7 +16,6 @@ from agentic_harness.agents import AgentLimitation, PreflightError, TransientErr
 from agentic_harness.agents.acp import (
     AcpAgent, AcpAgentError, AcpDefinition, built_in_definitions, derived_tag, dockerfile, load_definition,
 )
-from agentic_harness.agents.acp_client import METHOD_NOT_FOUND, AcpConnection
 from agentic_harness.environments import Environment, EnvironmentLost, EnvironmentState
 from agentic_harness.environments import docker as docker_module
 from agentic_harness.types import File, Limits, McpServer, Message, Text
@@ -67,37 +66,12 @@ def say(session, words: str) -> str:
     return session.send(Message("user", (Text(words),))).content[0].text
 
 
-# --- the JSON-RPC client
-
-
-def test_client_matches_replies_to_requests_and_answers_the_agents_requests():
-    proc = subprocess.Popen([sys.executable, str(FAKE)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    updates, asked = [], []
-
-    def on_request(method, params):
-        asked.append(method)
-        if method == "session/request_permission":
-            return {"outcome": {"outcome": "selected", "optionId": "once"}}
-        raise LookupError(method)
-
-    conn = AcpConnection(proc.stdin, proc.stdout, on_request, lambda m, p: updates.append(p["update"]["sessionUpdate"]))
-    assert conn.request("initialize", {"protocolVersion": 1}, timeout=10)["protocolVersion"] == 1
-    session = conn.request("session/new", {"cwd": "/", "mcpServers": []}, timeout=10)["sessionId"]
-    result = conn.request("session/prompt", {"sessionId": session, "prompt": [{"type": "text", "text": "work"}]}, timeout=10)
-    assert result["stopReason"] == "end_turn"
-    # every update of the turn was handled before its response: the reader thread keeps the agent's order
-    assert updates == ["agent_message_chunk", "tool_call", "tool_call_update", "tool_call_update", "usage_update", "agent_message_chunk"]
-    conn.request("session/prompt", {"sessionId": session, "prompt": [{"type": "text", "text": "files"}]}, timeout=10)
-    assert asked == ["session/request_permission", "fs/read_text_file"]
-    proc.kill()
+# --- the session
 
 
 def test_a_method_we_dont_offer_gets_method_not_found(tmp_path, monkeypatch):
     _, session = start(tmp_path, monkeypatch)
-    assert json.loads(say(session, "files"))["code"] == METHOD_NOT_FOUND
-
-
-# --- the session
+    assert json.loads(say(session, "files"))["code"] == -32601  # JSON-RPC: method not found
 
 
 def test_setup_passes_the_worlds_workdir_the_mcp_servers_and_the_agents_variables(tmp_path, monkeypatch):

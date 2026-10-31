@@ -5,6 +5,7 @@ description = "Run any benchmark against any agent"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "agent-client-protocol==0.12.1",
     "click>=8.3.1",
     "mini-swe-agent",
     "python-dotenv>=1.2.1",
