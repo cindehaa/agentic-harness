@@ -9,6 +9,7 @@ import time
 
 import pytest
 from litellm.exceptions import AuthenticationError, ContextWindowExceededError, InternalServerError
+from minisweagent.config import get_config_from_spec
 from minisweagent.exceptions import LimitsExceeded, Submitted
 from minisweagent.models.litellm_model import LitellmModel
 from minisweagent.models.test_models import DeterministicToolcallModel, make_toolcall_output
@@ -29,9 +30,11 @@ class FakeEnv(Environment):
     def __init__(self) -> None:
         super().__init__("fake:image")
         self.calls: list[tuple] = []
+        self.envs: list[dict | None] = []
 
     def exec(self, cmd, timeout=60, cwd=None, env=None, user=None) -> ExecResult:
         self.calls.append((cmd, timeout, cwd))
+        self.envs.append(env)
         if cmd.startswith("uname"):
             return ExecResult(0, UNAME, "")
         command = cmd.removeprefix("exec 2>&1\n")
@@ -70,6 +73,18 @@ def test_execute_merges_streams_and_uses_default_cwd_and_timeout():
     assert env.calls[-1] == ("exec 2>&1\necho hi", 60, None)  # None = the env's workdir
     cenv.execute({"command": "echo hi"}, cwd="/tmp", timeout=5)
     assert env.calls[-1] == ("exec 2>&1\necho hi", 5, "/tmp")
+
+
+def test_every_command_gets_minis_own_environment_variables(tmp_path):
+    env = FakeEnv()
+    session = MiniSweAgent("anthropic/claude-haiku-5-5").start(env, tmp_path, Limits())
+    expected = {k: str(v) for k, v in get_config_from_spec("mini.yaml")["environment"]["env"].items()}
+    assert expected["PAGER"] == "cat"  # what mini's own Docker mode sets
+    session.agent.env.execute({"command": "echo hi"})
+    assert env.envs[-1] == expected
+    _, bare = wrapper()  # none configured: none added
+    bare.execute({"command": "echo hi"})
+    assert bare.env.envs[-1] is None
 
 
 def test_submit_raises_submitted():

@@ -67,10 +67,12 @@ def cap_model_calls(model, deadline: float) -> None:
 class ContainerEnv:
     """mini's Environment protocol (execute / get_template_vars / serialize) on top of our Environment."""
 
-    def __init__(self, env: Environment, deadline: float, command_timeout_s: float) -> None:
+    def __init__(self, env: Environment, deadline: float, command_timeout_s: float,
+                 env_vars: dict[str, str] | None = None) -> None:
         self.env = env
         self.deadline = deadline  # a time.monotonic() value
-        self.config = {"image": env.image, "command_timeout_s": command_timeout_s}  # the protocol has a config
+        self.env_vars = env_vars or {}  # set for every command, as mini's own environments do (mini.yaml's environment.env)
+        self.config = {"image": env.image, "command_timeout_s": command_timeout_s, "env": self.env_vars}  # the protocol has a config
         self.outputs: list[dict] = []  # outputs of the current step's commands (MiniAgent.resume needs them)
         # The container's OS, not the host's: mini's own environments report platform.uname()
         r = env.exec("uname -s; uname -r; uname -v; uname -m")
@@ -81,7 +83,8 @@ class ContainerEnv:
             raise _time_limit()
         timeout = timeout or self.config["command_timeout_s"]
         # mini wants one output stream, in order (its envs use stderr=STDOUT): `exec 2>&1` does that in the shell
-        r = self.env.exec("exec 2>&1\n" + action.get("command", ""), timeout=timeout, cwd=cwd or None)
+        r = self.env.exec("exec 2>&1\n" + action.get("command", ""), timeout=timeout, cwd=cwd or None,
+                          env=self.env_vars or None)
         output = {"output": r.stdout + r.stderr, "returncode": r.exit_code, "exception_info": ""}
         if r.timed_out:
             output["exception_info"] = f"The command timed out after {timeout} seconds."
@@ -186,7 +189,9 @@ class MiniSweAgent(Agent):
         cap_model_calls(model, deadline)
         agent = MiniAgent(
             model,
-            ContainerEnv(env, deadline, limits.command_timeout_s),
+            # e.g. PAGER=cat: without it a `git log` waits for a keypress that never comes
+            ContainerEnv(env, deadline, limits.command_timeout_s,
+                         {k: str(v) for k, v in config.get("environment", {}).get("env", {}).items()}),
             **config["agent"] | {
                 "step_limit": limits.max_steps,
                 "cost_limit": limits.cost_usd,
