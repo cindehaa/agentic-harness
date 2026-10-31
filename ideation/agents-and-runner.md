@@ -3,19 +3,20 @@
 **Status:** Decided 2026-10-29; built 2026-10-29 (`agents/`, `runner.py`,
 `harness run`). Ownership: Claude drafts everything; Cindy reviews line by line. Later changes are marked in
 place: the audit (Config, interface cleanups below), Claude Code + capabilities (`action-space.md`), cost tracking
-(`database.md` #20–23), one harness-wide model (2026-10-30, Config).
+(`database.md` #20–23), one harness-wide model (2026-10-30, Config), agents over ACP (2026-10-30, #8).
 
 ## Decisions
 
 | # | Decision | Why | Rejected |
 |---|---|---|---|
-| 1 | Agent registry like `BENCHMARKS`: `AGENTS = {"mini-swe-agent": "agentic_harness.agents.mini_swe_agent:MiniSweAgent"}`, imported only when used (lazy since the 2026-10-29 audit, so `status` / `results` / benchmarks never load litellm). CLI `--agent` accepts a name or a path and uses its basename. `--model` overrides the default from `.env` (`MSWEA_MODEL_NAME`; **superseded 2026-10-30** by `HARNESS_MODEL`, see Config). Each run records agent name, model, and the agent submodule SHA (since the audit: `Agent.version()`). `claude-code` added 2026-10-29 | Same pattern as benchmarks; `--agent agents/mini-swe-agent` (the brief's form) still works; SHA + model make runs reproducible | Resolving a path to code/config at runtime (more magic, nothing gained with one agent) |
+| 1 | Agent registry like `BENCHMARKS`: `AGENTS = {"mini-swe-agent": "agentic_harness.agents.mini_swe_agent:MiniSweAgent"}`, imported only when used (lazy since the 2026-10-29 audit, so `status` / `results` / benchmarks never load litellm). CLI `--agent` accepts a name or a path and uses its basename. `--model` overrides the default from `.env` (`MSWEA_MODEL_NAME`; **superseded 2026-10-30** by `HARNESS_MODEL`, see Config). Each run records agent name, model, and the agent submodule SHA (since the audit: `Agent.version()`). `claude-code` added 2026-10-29. **2026-10-30:** `AGENTS` holds only agents with code of their own (mini); every other agent is an ACP agent definition (#8), and `resolve_agent` returns what makes the agent from a model (a class, or `AcpAgent` bound to a definition) | Same pattern as benchmarks; `--agent agents/mini-swe-agent` (the brief's form) still works; SHA + model make runs reproducible | Resolving a path to code/config at runtime (more magic, nothing gained with one agent) |
 | 2 | mini-swe-agent runs on the **host** via its Python API (`DefaultAgent` from `minisweagent.agents.default` + `get_model` / `LitellmModel`). An env wrapper forwards its `execute({"command"})` to our `env.exec`, raises `Submitted` when output starts with `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`, and reports the container's OS in template vars | The API key never enters the container; no install step inside the image; we see every command | Installing mini inside the container (needs python + the key in the world the agent controls); driving the `mini` CLI (setup wizard, less control) |
 | 3 | Multi-turn continuation built **now**: a second `send()` appends the new user message to mini's history and continues the run | Cindy wants to test it on another benchmark; the turn model already allows several `send()`s | Deferring it (one turn per trial) |
 | 4 | Reply = `Message("agent", (Text(submission),))`: only the agent's own output, nothing added by the harness. mini's exit status (`Submitted` / `LimitsExceeded` / `TimeLimit`) is kept in the trial's records | The harness adds nothing to what the grader sees; the exit status is still there for debugging | — |
 | 5 | Limits: the trial deadline is checked in our command wrapper (the next command after the deadline raises `TimeLimit`), plus mini's own cost/step limits and a model-call timeout. Defaults: 10 min per trial, $1 cost, 50 steps, 60 s per command. Container `lifetime_s` = trial timeout + margin (**superseded** by the audit: 3 × trial timeout + 600 s) | All limits enforced in-process with no extra machinery; the container's self-destruct timer follows the trial | Running the agent in a separate process and killing it at the deadline (more machinery) |
 | 6 | Container death during the agent's turn is decided by `docker inspect` evidence (table below) | Infra failures are retried and excluded; failures the agent caused must count against it | Treating every container death as `infra_error` (an agent could game failures into excluded trials) |
 | 7 | Until the DB (Phase 4), each attempt writes `runs/<run_id>/<trial_id>/attempt-<n>/` with `outcome.json`, `transcript.json`, and mini's `trajectory.json` (**superseded** by `database.md` #19f: `runs/<run_id>/<task_id>/attempt-<attempt_id>/`, plus `events.jsonl` and `workspace.tar`) | Everything inspectable on disk now; Phase 4 indexes the same files | — |
+| 8 | **Agents over ACP (2026-10-30, Cindy: "scratch our adapter and just support the protocol")**: any agent that speaks the Agent Client Protocol runs through one generic adapter (`AcpAgent`, `agents/acp.py`), configured by data: built-in definitions in `agents/acp_agents.toml` (`--agent claude-code`), a private agent's own file (`--agent path/to/agent.toml`, its absolute path kept in `runs.agent`). It runs inside the world (`Environment.start_process`, `docker exec -i`); turns = `session/prompt` on one session. Details: `action-space.md` → Agents over ACP | No per-agent code in our repo: a vendor ships a definition (and its install image), not a fork; Claude Code, Codex, Gemini CLI, Copilot, goose, OpenCode, ... already speak ACP | Keeping a dedicated adapter per agent (each one parses its own log format and flags) |
 
 ### Rule 6: container died during the agent's turn
 
@@ -41,7 +42,7 @@ inspected. `stop()` still removes it. Expired containers are found by label
 As built today (`runner.py`; every failure point: `errors.md`):
 
 1. Capability check: `agent.capabilities` vs `benchmark.requirements(task)`; a gap → `unsupported`, no world started (2026-10-29).
-2. `agent.prepare_image(task.image)` (Claude Code: its cached derived image), then start the container (`lifetime_s` = 3 × trial timeout + 600 s margin) and the task's MCP sidecars.
+2. `agent.prepare_image(task.image)` (an ACP agent: the task's image + the agent's install, cached), then start the container (`lifetime_s` = 3 × trial timeout + 600 s margin) and the task's MCP sidecars.
 3. `run_agent` with the wrapped session (logs turns, enforces the deadline, builds the transcript, records spend at each turn's end).
 4. Container died? Apply rule 6.
 5. Kill leftover agent processes, save `workspace.tar`.
@@ -71,7 +72,7 @@ As built today (`runner.py`; every failure point: `errors.md`):
   settings and API keys need no `set -a; . ./.env`.
 - The model is resolved once, at submit: `--model`, else `HARNESS_MODEL` (one harness-wide, litellm-style setting;
   2026-10-30, was each agent's `model_env`, i.e. `MSWEA_MODEL_NAME`), and stored in `runs.model`. Each agent
-  translates it with `Agent.native_model()` (mini: as is; Claude Code: without `anthropic/`). `MSWEA_MODEL_NAME`
+  translates it with `Agent.native_model()` (mini: as is; an ACP agent: its definition's `model_prefix` removed, e.g. Claude Code without `anthropic/`, and passed in its `model_env`, e.g. `ANTHROPIC_MODEL`). `MSWEA_MODEL_NAME`
   stays in `.env` only for the starter's `mini` CLI examples. Workers build the agent from that; adapters never read `os.environ` for it.
   No model → a clear CLI error, nothing submitted.
 - `Agent.preflight()` (mini: litellm knows the model, its provider's key is set; no tokens spent) runs at submit and,
