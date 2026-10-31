@@ -91,7 +91,7 @@ def test_cleanup_images_removes_only_images_no_unfinished_trial_needs(store, mon
         images = subprocess.run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}", PREFIX],
                                 capture_output=True, text=True).stdout.split()
         assert images == [f"{PREFIX}:needed"]
-        assert "harness-claude-code" not in out  # only the test prefix was touched
+        assert "harness-acp-" not in out  # only the test prefix was touched
     finally:
         subprocess.run(["docker", "image", "rm", "-f", f"{PREFIX}:needed", f"{PREFIX}:old-a", f"{PREFIX}:old-b"],
                        capture_output=True)

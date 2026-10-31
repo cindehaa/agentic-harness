@@ -1,0 +1,19 @@
+# ACP agents the harness knows by name (`--agent <name>`). A private agent needs no entry here: it brings its own
+# definition file with the same keys (`--agent path/to/agent.toml`). Keys: agents/acp.py, AcpDefinition.
+
+# Claude Code through its ACP adapter (Claude Agent SDK: Claude Code's own tools and loop).
+[claude-code]
+version = "@agentclientprotocol/claude-agent-acp@0.99.1"  # pinned: a run must not change agent mid-way
+install_dir = "/opt/acp-agent"
+# npm installs Claude Code's native binary for the stage's libc; Node comes along (the adapter is a Node program)
+install.musl = { from = "node:22-alpine", run = "npm install -g --prefix /opt/acp-agent @agentclientprotocol/claude-agent-acp@0.99.1 && cp /usr/local/bin/node /opt/acp-agent/bin/" }
+install.glibc = { from = "node:22-bookworm-slim", run = "npm install -g --prefix /opt/acp-agent @agentclientprotocol/claude-agent-acp@0.99.1 && cp /usr/local/bin/node /opt/acp-agent/bin/" }
+# Node needs libstdc++ (Debian-based images have it: apt depends on it); Claude Code's Bash tool needs bash, not
+# busybox sh. Alpine has neither.
+world_setup = "if command -v apk > /dev/null; then apk add --no-cache bash libstdc++ libgcc; fi"
+command = ["/opt/acp-agent/bin/node", "/opt/acp-agent/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"]
+forward_env = ["ANTHROPIC_API_KEY"]
+env = { DISABLE_AUTOUPDATER = "1" }
+model_env = "ANTHROPIC_MODEL"  # Claude Code's own model setting; it takes names without litellm's "anthropic/"
+model_prefix = "anthropic/"
+capabilities = { content_types = ["text"], mcp = true }
