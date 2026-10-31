@@ -2,6 +2,7 @@
 
 import json
 import time
+from dataclasses import asdict
 
 import pytest
 from click.testing import CliRunner
@@ -12,10 +13,11 @@ from agentic_harness.benchmarks import BashOperations
 from agentic_harness.benchmarks.base import content_hash
 from agentic_harness.cli import cli
 from agentic_harness.store import Store
-from agentic_harness.types import Outcome, Score
+from agentic_harness.types import LimitOverrides, Limits, Outcome, Score
 
 OUTCOMES = {
-    "t1": Outcome("graded", Score(True), 1.0, cost_usd=0.02, duration_s=3.0),
+    "t1": Outcome("graded", Score(True), 1.0, cost_usd=0.02, duration_s=3.0,
+                  limits={"trial_timeout_s": {"value": 900, "source": "benchmark"}}),
     "t2": Outcome("graded", Score(False), 0.0, cost_usd=0.01, duration_s=2.0),
     "t3": Outcome("infra_error", error="DockerError: container is gone", duration_s=1.0),
 }
@@ -152,6 +154,7 @@ def test_results_json_has_everything(store):
                 "total_queue_wait_s", "setup_s", "wall_s", "trials_per_min", "max_cost_usd"):
         assert key in report
     assert {"agent_start_at", "grade_end_at", "queued_at", "input_tokens"} <= set(t1["attempts"][0])
+    assert t1["attempts"][0]["limits"] == {"trial_timeout_s": {"value": 900, "source": "benchmark"}}  # effective + source
 
 
 def test_unknown_run_is_an_error(store):
@@ -190,8 +193,29 @@ def test_run_resolves_the_model_at_submit_and_stores_the_limits(store, agents):
     run = store.run(result.output.split()[2].rstrip(":"))
     assert run["model"] == "fake/model-1"  # from HARNESS_MODEL, now fixed for the run
     assert json.loads(run["versions"])["benchmark"] == BashOperations().version()
-    limits = json.loads(run["config"])["limits"]
-    assert (limits["trial_timeout_s"], limits["cost_usd"], limits["max_steps"], limits["memory"], limits["cpus"]) == (30, 0.5, 7, "1g", 2)
+    config = json.loads(run["config"])
+    assert config["limits"] == asdict(Limits())  # the harness defaults, under the benchmark's and the flags
+    assert config["limit_flags"] == {"trial_timeout_s": 30, "cost_usd": 0.5, "max_steps": 7, "memory": "1g", "cpus": 2}
+    assert config["non_standard_limits"] == []  # bash-operations declares no limits of its own
+
+
+def test_only_flags_given_are_recorded(store, agents):
+    result = submit("--agent", "fake")
+    assert json.loads(store.run(result.output.split()[2].rstrip(":"))["config"])["limit_flags"] == {}
+
+
+def test_a_flag_over_a_benchmark_declared_limit_marks_the_run_non_standard(store, agents, monkeypatch):
+    monkeypatch.setattr(BashOperations, "limits", lambda self, task: LimitOverrides(trial_timeout_s=900, grade_timeout_s=60))
+    same = submit("--agent", "fake", "--grade-timeout", "60", "--cost-limit", "0.5")  # same value / not declared
+    assert json.loads(store.run(same.output.split()[2].rstrip(":"))["config"])["non_standard_limits"] == []
+    other = submit("--agent", "fake", "--trial-timeout", "30", "--grade-timeout", "10")
+    run_id = other.output.split()[2].rstrip(":")
+    assert json.loads(store.run(run_id)["config"])["non_standard_limits"] == ["grade_timeout_s", "trial_timeout_s"]
+    assert "Note: non-standard limits: grade_timeout_s, trial_timeout_s" in other.output
+    for format in ("summary", "table"):
+        shown = CliRunner().invoke(cli, ["results", "--run_id", run_id, "--format", format]).output
+        assert "non-standard limits: grade_timeout_s, trial_timeout_s set by flag" in shown
+    assert "non-standard" not in CliRunner().invoke(cli, ["results", "--run_id", "run-a"]).output
 
 
 def test_model_flag_wins_over_harness_model(store, agents):

@@ -187,6 +187,8 @@ function RunDetail({ runId, attemptId, noWorkers }) {
           <span class="subtle">Excluded</span>
           ${excluded.map((k) => html`<${Pill} key=${k} kind=${k}>${run[k]} ${LABELS[k]}<//>`)}
         </div>`}
+      ${run.config?.non_standard_limits?.length > 0 && html`
+        <div class="notice">Non-standard limits: ${run.config.non_standard_limits.join(", ")} set by flag over the benchmark's own value</div>`}
       ${isActive(run) && noWorkers && html`
         <div class="notice">No worker running. Start one: <code>harness worker</code></div>`}
       <table>

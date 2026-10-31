@@ -133,6 +133,7 @@ class Dashboard:
                                  "queued_at", "started_at", "env_ready_at", "agent_start_at", "agent_end_at",
                                  "grade_start_at", "grade_end_at", "finished_at")},
             "score": _parse(a["score"]),
+            "limits": _parse(a["limits"]),
             "attempts": siblings,
             "outcome_file": _read_json(folder / "outcome.json") if folder else None,
             "transcript": _read_json(folder / "transcript.json") if folder else None,

@@ -13,7 +13,7 @@ from pathlib import Path
 from agentic_harness.agents.base import AgentStats
 from agentic_harness.types import Outcome
 
-SCHEMA_VERSION = 4  # bump on any schema change; an old harness.db is then refused, not migrated
+SCHEMA_VERSION = 5  # bump on any schema change; an old harness.db is then refused, not migrated
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS runs (
     agent TEXT NOT NULL,
     model TEXT,
     versions TEXT NOT NULL,     -- json: harness commit, agent commit, dataset hash, model
-    config TEXT NOT NULL,       -- json: limits
+    config TEXT NOT NULL,       -- json: default limits, the limit flags given, which of them make the run non-standard
     max_cost_usd REAL,          -- the run's budget: once its attempts have spent this, no more trials start
     status TEXT NOT NULL,       -- pending (waiting for setup) | running | done | failed (setup failed)
     setup_claimed_by TEXT,
@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     output_tokens INTEGER,
     duration_s REAL,
     artifacts_dir TEXT,
+    limits TEXT,                -- json: the limits it ran under, each with its source (default | benchmark | flag)
     -- phase boundaries (time.time()); NULL for a phase the attempt never reached, and for a setup failure's attempt
     queued_at REAL,             -- its trial became claimable (setup done, or a retry's backoff over)
     started_at REAL,            -- claimed
@@ -311,11 +312,12 @@ class Store:
             self._load_events(claim.attempt_id, claim.artifacts_dir / "events.jsonl")
             phases = outcome.phases
             self.db.execute(
-                "UPDATE attempts SET outcome = ?, score = ?, exit_status = ?, error = ?, duration_s = ?, env_ready_at = ?,"
-                " agent_start_at = ?, agent_end_at = ?, grade_start_at = ?, grade_end_at = ?, finished_at = ? WHERE id = ?",
+                "UPDATE attempts SET outcome = ?, score = ?, exit_status = ?, error = ?, duration_s = ?, limits = ?,"
+                " env_ready_at = ?, agent_start_at = ?, agent_end_at = ?, grade_start_at = ?, grade_end_at = ?,"
+                " finished_at = ? WHERE id = ?",
                 (outcome.status, _json(outcome.score and asdict(outcome.score)), outcome.agent_exit_status, outcome.error,
-                 outcome.duration_s, phases.get("env_ready"), phases.get("agent_start"), phases.get("agent_end"),
-                 phases.get("grade_start"), phases.get("grade_end"), time.time(), claim.attempt_id),
+                 outcome.duration_s, _json(outcome.limits or None), phases.get("env_ready"), phases.get("agent_start"),
+                 phases.get("agent_end"), phases.get("grade_start"), phases.get("grade_end"), time.time(), claim.attempt_id),
             )
             self._record_spend(claim.attempt_id, outcome.cost_usd, outcome.model_calls, outcome.input_tokens,
                                outcome.output_tokens)

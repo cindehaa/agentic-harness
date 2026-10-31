@@ -24,9 +24,10 @@ from agentic_harness.environments import remove_images, remove_leftovers
 from agentic_harness.metrics import run_metrics
 from agentic_harness.paths import DB_PATH, REPO_ROOT, RUNS_DIR
 from agentic_harness.store import SchemaMismatch, Store
-from agentic_harness.types import Limits, Task
+from agentic_harness.types import LimitOverrides, Limits, Task
 
 MAX_RUNNING_ENV = "HARNESS_MAX_RUNNING"
+_DEFAULT = "  [default: the benchmark's own, else %s]"
 
 
 @click.group()
@@ -60,16 +61,18 @@ def cli():
 @click.option("--concurrency", default=1, show_default=True, help="With --wait: trials run at the same time")
 @click.option("--max-running", type=click.IntRange(min=1), default=None, envvar=MAX_RUNNING_ENV, show_envvar=True,
               help="With --wait: cap on trials running at once across ALL workers")
-@click.option("--trial-timeout", default=Limits().trial_timeout_s, show_default=True, help="Seconds per trial")
-@click.option("--cost-limit", default=Limits().cost_usd, show_default=True, help="Model spend per trial, USD")
+# Per-trial limits: unset (None) unless given, so a benchmark's own value stands unless the user overrides it
+@click.option("--trial-timeout", type=float, default=None, help=f"Seconds per trial{_DEFAULT % Limits().trial_timeout_s}")
+@click.option("--grade-timeout", type=float, default=None, help=f"Seconds to grade a trial{_DEFAULT % Limits().grade_timeout_s}")
+@click.option("--cost-limit", type=float, default=None, help=f"Model spend per trial, USD{_DEFAULT % Limits().cost_usd}")
 @click.option("--max-run-cost", type=float, default=None,
               help="Budget for the whole run, USD: once spent, no more trials start (the rest end skipped_budget)")
-@click.option("--max-steps", default=Limits().max_steps, show_default=True, help="Model calls per trial")
-@click.option("--memory", default=Limits().memory, show_default=True, help="Memory per container (docker --memory)")
-@click.option("--cpus", default=Limits().cpus, show_default=True, help="CPUs per container (docker --cpus)")
+@click.option("--max-steps", type=int, default=None, help=f"Model calls per trial{_DEFAULT % Limits().max_steps}")
+@click.option("--memory", type=str, default=None, help=f"Memory per container (docker --memory){_DEFAULT % Limits().memory}")
+@click.option("--cpus", type=float, default=None, help=f"CPUs per container (docker --cpus){_DEFAULT % Limits().cpus}")
 def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int,
-        max_running: int | None, trial_timeout: float, cost_limit: float, max_run_cost: float | None, max_steps: int,
-        memory: str, cpus: float):
+        max_running: int | None, trial_timeout: float | None, grade_timeout: float | None, cost_limit: float | None,
+        max_run_cost: float | None, max_steps: int | None, memory: str | None, cpus: float | None):
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
     for option in ("concurrency", "max_running"):  # HARNESS_MAX_RUNNING set for the workers is no mistake: only flags
         if not wait and click.get_current_context().get_parameter_source(option) is ParameterSource.COMMANDLINE:
@@ -77,8 +80,9 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
             raise click.UsageError(f"{flag} applies only with --wait; without it, workers run the trials: "
                                    f"harness worker {flag} N")
     bench, the_agent = _benchmark_and_agent(benchmark, agent, model)
-    limits = Limits(trial_timeout_s=trial_timeout, cost_usd=cost_limit, max_steps=max_steps, memory=memory, cpus=cpus)
-    run_id = _submit(bench, the_agent, _select(bench, task_ids), limits, max_run_cost)
+    flags = LimitOverrides(trial_timeout_s=trial_timeout, grade_timeout_s=grade_timeout, cost_usd=cost_limit,
+                           max_steps=max_steps, memory=memory, cpus=cpus)
+    run_id = _submit(bench, the_agent, _select(bench, task_ids), flags, max_run_cost)
     if not wait:
         click.echo("Start a worker to run it: harness worker")
         return
@@ -111,8 +115,9 @@ def _benchmark_and_agent(benchmark: str, agent: str, model: str | None) -> tuple
     return BENCHMARKS[benchmark](), the_agent
 
 
-def _submit(bench: Benchmark, the_agent: Agent, tasks: list[Task], limits: Limits, max_run_cost: float | None) -> str:
-    """Queue a run (one trial per task); its id."""
+def _submit(bench: Benchmark, the_agent: Agent, tasks: list[Task], flags: LimitOverrides, max_run_cost: float | None) -> str:
+    """Queue a run (one trial per task); its id. Each trial's limits are resolved when it runs: the defaults stored
+    here, then what the benchmark declares for its task, then `flags` (the limits given explicitly)."""
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     versions = {
         "harness": _git_sha(REPO_ROOT),
@@ -122,10 +127,25 @@ def _submit(bench: Benchmark, the_agent: Agent, tasks: list[Task], limits: Limit
         "model": the_agent.model,
     }
     store = _store()
-    store.create_run(run_id, bench.name, the_agent.name, the_agent.model, versions, {"limits": asdict(limits)},
-                     [t.id for t in tasks], max_run_cost)
+    config = {"limits": asdict(Limits()), "limit_flags": flags.given(), "non_standard_limits": _non_standard(bench, tasks, flags)}
+    store.create_run(run_id, bench.name, the_agent.name, the_agent.model, versions, config, [t.id for t in tasks], max_run_cost)
     click.echo(f"Submitted run {run_id}: {the_agent.name} ({the_agent.model}) on {bench.name}, {len(tasks)} task(s)")
+    if config["non_standard_limits"]:
+        click.echo(f"Note: {_non_standard_note(config)}")
     return run_id
+
+
+def _non_standard(bench: Benchmark, tasks: list[Task], flags: LimitOverrides) -> list[str]:
+    """The limits whose flag replaces another value the benchmark declares for one of the run's tasks: its scores are
+    then not comparable with the benchmark's standard setup."""
+    declared = [bench.limits(t).given() for t in tasks]
+    return sorted({name for name, value in flags.given().items() for d in declared if name in d and d[name] != value})
+
+
+def _non_standard_note(config: dict) -> str | None:
+    if names := config.get("non_standard_limits"):
+        return f"non-standard limits: {', '.join(names)} set by flag over the benchmark's own value"
+    return None
 
 
 @cli.command()
@@ -175,7 +195,7 @@ def parity(benchmark: str, agent: str, runs: int, task_ids: str | None, model: s
     _log_to_stderr()
     run_ids, harness_scores = [], []
     for _ in range(runs):
-        run_id = _submit(bench, the_agent, tasks, Limits(), None)
+        run_id = _submit(bench, the_agent, tasks, LimitOverrides(), None)
         if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id, max_running=max_running):
             raise SystemExit(130)
         run_ids.append(run_id)
@@ -426,12 +446,15 @@ def results(run_id: str, format: str):
             **m,
             "trials": [
                 {**dict(t), "score_value": _parse(t["score_value"]),
-                 "attempts": [{**dict(a), "score": _parse(a["score"])} for a in attempts if a["trial_id"] == t["id"]]}
+                 "attempts": [{**dict(a), "score": _parse(a["score"]), "limits": _parse(a["limits"])}
+                              for a in attempts if a["trial_id"] == t["id"]]}
                 for t in trials
             ],
         }
         click.echo(json.dumps(report, indent=2))
     elif format == "table":
+        if note := _non_standard_note(json.loads(run["config"])):
+            click.echo(f"Note: {note}\n")
         _table(("TASK", "OUTCOME", "SCORE", "COST", "TOKENS IN/OUT", "AGENT", "GRADING", "TIME", "ATTEMPTS"),
                [(t["task_id"], t["outcome"] or t["state"], _score(t["score_value"]), f"${t['cost_usd']:.4f}",
                  f"{t['input_tokens']:,}/{t['output_tokens']:,}", f"{t['agent_s']:.1f}s", f"{t['grading_s']:.1f}s",
@@ -441,6 +464,8 @@ def results(run_id: str, format: str):
         click.echo(f"{run['benchmark']} · {run['agent']} ({run['model']})   run {run_id}")
         if done < len(trials):
             click.echo(f"In progress: {_progress(run, done, len(trials))}")
+        if note := _non_standard_note(json.loads(run["config"])):
+            click.echo(f"Note: {note}")
         click.echo("Accuracy: " + ("n/a" if accuracy is None else f"{accuracy:.2f}") + f" (n={graded} graded, {m['passed']} passed)")
         click.echo("Excluded: " + " · ".join(f"{s} {len(ids)}" for s, ids in excluded.items()))
         for s, ids in excluded.items():

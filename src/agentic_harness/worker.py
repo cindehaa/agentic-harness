@@ -23,7 +23,7 @@ from agentic_harness.environments import ATTEMPT_LABEL, DockerEnvironment, Envir
 from agentic_harness.redact import redact
 from agentic_harness.runner import run_trial
 from agentic_harness.store import Claim, LostClaim, Store
-from agentic_harness.types import Limits, Outcome, Task
+from agentic_harness.types import LimitOverrides, Limits, Outcome, Task
 
 LEASE_S = 120  # a claim lapses this long after its last renewal
 RENEW_EVERY_S = 30
@@ -260,7 +260,8 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
     benchmark = BENCHMARKS[run["benchmark"]]()
     agent = resolve_agent(run["agent"])(run["model"])
     task = next(t for t in benchmark.tasks() if t.id == claim.task_id)
-    limits = Limits(**json.loads(run["config"])["limits"])
+    config = json.loads(run["config"])
+    defaults, flags = Limits(**config["limits"]), LimitOverrides(**config.get("limit_flags", {}))
 
     def turn_ended(stats: AgentStats) -> None:  # live spend and trace; a failure here only delays them to the attempt's end
         try:
@@ -278,7 +279,8 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
 
     log.info("run %s: %s attempt %s", claim.run_id, claim.task_id, claim.n)
     with _heartbeat(db_path, lambda s: s.renew_lease(claim, worker, LEASE_S)):
-        outcome = run_trial(benchmark, agent, task, limits, claim.artifacts_dir, environment, on_turn_end=turn_ended)
+        outcome = run_trial(benchmark, agent, task, defaults, claim.artifacts_dir, environment, on_turn_end=turn_ended,
+                            flags=flags)
     # first, and whatever happens next (interrupted, claim lost): money spent counts toward the run's budget
     store.record_spend(claim.attempt_id, AgentStats(None, outcome.cost_usd, outcome.model_calls, outcome.input_tokens,
                                                     outcome.output_tokens))

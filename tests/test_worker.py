@@ -19,7 +19,7 @@ from agentic_harness.agents import AGENTS, Agent, AgentSession, AgentStats, Pref
 from agentic_harness.benchmarks import BENCHMARKS, BashOperations
 from agentic_harness.cli import cli
 from agentic_harness.store import LostClaim, Store
-from agentic_harness.types import Message, Outcome, Score, Text
+from agentic_harness.types import LimitOverrides, Message, Outcome, Score, Text
 from agentic_harness.environments import docker as docker_module
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
@@ -456,3 +456,17 @@ def test_worker_max_running_flag_and_env(db):
     assert result.exit_code == 0 and "at most 2 running across all workers" in result.output, result.output
     result = CliRunner().invoke(cli, ["worker", "--exit-when-idle", "--max-running", "0"])
     assert result.exit_code == 2  # at least 1
+
+
+def test_each_trial_runs_under_defaults_then_the_benchmarks_limits_then_the_flags_given(db, monkeypatch):
+    monkeypatch.setattr(LocalGrade, "limits", lambda self, task: LimitOverrides(trial_timeout_s=300, grade_timeout_s=90))
+    run_id = submit("oracle", "local-bash", "bash-001", "--grade-timeout", "45", "--max-steps", "9")
+    work(1)
+    [attempt] = Store(db).attempts(run_id)
+    limits = json.loads(attempt["limits"])
+    assert limits["trial_timeout_s"] == {"value": 300, "source": "benchmark"}
+    assert limits["grade_timeout_s"] == {"value": 45, "source": "flag"}
+    assert limits["max_steps"] == {"value": 9, "source": "flag"}
+    assert limits["cost_usd"] == {"value": 1.0, "source": "default"}
+    assert json.loads((Path(attempt["artifacts_dir"]) / "outcome.json").read_text())["limits"] == limits
+    assert json.loads(Store(db).run(run_id)["config"])["non_standard_limits"] == ["grade_timeout_s"]
