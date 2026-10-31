@@ -10,10 +10,13 @@ import time
 import pytest
 from litellm.exceptions import AuthenticationError, ContextWindowExceededError, InternalServerError
 from minisweagent.exceptions import LimitsExceeded, Submitted
+from minisweagent.models.litellm_model import LitellmModel
 from minisweagent.models.test_models import DeterministicToolcallModel, make_toolcall_output
 
 from agentic_harness.agents import AgentCapabilities, AgentStats, AgentLimitation, PreflightError, TransientError, Unsupported, resolve_agent
-from agentic_harness.agents.mini_swe_agent import ContainerEnv, MiniAgent, MiniSweAgent, MiniSweSession, TimeLimit
+from agentic_harness.agents.mini_swe_agent import (
+    MODEL_TIMEOUT_S, ContainerEnv, MiniAgent, MiniSweAgent, MiniSweSession, TimeLimit, cap_model_calls,
+)
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, Message, Text
 
@@ -84,6 +87,65 @@ def test_command_after_deadline_raises_time_limit_without_running():
     assert isinstance(info.value, LimitsExceeded)  # so mini's loop ends cleanly
     assert info.value.messages[0]["extra"]["exit_status"] == "TimeLimit"
     assert len(env.calls) == calls_before
+
+
+class RecordingModel(LitellmModel):
+    """mini's own litellm model (its retry loop included) whose API call is replaced: records each call's timeout and
+    answers with what `answer` says (raise or return)."""
+
+    def __init__(self, answer=lambda: "ok") -> None:
+        super().__init__(model_name="anthropic/claude-haiku-5-5", model_kwargs={"timeout": MODEL_TIMEOUT_S})
+        self.timeouts: list[float] = []
+        self.answer = answer
+
+    def _query(self, messages, **kwargs):
+        self.timeouts.append((self.config.model_kwargs | kwargs)["timeout"])
+        return self.answer()
+
+
+def test_a_model_call_gets_at_most_the_time_left_in_the_trial():
+    model = RecordingModel()
+    cap_model_calls(model, deadline=time.monotonic() + 5)
+    assert model._query([]) == "ok" and 4 < model.timeouts[-1] <= 5
+    roomy = RecordingModel()
+    cap_model_calls(roomy, deadline=time.monotonic() + 3600)
+    roomy._query([])
+    assert roomy.timeouts == [MODEL_TIMEOUT_S]
+
+
+def test_no_model_call_past_the_deadline_and_no_retry_of_it():
+    model = RecordingModel()
+    cap_model_calls(model, deadline=time.monotonic() - 1)
+    began = time.monotonic()
+    with pytest.raises(TimeLimit):
+        model.query([{"role": "user", "content": "hi"}])  # through mini's retry loop
+    assert model.timeouts == [] and time.monotonic() - began < 1  # mini waits >= 4 s before a retry
+
+
+def test_a_retry_after_the_deadline_stops_with_time_limit(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda s: clock.__setitem__(0, clock[0] + s))  # mini's backoff
+
+    def slow_failure():
+        clock[0] += 30  # the call took 30 s, then the provider failed
+        raise InternalServerError("overloaded", llm_provider="anthropic", model="fake")
+
+    model = RecordingModel(slow_failure)
+    cap_model_calls(model, deadline=50)
+    with pytest.raises(TimeLimit):
+        model.query([{"role": "user", "content": "hi"}])
+    # 50 s left for the first call; after it (30 s) and mini's backoff (4 s) the retry got the 16 s left; after that
+    # retry and another backoff none were left, so no third call
+    assert model.timeouts == [50, 16]
+
+
+def test_a_session_past_its_deadline_ends_with_time_limit_without_calling_the_model(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(LitellmModel, "_query", lambda self, messages, **kw: calls.append(kw))
+    session = MiniSweAgent("anthropic/claude-haiku-5-5").start(FakeEnv(), tmp_path, Limits(trial_timeout_s=0))
+    assert session.send(Message("user", (Text("go"),))) == Message("agent", (Text(""),))
+    assert session.stats().exit_status == "TimeLimit" and calls == []
 
 
 def _bash(call_id: str, command: str) -> dict:

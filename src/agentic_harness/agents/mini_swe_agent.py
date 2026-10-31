@@ -44,6 +44,26 @@ class TimeLimit(LimitsExceeded):
     """The trial deadline passed. A LimitsExceeded, so mini's loop ends cleanly with exit status "TimeLimit"."""
 
 
+def _time_limit() -> TimeLimit:
+    return TimeLimit({"role": "exit", "content": "TimeLimit", "extra": {"exit_status": "TimeLimit", "submission": ""}})
+
+
+def cap_model_calls(model, deadline: float) -> None:
+    """Give every model call, each of mini's own retries included, at most the time left before `deadline` (a
+    time.monotonic() value), and make none past it: TimeLimit then ends mini's loop, as a command past it does.
+    mini's retry policy is unchanged; TimeLimit only joins the errors it never retries."""
+    query = model._query
+
+    def capped(messages, **kwargs):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _time_limit()
+        return query(messages, **kwargs | {"timeout": min(MODEL_TIMEOUT_S, remaining)})
+
+    model._query = capped
+    model.abort_exceptions = [*model.abort_exceptions, TimeLimit]
+
+
 class ContainerEnv:
     """mini's Environment protocol (execute / get_template_vars / serialize) on top of our Environment."""
 
@@ -58,7 +78,7 @@ class ContainerEnv:
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
         if time.monotonic() > self.deadline:
-            raise TimeLimit({"role": "exit", "content": "TimeLimit", "extra": {"exit_status": "TimeLimit", "submission": ""}})
+            raise _time_limit()
         timeout = timeout or self.config["command_timeout_s"]
         # mini wants one output stream, in order (its envs use stderr=STDOUT): `exec 2>&1` does that in the shell
         r = self.env.exec("exec 2>&1\n" + action.get("command", ""), timeout=timeout, cwd=cwd or None)
@@ -161,9 +181,12 @@ class MiniSweAgent(Agent):
     def start(self, env: Environment, artifacts_dir: Path, limits: Limits, mcp_servers: tuple[McpServer, ...] = ()) -> MiniSweSession:
         config = get_config_from_spec("mini.yaml")
         model_config = config["model"] | {"model_kwargs": config["model"].get("model_kwargs", {}) | {"timeout": MODEL_TIMEOUT_S}}
+        deadline = time.monotonic() + limits.trial_timeout_s
+        model = get_model(self.native_model(), model_config)
+        cap_model_calls(model, deadline)
         agent = MiniAgent(
-            get_model(self.native_model(), model_config),
-            ContainerEnv(env, time.monotonic() + limits.trial_timeout_s, limits.command_timeout_s),
+            model,
+            ContainerEnv(env, deadline, limits.command_timeout_s),
             **config["agent"] | {
                 "step_limit": limits.max_steps,
                 "cost_limit": limits.cost_usd,
