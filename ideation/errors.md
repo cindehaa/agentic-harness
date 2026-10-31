@@ -33,7 +33,7 @@ flowchart TB
   mcp --> turns["benchmark.run_agent(task, session, env)"]
 
   turns -->|"Unsupported: content the agent can't read, e.g. a File"| UN["unsupported"]
-  turns -->|"returns: mini exit Submitted, LimitsExceeded (steps, cost), TimeLimit; ACP agent exit = its stopReason (end_turn, max_tokens, max_turn_requests, cancelled), TimeLimit (deadline: session/cancel, killed inside if it ignores it), LimitsExceeded (usage_update cost past the budget: session/cancel)"| check
+  turns -->|"returns: mini exit Submitted, LimitsExceeded (steps, cost), TimeLimit; ACP agent exit = its stopReason (end_turn, max_tokens, max_turn_requests, cancelled), TimeLimit (deadline: session/cancel, killed inside if it ignores it), LimitsExceeded (usage_update cost past the budget: session/cancel; or the agent failed the prompt at the step limit it was given, e.g. Claude Code's 'Reached maximum number of turns')"| check
   turns -->|"TurnLimit: more than max_turns messages"| check
   turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError; ACP agent: stopReason refusal, or an error message about prompt length / context window"| check
   turns -->|"EnvironmentLost"| check
@@ -43,7 +43,7 @@ flowchart TB
   check{"after the turn: env.state() (Docker: docker inspect)"}
   check -->|"None (vanished, Docker unreachable)"| IE3
   check -->|"RESOURCE_LIMIT: over limits we set (Docker: OOMKilled under --memory, Limits.memory 2g)"| GF
-  check -->|"EXPIRED: the keep-alive's lifetime (3 x trial timeout + 600 s) ran out (Docker: exited 0, not OOMKilled)"| IE3
+  check -->|"EXPIRED: the keep-alive's lifetime (3 x trial timeout + grade timeout + 600 s) ran out (Docker: exited 0, not OOMKilled)"| IE3
   check -->|"KILLED: something inside ended the main process (Docker: exited non-zero)"| GF
   check -->|"UNKNOWN: the backend can't tell (Docker: Status not exited, e.g. dead)"| IE3
   check -->|"Running, but the turn raised EnvironmentLost"| IE3
@@ -60,7 +60,7 @@ flowchart TB
   recheck -->|"RESOURCE_LIMIT, KILLED"| GF
   recheck -->|"EXPIRED, UNKNOWN"| IE3
   recheck -->|"Running"| IE3
-  grade -->|"GraderError: grader crashed, unparseable output"| GE["grader_error"]
+  grade -->|"GraderError: grader crashed, unparseable output; a grading command started past the grade timeout (Limits.grade_timeout_s)"| GE["grader_error"]
   grade -->|"any other exception"| IE2
   grade -->|"Score"| usable{"json.dumps(value) and score_to_float(score) succeed?"}
   usable -->|"no: TypeError, ValueError"| GE
@@ -129,12 +129,19 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   (rule 6), and if the world still runs → `infra_error`, retried.
 - **ACP agents' errors** (2026-10-30, `action-space.md` → Agents over ACP #11): a JSON-RPC error answering
   `session/prompt` carries only a message, so its words decide: overloaded / rate limit / 5xx → `TransientError`
-  (retried), prompt too long / context window → `AgentLimitation` (graded as it is), anything else → `AcpAgentError`
+  (retried), prompt too long / context window → `AgentLimitation` (graded as it is), the step limit it was given
+  ("maximum number of turns", 2026-10-31) → the turn ends `LimitsExceeded` (graded), anything else → `AcpAgentError`
   (`infra_error`, not retried); `stopReason: refusal` → `AgentLimitation`. The agent's process ending mid-turn:
   the world gone → `EnvironmentLost` (the runner's death check decides), the world up → `AcpAgentError` with the
   tail of the agent's stderr. The agent's own model-call retries are left alone too. The trace it produced before
   failing is still written (`AgentSession.new_events`, read in a `finally`). (Before 2026-10-30 the dedicated Claude
   Code adapter classified its stream-json result event's error kinds the same way.)
+- **Grade timeout** (2026-10-31, `agents-and-runner.md` → Limits in three layers): `grade()` gets its grader
+  and the world wrapped (`GradingDeadline`): every command is capped to what is left of `grade_timeout_s` (a command
+  with no timeout gets all of it). A command cut off by it returns `timed_out` and the adapter judges it as any
+  timeout (Terminal-Bench: the task fails, as in Terminal-Bench; bash-operations / python-tasks: no JSON →
+  `GraderError`); a command started after it raises `GraderError` → `grader_error`. Classification is unchanged:
+  a grader too slow to answer was already a `grader_error` (bash-operations under the 60 s exec default).
 - **mini's own retries are left alone.** mini retries failed model calls
   itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
   agent's scaffolding, part of what is measured; we don't change it

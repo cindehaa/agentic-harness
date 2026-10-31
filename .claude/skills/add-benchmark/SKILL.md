@@ -49,6 +49,7 @@ Read both, plus `src/agentic_harness/benchmarks/base.py` (the interface) and
 | `run_agent(task, agent, env)` | usually one line: `agent.send(Message("user", (Text(task.instruction),)))` |
 | `grader_image(task)` | the image grading runs in, attached to the world (shares `/workspace`, network, processes). Default: the task's own image. |
 | `grade(task, grader, env, transcript)` | run the benchmark's own grader; return `Score(value=passed, explanation=..., metadata=...)`. Raise `GraderError` when its output can't be read (never return False for "couldn't parse"). |
+| `limits(task)` | optional: the limits the benchmark itself declares (e.g. Terminal-Bench's `max_agent_timeout_sec` → `LimitOverrides(trial_timeout_s=...)`, `max_test_timeout_sec` → `grade_timeout_s`). Don't pass your own timeout to the grader's `exec`: with none it gets the rest of the grade timeout. |
 | `mcp_servers(task)` | optional: only if the benchmark serves its own tools to the agent |
 | `reference_solution(task)` | `ReferenceSolution(source, files={path: text}, script="...", cwd=...)`. If the benchmark ships solutions, use them unchanged with `source="benchmark-provided"`; otherwise write tiny correct ones with `source="harness-written"`, or return None. |
 | `original_workflow(task, agent_name, model, out_dir)` | optional, for `harness parity`: the benchmark's own scripts + the agent in its own Docker mode (`agentic_harness.original.OriginalAgentWorld`, `run_script`). Leave it out if unsure; say so. |

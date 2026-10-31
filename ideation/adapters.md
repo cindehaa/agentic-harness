@@ -140,7 +140,9 @@ container, copied in only to run).
   `max_test_timeout_sec`); a faithful port of its pytest `-rA` summary parser; no summary →
   `GraderError`; a fidelity note (agent starts in `/workspace`, not `/app`; grading needs network). The `/workspace`
   difference is gone since 2026-10-30: tasks declare their workdir (`Task.workdir`, `environment.md` #15) and
-  Terminal-Bench's is `/app`.
+  Terminal-Bench's is `/app`. Since 2026-10-31 its `task.yaml` timeouts are declared limits (`Benchmark.limits`):
+  `max_agent_timeout_sec` → trial timeout (was not applied), `max_test_timeout_sec` → grade timeout
+  (`agents-and-runner.md` L6).
 - **Fixed by hand** (commit `40cf1ea`): it picked `fix-permissions`, whose solution is a
   `solution.yaml` of tmux commands it joined into one script → replaced by `log-summary` (ships
   `solution.sh`); it ran `solution.sh` through `sh -c` → now as Terminal-Bench's oracle does

@@ -11,7 +11,7 @@ Agents never start containers. They receive an `Environment` handle
 writes to the DB. Neither the agent nor anything inside the container does.
 
 - Each trial container starts with `sleep <lifetime>` as its
-  main process (lifetime = 3 × trial timeout + 600 s since the 2026-10-29 audit; was trial timeout + margin). A container lives only while its main process runs, so this
+  main process (lifetime = 3 × trial timeout + grade timeout + 600 s since the 2026-10-29 audit; was trial timeout + margin). A container lives only while its main process runs, so this
   keeps it alive for `docker exec`. It also acts as a self-destruct timer:
   if the harness crashes without cleaning up, the container still exits
   shortly after the trial would have timed out.

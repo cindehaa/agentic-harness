@@ -110,17 +110,35 @@ Each worker checks every run once before claiming its work (benchmark known, age
 its API key set); a run that fails the check fails on its own, with the reason on each trial, and the other runs
 keep flowing.
 
-Per-run limits (stored with the run; defaults shown):
-
 | Flag | Default | Meaning |
 |---|---|---|
 | `--model` | `$HARNESS_MODEL` | model for the agent, litellm-style (also on `harness parity`) |
-| `--trial-timeout` | 600 | seconds per trial |
-| `--cost-limit` | 1.0 | model spend per trial, USD |
 | `--max-run-cost` | none | budget for the whole run, USD: once spent, no more trials start; the rest end `skipped_budget` (trials in flight finish) |
-| `--max-steps` | 50 | model calls per trial |
+
+#### Limits: three layers
+
+Each trial's limits are resolved when it runs, in three layers, each overriding the one before:
+
+1. **Harness defaults** (`Limits`, stored with the run).
+2. **What the benchmark declares for the task** (`Benchmark.limits(task)`, only the limits it cares about). Terminal-Bench
+   declares its `task.yaml` timeouts: `max_agent_timeout_sec` → trial timeout, `max_test_timeout_sec` → grade timeout.
+3. **Flags you pass explicitly.** A flag you leave out never overrides anything. A flag that replaces a different
+   value the benchmark declares marks the run **non-standard** (`runs.config.non_standard_limits`), noted at submit,
+   in `harness results` and on the dashboard: its scores aren't comparable with the benchmark's standard setup.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--trial-timeout` | 600 | seconds per trial (the agent's turns) |
+| `--grade-timeout` | 120 | seconds for grading: no grader command runs past it (one started later is a `grader_error`) |
+| `--cost-limit` | 1.0 | model spend per trial, USD |
+| `--max-steps` | 50 | model calls per trial (an ACP agent only if its definition passes it on: Claude Code's own max turns) |
 | `--memory` | 2g | memory per container (`docker --memory`) |
 | `--cpus` | 1.0 | CPUs per container (`docker --cpus`) |
+
+Each attempt records the limits it ran under, each with its source (`default` / `benchmark` / `flag`), in
+`outcome.json` and `attempts.limits` (`results --format json`); a limit the agent can't keep is marked
+`"enforced": false` rather than pretended. The operator controls (`--max-running`, `--concurrency`, `--max-run-cost`)
+are not limits: a benchmark can't set them.
 
 ### Viewing runs and results
 
@@ -204,7 +222,8 @@ harness cleanup --all            # also those of trials still running
 harness cleanup --images         # also cached harness-* images (task images, ACP agents' derived images) no unfinished trial needs
 ```
 
-A killed worker's containers otherwise live until their keep-alive runs out (3 × trial timeout + 600 s).
+A killed worker's containers otherwise live until their keep-alive runs out (3 × trial timeout + grade timeout +
+600 s).
 
 ## Architecture
 
@@ -281,8 +300,8 @@ and the queue's state machine.
    exceeded our limits → graded fail; it expired, vanished or the reason is unknown → `infra_error` (retried).
 6. **Kill leftovers.** Every process the agent left running is killed, then `workspace.tar` is saved.
 7. **Attached grader.** A grader sidecar starts from `grader_image(task)`, sharing the world's workspace, network
-   and processes; `grade()` runs the benchmark's own grader there and returns a `Score`. The grader's files never
-   enter the agent's world.
+   and processes; `grade()` runs the benchmark's own grader there and returns a `Score`, within the grade timeout
+   (a command with no timeout gets the rest of it). The grader's files never enter the agent's world.
 8. **Outcome.** `graded`, `grader_error`, `infra_error` (with `retryable`) or `unsupported`.
 9. **Files, then DB.** `outcome.json` and `transcript.json` are written (redacted, atomically), then one fenced
    transaction records the outcome and either finishes the trial or re-queues it with a backoff. The world and its
@@ -340,6 +359,7 @@ in [`benchmarks/__init__.py`](src/agentic_harness/benchmarks/__init__.py).
 | `grade(task, grader, env, transcript)` | yes | run the benchmark's grader in `grader`, return a `Score`; raise `GraderError` on unreadable output |
 | `setup(tasks)` | no | once per run: build/pull images (`build_image`, `ensure_image` from `agentic_harness.environments`) |
 | `grader_image(task)` | no | the grader's image; default `task.image` |
+| `limits(task)` | no | the limits the benchmark declares for the task (`LimitOverrides`, e.g. its own timeouts); explicit run flags still override them; default none |
 | `requirements(task)` | no | what the agent must support (`AgentCapabilities`); default text, single turn, MCP iff it declares servers |
 | `mcp_servers(task)` | no | `McpServer`s (name, image, command, port) the runner starts as network-only sidecars; default none |
 | `version()` | no | content hash of what builds the images; put it in image tags |
@@ -376,9 +396,11 @@ model_prefix = "openai/"                        # ... without this prefix
 capabilities = { content_types = ["text"], mcp = true }   # what the runner checks tasks against
 ```
 
-Limits: the deadline (`session/cancel`, then kill) and the cost budget (cancel once the reported cost passes it);
-ACP has no step count, so `--max-steps` doesn't apply to ACP agents ([action space](ideation/action-space.md) →
-Agents over ACP).
+Limits: the deadline (`session/cancel`, then kill) and the cost budget (cancel once the reported cost passes it).
+ACP has no step count; an agent that keeps a step limit itself gets it through `limits_meta` (a limit → a dotted path in
+`session/new`'s `_meta`). Claude Code: `limits_meta = { max_steps = "claudeCode.options.maxTurns" }`, its own max
+turns (API round trips), counted per prompt. Without it, `--max-steps` isn't enforced and the attempt says so
+(`"enforced": false`); the same for `command_timeout_s`, since the agent runs its own commands.
 
 ### An agent with code of its own
 
@@ -463,7 +485,8 @@ The runner's outcome rules are also tested without Docker against a fake environ
   most 5).
 - A fork bomb that fills `--pids-limit` can stop `docker exec` from starting, so the pre-grade kill may not run
   (grading still starts: the grader is its own container).
-- ACP agents: no step limit (ACP reports no model calls, so `model_calls` is 0), provider errors are classified by
+- ACP agents: a step limit only where the agent keeps one itself (Claude Code: per prompt, so a multi-turn benchmark
+  gets it per turn); ACP reports no model calls, so `model_calls` is 0. Provider errors are classified by
   their message's words (ACP has no error kinds), and cost is only what the agent reports (Claude Code does; for one
   that doesn't, a model-traffic proxy would be the general fix).
 - An ACP agent's API key is inside the world while it runs (the agent could read it); it is never in an image layer,

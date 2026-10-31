@@ -42,7 +42,7 @@ inspected. `stop()` still removes it. Expired containers are found by label
 As built today (`runner.py`; every failure point: `errors.md`):
 
 1. Capability check: `agent.capabilities` vs `benchmark.requirements(task)`; a gap → `unsupported`, no world started (2026-10-29).
-2. `agent.prepare_image(task.image)` (an ACP agent: the task's image + the agent's install, cached), then start the container (`lifetime_s` = 3 × trial timeout + 600 s margin) and the task's MCP sidecars.
+2. `agent.prepare_image(task.image)` (an ACP agent: the task's image + the agent's install, cached), then start the container (`lifetime_s` = 3 × trial timeout + grade timeout + 600 s margin) and the task's MCP sidecars.
 3. `run_agent` with the wrapped session (logs turns, enforces the deadline, builds the transcript, records spend at each turn's end).
 4. Container died? Apply rule 6.
 5. Kill leftover agent processes, save `workspace.tar`.
@@ -62,7 +62,7 @@ As built today (`runner.py`; every failure point: `errors.md`):
 - **`Unsupported`:** mini raises it for any non-`Text` content.
 - **`AgentLimitation`** (`agents/base.py`): the agent itself can't go on. mini raises it for litellm `ContextWindowExceededError` / `ContentPolicyViolationError`; the runner ends the turns and grades the world as it is (like a timeout), reason in `agent_exit_status`.
 - **Any other exception** from the agent or harness (e.g. a model API auth error, provider down, rate limit after mini's retries) → `infra_error` with the traceback. All error paths: `errors.md`.
-- **Container `lifetime_s`** = 3 × trial timeout + 600 s grading margin (was trial timeout + 600 s; made generous in the 2026-10-29 audit, so it never ends before the trial does).
+- **Container `lifetime_s`** = 3 × trial timeout + grade timeout (since 2026-10-31) + 600 s margin (was trial timeout + 600 s; made generous in the 2026-10-29 audit, so it never ends before the trial does).
 - **Trace on disk (Phase 4+5):** the recording session (and, since the audit, the recording environment) appends each event to `events.jsonl` (redacted) as it happens and calls the worker after each turn, which loads the file into the `events` table; `outcome.json` / `transcript.json` are written atomically and redacted, and every file in the attempt folder (e.g. mini's `trajectory.json`) is redacted after the trial.
 - **Score checks:** a non-JSON `Score.value`, or one `score_to_float` can't convert → `grader_error`.
 
@@ -79,7 +79,20 @@ As built today (`runner.py`; every failure point: `errors.md`):
   in each worker, once per run before it claims any of that run's work; a run that fails it fails alone (2026-10-30,
   `errors.md`; was: the worker refused to start).
 - `harness run` flags for the limits: `--trial-timeout` (600 s), `--cost-limit` ($1), `--max-steps` (50),
-  `--memory` (2g), `--cpus` (1.0); stored in `runs.config`. `--concurrency` stays on `harness worker` and `run --wait`.
+  `--memory` (2g), `--cpus` (1.0); stored in `runs.config`. **2026-10-31:** they override only when given, over what
+  the benchmark declares (Limits in three layers, below); `--grade-timeout` (120 s) added. `--concurrency` stays on `harness worker` and `run --wait`.
+
+## Limits in three layers (Cindy, 2026-10-30; built 2026-10-31)
+
+| # | Decision | Why | Rejected |
+|---|---|---|---|
+| L1 | Per trial: harness defaults (`Limits`, in `runs.config.limits`) < what the benchmark declares for the task (`Benchmark.limits(task) -> LimitOverrides`, only the fields it sets; default none) < flags given explicitly (`runs.config.limit_flags`; a flag left out is `None`, never a default). Resolved in `run_trial` (`effective_limits`), so the worker, `validate` and tests all get the benchmark's own | A benchmark's own timeouts are part of what it measures; the user can still override them on purpose | Defaults that silently override a benchmark's values (Terminal-Bench's 900 s agent timeout ran at 600 s); click defaults (can't tell "given" from "default") |
+| L2 | A flag replacing a *different* value the benchmark declares for one of the run's tasks makes the run non-standard: `runs.config.non_standard_limits` (names), a note at submit, in `results` summary/table and on the dashboard | Its scores aren't comparable with the benchmark's standard setup, and the reader must see that | Refusing such flags (overriding is legitimate, e.g. a quick smoke run) |
+| L3 | `Limits.grade_timeout_s` (120 s): `grade()` gets its grader and world wrapped (`GradingDeadline`); every command is capped to what is left (no timeout = the rest), one started after it → `GraderError`. Container lifetime = 3 × trial timeout + grade timeout + 600 s | Grading had per-adapter timeouts (bash-operations 60 s exec default, python-tasks 120 s, Terminal-Bench its own); one harness-wide, overridable timeout is enforced the same way for all | A timer around `grade()` (can't stop a command already running; threads) |
+| L4 | Operator controls (`--max-running`, `--concurrency`, `--max-run-cost`) are not `Limits` fields, so `LimitOverrides` can't carry them | They describe the operator's machine and wallet, not the task | — |
+| L5 | Each attempt records its effective limits with their source (`default` / `benchmark` / `flag`) in `outcome.json` and `attempts.limits` (schema v5); a limit the agent can't keep is `"enforced": false` (`Agent.unenforced_limits()`), never a fake count | A result must say what it ran under | Recording only the run's flags (per-task values differ) |
+| L6 | Terminal-Bench: `max_agent_timeout_sec` → trial timeout, `max_test_timeout_sec` → grade timeout (Terminal-Bench's defaults 360 / 60 s when absent); its task.yaml has no memory/CPU fields. python-tasks declares nothing: its grader stops pytest at 30 s, under the 120 s default | Faithful to how Terminal-Bench runs | — |
+| L7 | ACP agents get limits they keep themselves through their definition (`limits_meta`: a limit → a dotted path in `session/new`'s `_meta`). Claude Code: `max_steps` → `claudeCode.options.maxTurns` (claude-agent-acp hands those options to the Claude Agent SDK). Verified live: maxTurns 1 stops a tool-using prompt after one API round trip and is counted **per prompt** (the next prompt runs), so a multi-turn benchmark gets it per turn. Claude Code reports reaching it as a JSON-RPC error ("Reached maximum number of turns"): the turn ends `LimitsExceeded`, graded. Without `limits_meta`, `max_steps` is recorded not enforced; `command_timeout_s` always is for ACP agents (they run their own commands) | Data, not code; no fake step counts | Counting tool calls as steps (not model calls) |
 
 ## Agent interface cleanups (2026-10-29 audit)
 
