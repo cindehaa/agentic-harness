@@ -107,6 +107,23 @@ class Sleeper(Oracle):
         env.exec("sleep 300", timeout=None)  # until its world is stopped
 
 
+class Counting(Oracle):
+    """Notes how many trials are in their agent turn at once, across every worker in this process."""
+
+    name = "counting"
+    lock = threading.Lock()
+    now = peak = 0
+
+    def act(self, env, text):
+        with Counting.lock:
+            Counting.now += 1
+            Counting.peak = max(Counting.peak, Counting.now)
+        time.sleep(1)
+        with Counting.lock:
+            Counting.now -= 1
+        super().act(env, text)
+
+
 class NoKey(Oracle):
     name = "no-key"
 
@@ -121,7 +138,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "RETRY_BACKOFF_S", 0)
     for bench in (LocalGrade, BrokenSetup):
         monkeypatch.setitem(BENCHMARKS, bench.name, bench)
-    for agent in (Oracle, Crashing, FlakyOnce, Buggy, Sleeper, NoKey):
+    for agent in (Oracle, Crashing, FlakyOnce, Buggy, Sleeper, Counting, NoKey):
         monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")  # registry entries are "module:Class"
         agent.calls = 0
     LocalGrade.setups = 0
@@ -417,3 +434,25 @@ def test_max_run_cost_stops_the_run_once_spent(db):
     assert [(t["outcome"], t["attempt_count"]) for t in store.trials(run_id)] == [("graded", 1), ("skipped_budget", 0)]
     summary = CliRunner().invoke(cli, ["results", "--run_id", run_id]).output
     assert "skipped_budget 1" in summary and "skipped_budget: bash-002" in summary
+
+
+def test_max_running_caps_trials_across_two_workers(db, monkeypatch):
+    monkeypatch.setattr(worker.socket, "gethostname", lambda: threading.current_thread().name)  # two worker ids
+    Counting.now = Counting.peak = 0
+    run_id = submit("counting")
+    workers = [threading.Thread(target=worker.work, args=(db, 2, True), kwargs={"max_running": 1}, name=f"w{i}")
+               for i in range(2)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(120)
+    trials = Store(db).trials(run_id)
+    assert [t["outcome"] for t in trials] == ["graded"] * 2 and Counting.peak == 1  # four threads, one trial at a time
+
+
+def test_worker_max_running_flag_and_env(db):
+    submit("oracle", task_ids="bash-001")
+    result = CliRunner().invoke(cli, ["worker", "--exit-when-idle"], env={"HARNESS_MAX_RUNNING": "2"})
+    assert result.exit_code == 0 and "at most 2 running across all workers" in result.output, result.output
+    result = CliRunner().invoke(cli, ["worker", "--exit-when-idle", "--max-running", "0"])
+    assert result.exit_code == 2  # at least 1

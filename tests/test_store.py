@@ -84,6 +84,36 @@ def test_concurrent_claims_take_each_trial_exactly_once(store, tmp_path):
     assert sorted(claimed) == sorted(task_ids)  # nothing claimed twice, nothing missed
 
 
+def test_max_running_caps_claims_across_workers(store, tmp_path):
+    submit(store, task_ids=[f"t{i}" for i in range(20)])
+    claims = []
+
+    def worker(name):
+        own = Store(tmp_path / "harness.db")
+        while claim := own.claim_trial(name, 120, max_running=3):
+            claims.append((name, claim))
+        own.close()
+
+    threads = [threading.Thread(target=worker, args=(f"w{i}",)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(claims) == 3  # eight workers racing, three running
+    assert store.claim_trial("w9", 120, max_running=3) is None
+    name, claim = claims[0]
+    store.finish_attempt(claim, name, GRADED)  # one ends: its place is free
+    assert store.claim_trial("w9", 120, max_running=3) is not None
+    assert store.claim_trial("w9", 120, max_running=3) is None
+
+
+def test_a_running_trial_whose_lease_expired_frees_its_place(store):
+    submit(store, task_ids=("t1", "t2"))
+    store.claim_trial("dead", lease_s=-1)  # its worker is gone
+    assert store.claim_trial("w", 120, max_running=1).task_id == "t2"
+    assert store.claim_trial("w", 120, max_running=1) is None
+
+
 def test_expired_lease_is_reclaimed_and_the_lost_worker_is_ignored(store):
     submit(store, task_ids=["t1"])
     stale = store.claim_trial("w1", lease_s=-1)  # already expired: w1 "died"

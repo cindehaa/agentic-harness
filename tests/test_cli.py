@@ -231,3 +231,5 @@ def test_concurrency_without_wait_is_a_usage_error(store):
     assert result.exit_code == 2 and "--concurrency applies only with --wait" in result.output
     assert "harness worker --concurrency N" in result.output
     assert [r["id"] for r in store.runs()] == ["run-a"]  # nothing submitted
+    result = CliRunner().invoke(cli, ["run", "--agent", "mini-swe-agent", "--benchmark", "bash-operations", "--max-running", "2"])
+    assert result.exit_code == 2 and "--max-running applies only with --wait" in result.output

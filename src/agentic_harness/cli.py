@@ -26,6 +26,8 @@ from agentic_harness.paths import DB_PATH, REPO_ROOT, RUNS_DIR
 from agentic_harness.store import SchemaMismatch, Store
 from agentic_harness.types import Limits, Task
 
+MAX_RUNNING_ENV = "HARNESS_MAX_RUNNING"
+
 
 @click.group()
 def cli():
@@ -56,6 +58,8 @@ def cli():
 )
 @click.option("--wait", is_flag=True, help="Run the trials here (an inline worker) and print the results")
 @click.option("--concurrency", default=1, show_default=True, help="With --wait: trials run at the same time")
+@click.option("--max-running", type=click.IntRange(min=1), default=None, envvar=MAX_RUNNING_ENV, show_envvar=True,
+              help="With --wait: cap on trials running at once across ALL workers")
 @click.option("--trial-timeout", default=Limits().trial_timeout_s, show_default=True, help="Seconds per trial")
 @click.option("--cost-limit", default=Limits().cost_usd, show_default=True, help="Model spend per trial, USD")
 @click.option("--max-run-cost", type=float, default=None,
@@ -64,11 +68,14 @@ def cli():
 @click.option("--memory", default=Limits().memory, show_default=True, help="Memory per container (docker --memory)")
 @click.option("--cpus", default=Limits().cpus, show_default=True, help="CPUs per container (docker --cpus)")
 def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int,
-        trial_timeout: float, cost_limit: float, max_run_cost: float | None, max_steps: int, memory: str, cpus: float):
+        max_running: int | None, trial_timeout: float, cost_limit: float, max_run_cost: float | None, max_steps: int,
+        memory: str, cpus: float):
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
-    if not wait and click.get_current_context().get_parameter_source("concurrency") is not ParameterSource.DEFAULT:
-        raise click.UsageError("--concurrency applies only with --wait; without it, workers run the trials: "
-                               "harness worker --concurrency N")
+    for option in ("concurrency", "max_running"):  # HARNESS_MAX_RUNNING set for the workers is no mistake: only flags
+        if not wait and click.get_current_context().get_parameter_source(option) is ParameterSource.COMMANDLINE:
+            flag = "--" + option.replace("_", "-")
+            raise click.UsageError(f"{flag} applies only with --wait; without it, workers run the trials: "
+                                   f"harness worker {flag} N")
     bench, the_agent = _benchmark_and_agent(benchmark, agent, model)
     limits = Limits(trial_timeout_s=trial_timeout, cost_usd=cost_limit, max_steps=max_steps, memory=memory, cpus=cpus)
     run_id = _submit(bench, the_agent, _select(bench, task_ids), limits, max_run_cost)
@@ -76,7 +83,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
         click.echo("Start a worker to run it: harness worker")
         return
     _log_to_stderr()
-    if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id):
+    if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id, max_running=max_running):
         click.echo(f"Interrupted: run {run_id} stays queued; `harness worker` finishes it", err=True)
         raise SystemExit(130)  # the shell's code for "stopped by Ctrl-C"
     click.echo()
@@ -169,7 +176,7 @@ def parity(benchmark: str, agent: str, runs: int, task_ids: str | None, model: s
     run_ids, harness_scores = [], []
     for _ in range(runs):
         run_id = _submit(bench, the_agent, tasks, Limits(), None)
-        if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id):
+        if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id, max_running=max_running):
             raise SystemExit(130)
         run_ids.append(run_id)
         harness_scores.append({t["task_id"]: t["score_float"] if t["outcome"] == "graded" else None for t in _store().trials(run_id)})
@@ -261,13 +268,16 @@ def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None
 @cli.command()
 @click.option("--concurrency", default=1, show_default=True, help="Trials (containers) run at the same time")
 @click.option("--exit-when-idle", is_flag=True, help="Stop once no submitted run is left unfinished")
-def worker(concurrency: int, exit_when_idle: bool):
+@click.option("--max-running", type=click.IntRange(min=1), default=None, envvar=MAX_RUNNING_ENV, show_envvar=True,
+              help="Cap on trials running at once across ALL workers (default: no cap)")
+def worker(concurrency: int, exit_when_idle: bool, max_running: int | None):
     """Take trials from the queue and run them, until Ctrl-C (or idle, with --exit-when-idle). Ctrl-C stops the trials
     in flight and puts them back in the queue; a second Ctrl-C exits at once."""
     _store().close()  # fail early on a database from another schema version
     _log_to_stderr()
-    click.echo(f"Worker started: {concurrency} at a time, database {DB_PATH}", err=True)
-    stopped = worker_module.work(DB_PATH, concurrency, exit_when_idle)
+    cap = f", at most {max_running} running across all workers" if max_running else ""
+    click.echo(f"Worker started: {concurrency} at a time{cap}, database {DB_PATH}", err=True)
+    stopped = worker_module.work(DB_PATH, concurrency, exit_when_idle, max_running=max_running)
     if stopped:
         click.echo("Worker stopped", err=True)
 

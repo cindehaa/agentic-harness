@@ -239,11 +239,13 @@ class Store:
 
     # --- the queue ---
 
-    def claim_trial(self, worker: str, lease_s: float, run_id: str | None = None) -> Claim | None:
+    def claim_trial(self, worker: str, lease_s: float, run_id: str | None = None,
+                    max_running: int | None = None) -> Claim | None:
         """Take the next pending trial of a run whose setup is done, for lease_s, and start its next attempt.
-        None if nothing is claimable."""
+        With max_running: only while fewer trials than that are running, across every worker (a running trial whose
+        lease expired doesn't count: its worker is gone). None if nothing is claimable."""
         now = time.time()
-        with self._transaction():
+        with self._transaction():  # the count and the claim in one write transaction: two workers can't both pass
             trial = self._one(
                 """UPDATE trials SET state = 'running', claimed_by = ?, lease_until = ?, attempt_count = attempt_count + 1
                    WHERE id = (SELECT t.id FROM trials t JOIN runs r ON r.id = t.run_id
@@ -251,9 +253,11 @@ class Store:
                                  AND (? IS NULL OR r.id = ?)
                                  AND (r.max_cost_usd IS NULL OR (SELECT COALESCE(SUM(a.cost_usd), 0) FROM attempts a
                                        JOIN trials t2 ON t2.id = a.trial_id WHERE t2.run_id = r.id) < r.max_cost_usd)
+                                 AND (? IS NULL OR (SELECT COUNT(*) FROM trials WHERE state = 'running'
+                                                    AND lease_until >= ?) < ?)
                                ORDER BY r.created_at, t.id LIMIT 1)
                    RETURNING id, run_id, task_id, attempt_count, available_at""",
-                (worker, now + lease_s, now, run_id, run_id),
+                (worker, now + lease_s, now, run_id, run_id, max_running, now, max_running),
             )
             if trial is None:
                 return None

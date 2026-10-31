@@ -99,14 +99,16 @@ def _interrupted(store: Store, claim: Claim, worker: str) -> None:
         pass  # already handed back, finished or reclaimed
 
 
-def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_id: str | None = None) -> bool:
+def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_id: str | None = None,
+         max_running: int | None = None) -> bool:
     """Run `concurrency` workers until stopped (Ctrl-C, SIGTERM) or, with exit_when_idle, until no run is left
-    unfinished. With run_id, work only on that run (what `harness run --wait` does). True if it was stopped."""
+    unfinished. With run_id, work only on that run (what `harness run --wait` does). With max_running, claim a trial
+    only while fewer than that run across all workers. True if it was stopped."""
     prefix = f"{socket.gethostname()}-{os.getpid()}"
     stop = Stop()
     checks = Preflight()
     threads = [
-        threading.Thread(target=_loop, args=(db_path, f"{prefix}-{i}", exit_when_idle, run_id, stop, checks), name=f"worker-{i}", daemon=True)
+        threading.Thread(target=_loop, args=(db_path, f"{prefix}-{i}", exit_when_idle, run_id, stop, checks, max_running), name=f"worker-{i}", daemon=True)
         for i in range(concurrency)
     ]
     with closing(Store(db_path)) as store:
@@ -179,12 +181,13 @@ def preflight_error(run: sqlite3.Row) -> str | None:
     return None
 
 
-def _loop(db_path: Path, worker: str, exit_when_idle: bool, run_id: str | None, stop: Stop, checks: Preflight) -> None:
+def _loop(db_path: Path, worker: str, exit_when_idle: bool, run_id: str | None, stop: Stop, checks: Preflight,
+          max_running: int | None) -> None:
     store = Store(db_path)
     while not stop.requested.is_set():
         try:
             checks.check_new_runs(store, run_id)
-            if _work_once(store, db_path, worker, run_id, stop):
+            if _work_once(store, db_path, worker, run_id, stop, max_running):
                 continue
             if exit_when_idle and not store.unfinished(run_id):
                 return
@@ -193,7 +196,8 @@ def _loop(db_path: Path, worker: str, exit_when_idle: bool, run_id: str | None, 
         stop.requested.wait(IDLE_SLEEP_S)
 
 
-def _work_once(store: Store, db_path: Path, worker: str, run_id: str | None, stop: Stop) -> bool:
+def _work_once(store: Store, db_path: Path, worker: str, run_id: str | None, stop: Stop,
+               max_running: int | None = None) -> bool:
     """Do one piece of work: a run's setup, or one attempt at a trial. False if there was nothing to do."""
     for t in store.reclaim_expired(MAX_ATTEMPTS, RETRY_BACKOFF_S):
         log.warning("trial %s: worker lost (lease expired); attempt %s closed as infra_error", t["id"], t["attempt_count"])
@@ -204,7 +208,7 @@ def _work_once(store: Store, db_path: Path, worker: str, run_id: str | None, sto
         finally:
             stop.track_setup(run["id"], None)
         return True
-    if claim := store.claim_trial(worker, LEASE_S, run_id):
+    if claim := store.claim_trial(worker, LEASE_S, run_id, max_running):
         stop.track(claim, worker)
         try:
             _attempt(store, db_path, worker, claim, stop)
