@@ -443,7 +443,7 @@ world is then graded as is), and `TransientError` for provider or network blips 
 │   ├── validate.py            # harness validate: null + oracle checks through run_trial
 │   ├── parity.py, original.py # harness parity: statistics; the original way (agent's own Docker mode)
 │   ├── benchmarks/            # Benchmark ABC, bash_operations.py, python_tasks.py, terminal_bench.py, registry
-│   ├── agents/                # Agent / AgentSession ABCs, mini_swe_agent.py, acp.py + acp_client.py + acp_agents.toml (ACP agents), fake.py, registry
+│   ├── agents/                # Agent / AgentSession ABCs, mini_swe_agent.py, acp.py + acp_agents.toml (ACP agents, over the agent-client-protocol library), fake.py, registry
 │   └── environments/          # Environment ABC, docker.py
 ├── .claude/skills/add-benchmark/  # the adapter rules, as a Claude Code skill (harness adapt uses it)
 ├── dashboard/                 # the dashboard page: React + htm from a CDN, no build step

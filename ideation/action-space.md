@@ -62,8 +62,8 @@ says what a task needs (default: text, single turn, `mcp` iff it declares MCP se
 
 Cindy, 2026-10-30: "scratch our adapter and just support the protocol." Every in-world agent is integrated through
 the **Agent Client Protocol** ([ACP](https://agentclientprotocol.com), Zed; JSON-RPC 2.0 over the agent's
-stdin/stdout, one JSON message per line). One generic adapter (`AcpAgent`, `agents/acp.py` + the JSON-RPC client
-`agents/acp_client.py`) runs any ACP agent; an agent is **data** (an `AcpDefinition`), so a new or private agent
+stdin/stdout, one JSON message per line). One generic adapter (`AcpAgent`, `agents/acp.py`, over the official
+`agent-client-protocol` library) runs any ACP agent; an agent is **data** (an `AcpDefinition`), so a new or private agent
 needs no code in this repo (the brief's "forking repos to protect proprietary agent implementations").
 mini-swe-agent is unchanged (the provided Python agent, on the host; not an ACP agent).
 
@@ -101,8 +101,8 @@ mini-swe-agent is unchanged (the provided Python agent, on the host; not an ACP 
     turn. No count of model calls.
   - Install: a Node program (~470 MB with Node and the SDK's native Claude Code binary for its libc).
 - **Python library:** the official [`agent-client-protocol`](https://pypi.org/project/agent-client-protocol/) (0.12,
-  asyncio + pydantic). Not used: our sessions are synchronous (`send()` blocks), the client side we need is six
-  methods, and a ~140-line client is easier to review line by line than an async SDK in a thread.
+  asyncio + pydantic). First not used (a hand-written ~130-line synchronous client, "easier to review line by line
+  than an async SDK in a thread"); **superseded 2026-10-31, see #13**.
 
 | # | Decision | Why |
 |---|---|---|
@@ -118,6 +118,7 @@ mini-swe-agent is unchanged (the provided Python agent, on the host; not an ACP 
 | 10 | **Cost / tokens**: cost = the last `usage_update.cost.amount` (the session's total); tokens = each turn's `PromptResponse.usage` (cached counted as input, as litellm does); an agent that reports tokens but no cost is priced with litellm from `runs.model`; one that reports neither: cost 0 = unknown. `model_calls` = 0 for ACP agents | Use what the protocol carries, never fake it. The general fix for black-box agents is a model-traffic interception proxy (talking point below) |
 | 11 | **Errors**: a JSON-RPC error from `session/prompt` has only a message: "overloaded" / "rate limit" / 5xx words → `TransientError` (retried); "prompt is too long" / context window → `AgentLimitation`; anything else → `AcpAgentError` (`infra_error`, not retried). `stopReason: refusal` → `AgentLimitation`. The agent's process ending: the world gone → `EnvironmentLost` (the runner's container-death rules), else `AcpAgentError` with its stderr's tail | ACP has no error kinds for provider failures; message text is all there is |
 | 12 | **Model**: `model_env` (claude-code: `ANTHROPIC_MODEL`) set to the run's model without `model_prefix` (`anthropic/`); preflight: a model of that prefix + `forward_env` set | One harness-wide model (`HARNESS_MODEL` / `--model`), translated by data instead of `native_model()` code |
+| 13 | **Client = the official library** (2026-10-31, Cindy: "don't over-engineer, just use the official library"): `agent-client-protocol==0.12.1` (pinned; 1.0 is still rc). `AcpSession` is the library's `Client` (`session_update`, `request_permission`; no fs / terminal methods, so the library answers those method-not-found), connected with `connect_to_agent` over the `docker exec -i` process's pipes. The library is asyncio and `send()` is synchronous: one event loop thread per session (`asyncio.run`), alive as long as the agent's process (it also drains the agent's stderr, then closes the connection, which fails any request still waiting); `send()` submits calls with `run_coroutine_threadsafe` and waits on the future (deadline = its timeout). `acp.jsonl` = the library's stream observer (every message both ways, `dir: outgoing / incoming`). Supersedes the hand-written ~130-line synchronous client | Protocol framing, request ids, typed (pydantic) messages and schema updates are the library's job, not ours; net −128 lines. Cost: an asyncio loop in a thread to read. Differences: an exception in our own handlers is logged by the library instead of failing the turn; errors arrive as `RequestError(code, message, data)` (classified on message + data, as before) |
 
 ### What changed for Claude Code (vs the dedicated adapter, 2026-10-29)
 
