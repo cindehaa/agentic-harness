@@ -161,7 +161,6 @@ def test_unknown_run_is_an_error(store):
 
 class FakeAgent(Agent):
     name = "fake"
-    model_env = "FAKE_MODEL"
 
     def start(self, env, artifacts_dir, limits, mcp_servers=()):
         raise NotImplementedError  # never run here
@@ -178,7 +177,7 @@ class NoKeyAgent(FakeAgent):
 def agents(monkeypatch):
     for agent in (FakeAgent, NoKeyAgent):
         monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")
-    monkeypatch.setenv("FAKE_MODEL", "fake/model-1")
+    monkeypatch.setenv("HARNESS_MODEL", "fake/model-1")
 
 
 def submit(*args: str):
@@ -189,16 +188,24 @@ def test_run_resolves_the_model_at_submit_and_stores_the_limits(store, agents):
     result = submit("--agent", "fake", "--trial-timeout", "30", "--cost-limit", "0.5", "--max-steps", "7", "--memory", "1g", "--cpus", "2")
     assert result.exit_code == 0, result.output
     run = store.run(result.output.split()[2].rstrip(":"))
-    assert run["model"] == "fake/model-1"  # from FAKE_MODEL, now fixed for the run
+    assert run["model"] == "fake/model-1"  # from HARNESS_MODEL, now fixed for the run
     assert json.loads(run["versions"])["benchmark"] == BashOperations().version()
     limits = json.loads(run["config"])["limits"]
     assert (limits["trial_timeout_s"], limits["cost_usd"], limits["max_steps"], limits["memory"], limits["cpus"]) == (30, 0.5, 7, "1g", 2)
 
 
+def test_model_flag_wins_over_harness_model(store, agents):
+    result = submit("--agent", "fake", "--model", "fake/model-2")
+    assert result.exit_code == 0, result.output
+    assert store.run(result.output.split()[2].rstrip(":"))["model"] == "fake/model-2"
+
+
 def test_run_without_a_model_fails_clearly(store, agents, monkeypatch):
-    monkeypatch.delenv("FAKE_MODEL")
+    monkeypatch.setattr(cli_module, "load_dotenv", lambda *_: None)  # the repo's .env sets HARNESS_MODEL
+    monkeypatch.delenv("HARNESS_MODEL")
+    monkeypatch.setenv("MSWEA_MODEL_NAME", "fake/mini-cli-model")  # mini's CLI setting: never the harness's default
     result = submit("--agent", "fake")
-    assert result.exit_code != 0 and "no model: pass --model or set FAKE_MODEL in .env" in result.output
+    assert result.exit_code != 0 and "no model: pass --model or set HARNESS_MODEL in .env" in result.output
 
 
 def test_run_whose_preflight_fails_submits_nothing(store, agents):

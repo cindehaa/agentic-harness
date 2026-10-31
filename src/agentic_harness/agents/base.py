@@ -8,6 +8,10 @@ from typing import ClassVar
 from agentic_harness.environments.base import Environment
 from agentic_harness.types import Limits, McpServer, Message
 
+# The one model setting for every agent (in .env; --model overrides it): a litellm-style id such as
+# anthropic/claude-haiku-5-5. Each agent translates it into its own program's form (Agent.native_model).
+MODEL_ENV = "HARNESS_MODEL"
+
 
 class Unsupported(Exception):
     """The agent can't handle this message's content (e.g. a File) -> outcome unsupported."""
@@ -81,11 +85,10 @@ class Agent(ABC):
     """An agent the harness can run. One instance per run; start() gives each trial a fresh session."""
 
     name: ClassVar[str]  # registry key, e.g. "mini-swe-agent"
-    model_env: ClassVar[str | None] = None  # the environment variable with its default model, e.g. MSWEA_MODEL_NAME
     capabilities: ClassVar[AgentCapabilities] = AgentCapabilities()  # the least: one text message
 
     def __init__(self, model: str) -> None:
-        self.model = model  # resolved at submit time (runs.model); adapters never read model_env themselves
+        self.model = model  # litellm-style, resolved at submit time (runs.model); adapters never read the environment for it
 
     @abstractmethod
     def start(self, env: Environment, artifacts_dir: Path, limits: Limits, mcp_servers: tuple[McpServer, ...] = ()) -> AgentSession:
@@ -103,6 +106,10 @@ class Agent(ABC):
         """The image prepare_image() returns for `task_image`, without building anything (`harness cleanup --images`
         keeps it while a trial still needs it)."""
         return task_image
+
+    def native_model(self) -> str:
+        """`self.model` in the form the agent's own program takes. Default: as is (litellm-style)."""
+        return self.model
 
     def preflight(self) -> None:
         """Raise PreflightError if this agent can't run at all. Must be cheap and spend no model tokens."""

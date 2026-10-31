@@ -245,9 +245,12 @@ class ClaudeCodeSession(AgentSession):
 
 class ClaudeCode(Agent):
     name = "claude-code"
-    model_env = "MSWEA_MODEL_NAME"  # the same model setting as mini, so both agents run the same model by default
     capabilities = AgentCapabilities(content_types=frozenset({"text"}), multi_turn=True, mcp=True)
     forward_env = ("ANTHROPIC_API_KEY",)  # the only host variables that enter the world, per command
+
+    def native_model(self) -> str:
+        """Claude Code's --model takes the bare Anthropic name, without litellm's provider prefix."""
+        return self.model.removeprefix("anthropic/")
 
     def preflight(self) -> None:
         """An Anthropic model and its API key. No API call: that would spend tokens."""
@@ -278,4 +281,4 @@ class ClaudeCode(Agent):
         if mcp_servers:
             env.write_file(MCP_CONFIG, mcp_config(mcp_servers))
         env_vars = {name: os.environ[name] for name in self.forward_env if name in os.environ} | SETTINGS
-        return ClaudeCodeSession(env, self.model.removeprefix("anthropic/"), artifacts_dir, limits, env_vars, bool(mcp_servers))
+        return ClaudeCodeSession(env, self.native_model(), artifacts_dir, limits, env_vars, bool(mcp_servers))

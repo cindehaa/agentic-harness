@@ -139,7 +139,6 @@ class MiniSweSession(AgentSession):
 
 class MiniSweAgent(Agent):
     name = "mini-swe-agent"
-    model_env = "MSWEA_MODEL_NAME"  # mini's own setting, in .env
     # bash only: mini acts solely through shell commands, so a task needing MCP tools is unsupported
     capabilities = AgentCapabilities(content_types=frozenset({"text"}), multi_turn=True, mcp=False)
 
@@ -163,7 +162,7 @@ class MiniSweAgent(Agent):
         config = get_config_from_spec("mini.yaml")
         model_config = config["model"] | {"model_kwargs": config["model"].get("model_kwargs", {}) | {"timeout": MODEL_TIMEOUT_S}}
         agent = MiniAgent(
-            get_model(self.model, model_config),
+            get_model(self.native_model(), model_config),
             ContainerEnv(env, time.monotonic() + limits.trial_timeout_s, limits.command_timeout_s),
             **config["agent"] | {
                 "step_limit": limits.max_steps,

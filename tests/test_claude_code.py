@@ -144,6 +144,12 @@ class FakeWorld(Environment):
     def download(self, remote, local): ...
 
 
+def test_native_model_drops_the_litellm_provider_prefix():
+    assert ClaudeCode("anthropic/claude-haiku-5-5").native_model() == "claude-haiku-5-5"
+    assert ClaudeCode("claude-haiku-5-5").native_model() == "claude-haiku-5-5"
+    assert ClaudeCode("anthropic/claude-haiku-5-5").model == "anthropic/claude-haiku-5-5"  # runs.model keeps the id
+
+
 def session(world, tmp_path, monkeypatch, limits=Limits(), servers=()):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
     return ClaudeCode("anthropic/claude-haiku-5-5").start(world, tmp_path, limits, mcp_servers=servers)
@@ -211,7 +217,7 @@ def test_live_solves_bash_001(tmp_path):
     bench = BashOperations()
     task = next(t for t in bench.tasks() if t.id == "bash-001")
     bench.setup([task])
-    outcome = run_trial(bench, ClaudeCode(os.environ["MSWEA_MODEL_NAME"]), task, Limits(), tmp_path, DockerEnvironment)
+    outcome = run_trial(bench, ClaudeCode(os.environ["HARNESS_MODEL"]), task, Limits(), tmp_path, DockerEnvironment)
     print(f"live cost: ${outcome.cost_usd:.4f}, exit: {outcome.agent_exit_status}")
     assert (outcome.status, outcome.score.value, outcome.agent_exit_status) == ("graded", True, "success"), outcome.error
     kinds = [json.loads(line)["kind"] for line in (tmp_path / "events.jsonl").read_text().splitlines()]
@@ -241,7 +247,7 @@ def test_live_calls_a_tool_on_the_mcp_fixture_sidecar(tmp_path):
         def grade(self, task, grader, env, transcript):
             return Score(grader.read_file("/workspace/word.txt").strip() == b"pomegranate-42")
 
-    outcome = run_trial(SecretWord(), ClaudeCode(os.environ["MSWEA_MODEL_NAME"]), TASK, Limits(), tmp_path, DockerEnvironment)
+    outcome = run_trial(SecretWord(), ClaudeCode(os.environ["HARNESS_MODEL"]), TASK, Limits(), tmp_path, DockerEnvironment)
     print(f"live cost: ${outcome.cost_usd:.4f}, exit: {outcome.agent_exit_status}")
     assert (outcome.status, outcome.score.value) == ("graded", True), outcome.error
     calls = [json.loads(line)["payload"]["name"] for line in (tmp_path / "events.jsonl").read_text().splitlines()

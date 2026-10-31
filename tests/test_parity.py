@@ -61,7 +61,7 @@ def test_no_original_workflow_for_other_agents(tmp_path):
 def test_live_original_workflow_bash_001(tmp_path):
     bench = BashOperations()
     task = bench.tasks()[0]
-    result = bench.original_workflow(task, "mini-swe-agent", os.environ["MSWEA_MODEL_NAME"], tmp_path)
+    result = bench.original_workflow(task, "mini-swe-agent", os.environ["HARNESS_MODEL"], tmp_path)
     assert result.score.value is True and result.cost_usd > 0
     assert (tmp_path / "trajectory.json").exists()
     left = subprocess.run(["docker", "ps", "-aq", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout

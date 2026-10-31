@@ -32,3 +32,12 @@ def test_adapt_stops_if_drafting_fails(monkeypatch):
     monkeypatch.setattr(cli_module.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 2))
     result = CliRunner().invoke(cli, ["adapt", "benchmarks/bash-operations"])
     assert result.exit_code == 1 and "Claude Code exited 2" in result.output
+
+
+def test_adapt_translates_a_litellm_style_model_for_claude_code(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli_module.subprocess, "run", lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0))
+    for model, passed in (("anthropic/claude-sonnet-5", "claude-sonnet-5"), ("sonnet", "sonnet")):
+        CliRunner().invoke(cli, ["adapt", "benchmarks/bash-operations", "--model", model])
+        draft = calls[-2]
+        assert draft[draft.index("--model") + 1] == passed

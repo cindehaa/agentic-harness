@@ -51,6 +51,10 @@ def wrapper(deadline: float = float("inf")) -> tuple[FakeEnv, ContainerEnv]:
     return env, ContainerEnv(env, deadline=deadline, command_timeout_s=60)
 
 
+def test_native_model_is_the_litellm_id_as_is():
+    assert MiniSweAgent("anthropic/claude-haiku-5-5").native_model() == "anthropic/claude-haiku-5-5"
+
+
 def test_template_vars_are_the_containers_os():
     _, cenv = wrapper()
     assert cenv.get_template_vars() == {"system": "Linux", "release": "6.10.14-linuxkit", "version": "#1 SMP", "machine": "aarch64"}
@@ -185,7 +189,7 @@ def test_live_solves_bash_001(tmp_path):
     task = next(t for t in bench.tasks() if t.id == "bash-001")
     bench.setup([task])
     with DockerEnvironment(task.image) as env:
-        session = MiniSweAgent(os.environ["MSWEA_MODEL_NAME"]).start(env, tmp_path, Limits())
+        session = MiniSweAgent(os.environ["HARNESS_MODEL"]).start(env, tmp_path, Limits())
         bench.run_agent(task, session, env)
         with env.attach_grader(bench.grader_image(task)) as grader:
             score = bench.grade(task, grader, env, ())

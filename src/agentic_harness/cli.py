@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import os
 import subprocess
 import time
 import uuid
@@ -17,7 +16,7 @@ from dotenv import load_dotenv
 from agentic_harness import parity as parity_module
 from agentic_harness import validate as validate_module
 from agentic_harness import worker as worker_module
-from agentic_harness.agents import Agent, PreflightError, resolve_agent
+from agentic_harness.agents import MODEL_ENV, Agent, PreflightError, resolve_agent, resolve_model
 from agentic_harness.benchmarks import BENCHMARKS, Benchmark
 from agentic_harness.dashboard import make_server
 from agentic_harness.environments import remove_images, remove_leftovers
@@ -52,7 +51,7 @@ def cli():
 @click.option(
     "--model",
     default=None,
-    help="Model for the agent (default: the agent's setting in .env, e.g. MSWEA_MODEL_NAME)",
+    help=f"Model, litellm-style, e.g. anthropic/claude-haiku-5-5 (default: {MODEL_ENV} in .env)",
 )
 @click.option("--wait", is_flag=True, help="Run the trials here (an inline worker) and print the results")
 @click.option("--concurrency", default=1, show_default=True, help="With --wait: trials run at the same time")
@@ -90,10 +89,9 @@ def _benchmark_and_agent(benchmark: str, agent: str, model: str | None) -> tuple
         agent_class = resolve_agent(agent)
     except ValueError as e:
         raise click.BadParameter(str(e), param_hint="--agent") from None
-    model = model or (agent_class.model_env and os.environ.get(agent_class.model_env))
+    model = resolve_model(model)
     if not model:
-        hint = f" or set {agent_class.model_env} in .env" if agent_class.model_env else ""
-        raise click.BadParameter(f"no model: pass --model{hint}", param_hint="--model")
+        raise click.BadParameter(f"no model: pass --model or set {MODEL_ENV} in .env", param_hint="--model")
     the_agent = agent_class(model)
     try:
         the_agent.preflight()
@@ -155,7 +153,7 @@ def validate(benchmark: str, task_ids: str | None, concurrency: int):
 @click.option("--agent", required=True, help="Agent name, e.g. mini-swe-agent")
 @click.option("--runs", default=3, show_default=True, help="Runs per side")
 @click.option("--task_ids", default=None, help="Comma-separated task IDs (all if not provided)")
-@click.option("--model", default=None, help="Model for the agent (default: the agent's setting in .env)")
+@click.option("--model", default=None, help=f"Model, litellm-style (default: {MODEL_ENV} in .env)")
 @click.option("--concurrency", default=4, show_default=True, help="Trials run at the same time, per side")
 def parity(benchmark: str, agent: str, runs: int, task_ids: str | None, model: str | None, concurrency: int):
     """Does our harness score the agent the same as the benchmark's original workflow? Runs the agent N times each
@@ -227,7 +225,9 @@ ADAPT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash(.venv/bin/harness 
 @click.argument("benchmark_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--tasks", "n_tasks", default=3, show_default=True, help="How many (simple) tasks to adapt")
 @click.option("--name", default=None, help="Registry name for the benchmark (default: the folder's name)")
-@click.option("--model", default=None, help="Model for Claude Code (default: its own)")
+@click.option("--model", default=None,
+              help="Model for the drafting Claude Code: litellm-style or Claude Code's own name, e.g. sonnet "
+                   "(default: Claude Code's own)")
 @click.option("--max-budget-usd", default=3.0, show_default=True, help="Claude Code's spend limit")
 def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None, max_budget_usd: float):
     """Draft an adapter for BENCHMARK_DIR with Claude Code (headless, following the add-benchmark skill), then run
@@ -241,7 +241,7 @@ def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None
               f"can answer questions, so make the most faithful choice and list it in your report.")
     argv = ["claude", "-p", "--permission-mode", "acceptEdits", "--allowedTools", *ADAPT_TOOLS,
             "--disallowedTools", "WebFetch", "WebSearch", "--max-budget-usd", str(max_budget_usd),
-            *(["--model", model] if model else [])]
+            *(["--model", resolve_agent("claude-code")(model).native_model()] if model else [])]
     click.echo(f"Drafting the {name} adapter with Claude Code (budget ${max_budget_usd:.2f})...", err=True)
     drafted = subprocess.run(argv, cwd=REPO_ROOT, input=prompt, text=True)  # on stdin: the skill starts with "---", an option to argv
     if drafted.returncode != 0:
