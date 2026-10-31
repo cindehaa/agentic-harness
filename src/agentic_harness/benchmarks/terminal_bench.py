@@ -4,15 +4,19 @@ Dockerfile builds the world, its own run-tests.sh + tests/ judge, and the agent 
 Fidelity note:
 - Reused unchanged: every task's Dockerfile (built with the task folder as context), task.yaml (instruction and
   timeouts), run-tests.sh and tests/ (run as Terminal-Bench does: copied into the agent's own container only at grade
-  time as /tests, TEST_DIR=/tests, run from the image's WORKDIR), and solution.sh / solution.yaml as reference solutions.
+  time as /tests, TEST_DIR=/tests, run from the image's WORKDIR), and solution.sh as the reference solution (run as
+  Terminal-Bench's oracle runs it: `bash /oracle/solution.sh` from the WORKDIR).
 - Ported: the result parser (terminal_bench/parsers/pytest_parser.py, reduced to its core): the tests' statuses are
   read from pytest's "short test summary info" section; PASSED / SKIPPED / XFAIL count as passed, anything else as
-  failed, and the task passes only if every test passed (as Terminal-Bench's is_resolved).
-- Kept as they are: run-tests.sh installs curl and uv from the network at grade time (so grading needs internet), and
-  fix-permissions grades its relative "./process_data.sh" from /app; sqlite-db-truncate is a "medium" task.
+  failed, and the task passes only if every test passed (as Terminal-Bench's is_resolved). Two deliberate
+  differences: no summary at all is a grader_error here (Terminal-Bench scores it unresolved, a fail), and an empty
+  summary is a fail (Terminal-Bench's all() over no tests would pass it).
+- Kept as they are: run-tests.sh installs curl and uv from the network at grade time (so grading needs internet);
+  sqlite-db-truncate is a "medium" task.
 - Differences: the agent starts in /workspace, not in the image's WORKDIR (/app); the instructions name /app paths
   absolutely. The agent is mini-swe-agent / Claude Code, not Terminal-Bench's terminus (tmux) agents. Terminal-Bench's
   per-task max_agent_timeout_sec is not applied (the harness has its own trial limits); max_test_timeout_sec is.
+  The grader sidecar (the task's own image) is started but unused: grading runs in the world, as the benchmark's does.
 """
 
 import hashlib
@@ -29,9 +33,9 @@ from agentic_harness.paths import REPO_ROOT
 from agentic_harness.types import Message, ReferenceSolution, Score, Task, Text, Transcript
 
 ROOT = REPO_ROOT / "benchmarks" / "terminal-bench" / "original-tasks"
-TASK_IDS = ("hello-world", "fix-permissions", "sqlite-db-truncate")  # few dependencies, quick to build and grade
+TASK_IDS = ("hello-world", "log-summary", "sqlite-db-truncate")  # few dependencies, quick to build; each ships solution.sh
 TESTS_DIR = "/tests"  # where Terminal-Bench puts tests/ and run-tests.sh in the agent's container
-WORKDIR = "/app"  # the WORKDIR of these tasks' base images; run-tests.sh refuses to run from /
+WORKDIR = "/app"  # the WORKDIR of these tasks' images (a test checks it); run-tests.sh refuses to run from /
 PASSING = {"PASSED", "SKIPPED", "XFAIL"}  # pytest_parser.py: these map to UnitTestStatus.PASSED
 
 
@@ -72,14 +76,12 @@ class TerminalBench(Benchmark[TerminalBenchTask]):
         agent.send(Message("user", (Text(task.instruction),)))
 
     def reference_solution(self, task: TerminalBenchTask) -> ReferenceSolution | None:
-        folder = ROOT / task.id
-        if (folder / "solution.sh").exists():
-            script = (folder / "solution.sh").read_text()
-        elif (folder / "solution.yaml").exists():  # a list of shell commands, run one after the other
-            script = "\n".join(step["command"] for step in yaml.safe_load((folder / "solution.yaml").read_text()))
-        else:
+        solution = ROOT / task.id / "solution.sh"
+        if not solution.exists():
             return None
-        return ReferenceSolution("benchmark-provided", script=script, cwd=WORKDIR)  # the benchmark runs it in the WORKDIR
+        # As Terminal-Bench's oracle: copied to /oracle, run with bash (not sh) from the WORKDIR
+        return ReferenceSolution("benchmark-provided", files={"/oracle/solution.sh": solution.read_text()},
+                                 script="bash /oracle/solution.sh", cwd=WORKDIR)
 
     def grade(self, task: TerminalBenchTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
         # Terminal-Bench's own design: tests are copied into the agent's container only after the agent is done, and

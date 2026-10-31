@@ -7,7 +7,7 @@ import yaml
 
 from agentic_harness.agents import AgentSession
 from agentic_harness.benchmarks import GraderError, TerminalBench
-from agentic_harness.benchmarks.terminal_bench import ROOT, TASK_IDS, _parse_pytest
+from agentic_harness.benchmarks.terminal_bench import ROOT, TASK_IDS, WORKDIR, _parse_pytest
 from agentic_harness.environments import DockerEnvironment
 from agentic_harness.types import Message, Text
 
@@ -31,6 +31,8 @@ def grade(task, env):
 
 def apply_reference(task, env):
     ref = bench.reference_solution(task)
+    for path, text in ref.files.items():
+        env.write_file(path, text)
     assert env.exec(ref.script, cwd=ref.cwd, timeout=120).exit_code == 0
 
 
@@ -81,6 +83,14 @@ def test_doing_nothing_fails(task_id):
 
 def test_reference_solutions_are_the_benchmarks_own():
     assert {bench.reference_solution(t).source for t in TASKS.values()} == {"benchmark-provided"}
+
+
+@pytest.mark.parametrize("task_id", TASK_IDS)
+def test_images_work_in_the_assumed_workdir(task_id):
+    """The adapter runs solutions and tests from WORKDIR: a task whose image sets another one must not slip in."""
+    workdir = subprocess.run(["docker", "image", "inspect", "-f", "{{.Config.WorkingDir}}", TASKS[task_id].image],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    assert workdir == WORKDIR
 
 
 def test_tests_enter_the_world_only_at_grade_time():
