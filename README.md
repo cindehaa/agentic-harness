@@ -36,8 +36,8 @@ MSWEA_CONFIGURED=true                         # skips mini's first-run setup wiz
 ```
 
 `HARNESS_MODEL` is the one model setting: the harness resolves it (or `--model`) once, at submit time, stores it on
-the run, and each agent translates it into its own form (mini passes it to litellm as is; Claude Code drops the
-`anthropic/` prefix for its `--model`). `MSWEA_MODEL_NAME` and `MSWEA_CONFIGURED` only matter for the `mini` CLI used
+the run, and each agent translates it into its own form (mini passes it to litellm as is; an ACP agent's definition says which variable takes it
+and which prefix to drop: Claude Code gets `ANTHROPIC_MODEL` without `anthropic/`). `MSWEA_MODEL_NAME` and `MSWEA_CONFIGURED` only matter for the `mini` CLI used
 by the starter examples (`make bash-example`, `make py-example`); the harness drives mini through its Python API.
 
 Optional: `make init-extra-benchmarks` fetches Terminal-Bench, SWE-bench, τ²-bench and MiniWoB++ as submodules
@@ -58,8 +58,9 @@ harness adapt      Draft an adapter for a benchmark folder with Claude Code (add
 harness cleanup    Remove leftover containers and volumes (--all, --images)
 ```
 
-Every command's flags: `harness <command> --help`. Agents: `mini-swe-agent` (runs on the host) and `claude-code`
-(runs inside the task's container). Benchmarks: `bash-operations`, `python-tasks`, `terminal-bench` (needs its
+Every command's flags: `harness <command> --help`. Agents: `mini-swe-agent` (runs on the host) and any agent that
+speaks the [Agent Client Protocol](https://agentclientprotocol.com) (runs inside the task's container): built-in
+`claude-code`, or a private agent's own definition file (see [Agents over ACP](#agents-over-acp)). Benchmarks: `bash-operations`, `python-tasks`, `terminal-bench` (needs its
 opt-in submodule; without it, `run` and `validate` say which `make` target fetches it).
 
 ### Checking an adapter
@@ -88,7 +89,7 @@ harness run --agent mini-swe-agent --benchmark python-tasks --task_ids py-001,py
 harness run --agent claude-code --benchmark bash-operations --wait
 ```
 
-`--agent` takes a registry name or a path (its last part is the name). `--wait` submits the run, runs an inline
+`--agent` takes a registry name, a path (its last part is the name), or an ACP agent's `.toml` definition file. `--wait` submits the run, runs an inline
 worker for just that run, then prints the results table and summary.
 
 ### Queue mode: submit, then work
@@ -173,9 +174,9 @@ start/end, finished); every duration above is derived from them.
 
 Known live results with mini-swe-agent on Haiku 5.5: **bash-operations 0.80** (bash-003 fails because its
 `input.txt` has no trailing newline, so `wc -l` reports 4 lines, not 5; a benchmark quirk we keep as is) and
-**python-tasks 1.00**, about half a cent for both runs together. Claude Code on the same model: bash-operations
-0.80 (the same bash-003 miss), python-tasks 1.00, about a cent ([action space](ideation/action-space.md) → Live
-results).
+**python-tasks 1.00**, about half a cent for both runs together. Claude Code (through ACP) on the same model: bash-operations
+0.80 (the same bash-003 miss, $0.0066), python-tasks 1.00 ($0.0055), the same scores as the dedicated adapter it
+replaced ([action space](ideation/action-space.md) → Live results).
 
 `--format json` has everything: the run (versions: harness commit, agent commit, dataset and benchmark hashes,
 model; config: limits; budget), accuracy, the excluded task ids, every cost, token and time metric of the summary,
@@ -183,7 +184,7 @@ and every trial with its raw score and all its attempts (spend and phase timesta
 
 Each attempt also leaves files in `runs/<run_id>/<task_id>/attempt-<attempt_id>/`: `events.jsonl` (the
 agent-neutral trace: every message and command), `transcript.json` (the messages), `outcome.json`,
-`trajectory.json` (mini's own log; Claude Code's raw stream is `trajectory.jsonl`) and `workspace.tar` (the agent's
+`trajectory.json` (mini's own log; an ACP agent's raw protocol is `acp.jsonl`, its own log `agent-stderr.log`) and `workspace.tar` (the agent's
 final workspace, saved before grading).
 
 ### Dashboard
@@ -200,7 +201,7 @@ attempt's transcript, command trace, error and raw files.
 ```bash
 harness cleanup                  # labelled containers and volumes (agentic-harness=1) of no running trial
 harness cleanup --all            # also those of trials still running
-harness cleanup --images         # also cached harness-* images (task images, Claude Code's) no unfinished trial needs
+harness cleanup --images         # also cached harness-* images (task images, ACP agents' derived images) no unfinished trial needs
 ```
 
 A killed worker's containers otherwise live until their keep-alive runs out (3 × trial timeout + 600 s).
@@ -226,13 +227,13 @@ flowchart TB
   subgraph ports["Ports (abstract classes)"]
     direction LR
     bench["Benchmark<br/>tasks · setup · run_agent · grade"]
-    agent["Agent / AgentSession<br/>start · send · capabilities<br/>mini-swe-agent · claude-code"]
+    agent["Agent / AgentSession<br/>start · send · capabilities<br/>mini-swe-agent · ACP agents (claude-code)"]
     env["Environment<br/>exec · files · state · attach(Sidecar)"]
   end
 
   subgraph docker["Docker, per trial"]
     direction LR
-    trial["trial container<br/>task image + workspace volume at task.workdir<br/>(+ claude, for claude-code)"]
+    trial["trial container<br/>task image + workspace volume at task.workdir<br/>(+ the agent's install, ACP agents)"]
     grader["grader sidecar<br/>grader_image(task)"]
     mcp["MCP server sidecars<br/>mcp_servers(task), network only"]
   end
@@ -248,7 +249,7 @@ flowchart TB
   runner --> agent
   runner --> env
   agent -->|"mini-swe-agent: from the host"| llm
-  trial -->|"claude-code: from inside the world"| llm
+  trial -->|"ACP agents: from inside the world"| llm
   env --> trial
   env --> grader
   env --> mcp
@@ -268,8 +269,8 @@ and the queue's state machine.
    once, e.g. building the task images, then pre-pulls grader and MCP images and builds agent images.)
 2. **Capability check.** The agent's `capabilities` (content types, multi-turn, MCP) against
    `Benchmark.requirements(task)`; a gap ends the trial `unsupported` before any world starts.
-3. **Start the world.** The runner starts `agent.prepare_image(task.image)` (the task's image; for Claude Code a
-   cached image with its binary added) through the `Environment` port (Docker: `sleep` as the main process, a named
+3. **Start the world.** The runner starts `agent.prepare_image(task.image)` (the task's image; for an ACP agent a
+   cached image with the agent's install added) through the `Environment` port (Docker: `sleep` as the main process, a named
    volume at the task's `workdir` (default `/workspace`; Terminal-Bench's `/app`) that starts with the image's own
    files there, memory/CPU/process limits), then the task's MCP servers as network-only sidecars. Commands and
    agents start in the workdir.
@@ -312,10 +313,11 @@ and the queue's state machine.
   harness's environment, and every forwarded variable. mini runs on the host, so its
   key never enters a container. ([security](ideation/security.md))
 - **MCP as the action layer beyond the shell.** Tools a benchmark exposes as MCP servers in network-only sidecars,
-  so agents keep their own loop; one capability check decides `unsupported` (mini is bash-only, Claude Code speaks
-  MCP). ([action space](ideation/action-space.md))
-- **Agents inside or outside the world.** mini runs on the host and acts through our `exec`; Claude Code runs inside
-  the world from a cached derived image, its key passed per command. One model setting (`HARNESS_MODEL` /
+  so agents keep their own loop; one capability check decides `unsupported` (mini is bash-only; ACP agents get the
+  servers in `session/new`). ([action space](ideation/action-space.md))
+- **Agents inside or outside the world.** mini runs on the host and acts through our `exec`; agents that speak ACP
+  (Claude Code, and any private agent, as data: no per-agent code) run inside the world from a cached derived image,
+  spoken to over `docker exec -i`, their key passed per process. One model setting (`HARNESS_MODEL` /
   `--model`) for every agent. ([action space](ideation/action-space.md), [agents and runner](ideation/agents-and-runner.md))
 - **Cost is always recorded.** Spend is saved at every turn's end, also on crash, timeout or Ctrl-C; a run budget
   stops new trials. ([database](ideation/database.md) #20–23)
@@ -348,6 +350,38 @@ in [`benchmarks/__init__.py`](src/agentic_harness/benchmarks/__init__.py).
 The full rules (and a Claude Code skill that follows them) are in
 [`.claude/skills/add-benchmark/SKILL.md`](.claude/skills/add-benchmark/SKILL.md); iterate until `harness validate` passes.
 
+### Agents over ACP
+
+An agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) (Claude Code, Codex, Gemini CLI,
+Copilot CLI, goose, OpenCode, ... see the [ACP agent list](https://agentclientprotocol.com/overview/agents)) needs
+**no code**: one generic adapter ([`agents/acp.py`](src/agentic_harness/agents/acp.py)) runs it inside the trial's
+world and speaks ACP to it over `docker exec -i` (one session per trial, one `session/prompt` per turn; the agent
+uses its own tools; permission requests are allowed, once, inside the sandbox; `session/update` notifications become
+the trace; cost comes from its `usage_update`). An agent is a definition: built-ins in
+[`agents/acp_agents.toml`](src/agentic_harness/agents/acp_agents.toml); a private one is a file of its own, so its
+code never enters this repo:
+
+```toml
+# my-agent.toml  →  harness run --agent my-agent.toml --benchmark bash-operations --wait
+version = "my-agent 1.4.2"                      # recorded in runs.versions
+install_dir = "/opt/my-agent"                   # a self-contained install, copied into the task's image
+install.any = { from = "registry.example.com/my-agent:1.4.2" }   # the image it is copied from (or install.musl /
+                                                # install.glibc = { from = "<builder image>", run = "<shell>" })
+world_setup = ""                                # optional shell run in the world's image afterwards
+command = ["/opt/my-agent/bin/my-agent", "--acp"]  # speaks ACP on stdin/stdout
+forward_env = ["MY_AGENT_API_KEY"]              # host variables it gets (redacted everywhere)
+env = { MY_AGENT_TELEMETRY = "off" }            # fixed variables
+model_env = "MY_AGENT_MODEL"                    # gets the run's model (--model / HARNESS_MODEL) ...
+model_prefix = "openai/"                        # ... without this prefix
+capabilities = { content_types = ["text"], mcp = true }   # what the runner checks tasks against
+```
+
+Limits: the deadline (`session/cancel`, then kill) and the cost budget (cancel once the reported cost passes it);
+ACP has no step count, so `--max-steps` doesn't apply to ACP agents ([action space](ideation/action-space.md) →
+Agents over ACP).
+
+### An agent with code of its own
+
 **An agent**: subclass `Agent` and `AgentSession` (see
 [`agents/mini_swe_agent.py`](src/agentic_harness/agents/mini_swe_agent.py)) and add `"name": "module:Class"` to
 `AGENTS` in [`agents/__init__.py`](src/agentic_harness/agents/__init__.py) (imported lazily).
@@ -362,7 +396,7 @@ The full rules (and a Claude Code skill that follows them) are in
 | `Agent.prepare_image(task_image)` / `image_for` | no | an agent that runs inside the world returns a derived image (default: the task's) |
 | `AgentSession.send(message)` | yes | give the agent a message, block until it hands back, return its reply |
 | `AgentSession.stats()` | no | exit status, cost, model calls, input/output tokens for the records (also after a crash) |
-| `AgentSession.new_events()` | no | trace events the agent produced itself (e.g. Claude Code's tool calls, which bypass our `exec`) |
+| `AgentSession.new_events()` | no | trace events the agent produced itself (e.g. an ACP agent's tool calls, which bypass our `exec`) |
 | `Agent.preflight()` | no | cheap check at submit, and once per run in each worker (model known, key set); a run that fails it fails alone |
 | `Agent.version()` | no | recorded in `runs.versions` |
 
@@ -387,7 +421,7 @@ world is then graded as is), and `TransientError` for provider or network blips 
 │   ├── validate.py            # harness validate: null + oracle checks through run_trial
 │   ├── parity.py, original.py # harness parity: statistics; the original way (agent's own Docker mode)
 │   ├── benchmarks/            # Benchmark ABC, bash_operations.py, python_tasks.py, terminal_bench.py, registry
-│   ├── agents/                # Agent / AgentSession ABCs, mini_swe_agent.py, claude_code.py, fake.py (null/oracle), registry
+│   ├── agents/                # Agent / AgentSession ABCs, mini_swe_agent.py, acp.py + acp_client.py + acp_agents.toml (ACP agents), fake.py, registry
 │   └── environments/          # Environment ABC, docker.py
 ├── .claude/skills/add-benchmark/  # the adapter rules, as a Claude Code skill (harness adapt uses it)
 ├── dashboard/                 # the dashboard page: React + htm from a CDN, no build step
@@ -419,7 +453,7 @@ The runner's outcome rules are also tested without Docker against a fake environ
 - Network as a benchmark-declared world property (offline worlds, a model-API-only allowlist for in-world agents).
 - The unprivileged `agent` user (agents run as root in the world today).
 - `harness cancel`, `harness regrade`.
-- Parity beyond mini-swe-agent: no `original_workflow` for Claude Code, nor for Terminal-Bench (so no parity run
+- Parity beyond mini-swe-agent: no `original_workflow` for ACP agents, nor for Terminal-Bench (so no parity run
   for Terminal-Bench yet).
 - Adapters for the other vendored upstream benchmarks (SWE-bench, τ²-bench, MiniWoB++).
 
@@ -429,7 +463,10 @@ The runner's outcome rules are also tested without Docker against a fake environ
   most 5).
 - A fork bomb that fills `--pids-limit` can stop `docker exec` from starting, so the pre-grade kill may not run
   (grading still starts: the grader is its own container).
-- Claude Code's API key is inside the world while it runs (the agent could read it); it is never in an image layer,
+- ACP agents: no step limit (ACP reports no model calls, so `model_calls` is 0), provider errors are classified by
+  their message's words (ACP has no error kinds), and cost is only what the agent reports (Claude Code does; for one
+  that doesn't, a model-traffic proxy would be the general fix).
+- An ACP agent's API key is inside the world while it runs (the agent could read it); it is never in an image layer,
   on the host command line, or in our logs.
 - Our `MiniSweAgent` runs commands with `sh -c` where mini's own Docker mode uses `bash -lc`, a difference
   `harness parity` exposed and left open ([adapters](ideation/adapters.md) → Built).
