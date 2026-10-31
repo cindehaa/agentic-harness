@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from agentic_harness.agents.base import AgentStats
+from agentic_harness.redact import redact
 from agentic_harness.types import Outcome
 
 SCHEMA_VERSION = 5  # bump on any schema change; an old harness.db is then refused
@@ -285,7 +286,8 @@ class Store:
                 "UPDATE attempts SET outcome = ?, score = ?, exit_status = ?, error = ?, duration_s = ?, limits = ?,"
                 " env_ready_at = ?, agent_start_at = ?, agent_end_at = ?, grade_start_at = ?, grade_end_at = ?,"
                 " finished_at = ? WHERE id = ?",
-                (outcome.status, _json(outcome.score and asdict(outcome.score)), outcome.agent_exit_status, outcome.error,
+                (outcome.status, _json(outcome.score and asdict(outcome.score)), outcome.agent_exit_status and redact(outcome.agent_exit_status),
+                 outcome.error and redact(outcome.error),
                  outcome.duration_s, _json(outcome.limits or None), phases.get("env_ready"), phases.get("agent_start"),
                  phases.get("agent_end"), phases.get("grade_start"), phases.get("grade_end"), time.time(), claim.attempt_id),
             )
@@ -433,4 +435,4 @@ class Store:
 
 
 def _json(value) -> str | None:
-    return None if value is None else json.dumps(value)
+    return None if value is None else redact(json.dumps(value))

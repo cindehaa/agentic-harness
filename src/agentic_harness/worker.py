@@ -78,10 +78,12 @@ class Stop:
 
 
 def _interrupted(store: Store, claim: Claim, worker: str) -> None:
+    retry = claim.n < MAX_ATTEMPTS
     try:
         store.finish_attempt(claim, worker, Outcome("infra_error", error="worker interrupted", retryable=True),
-                             retry_at=time.time())
-        log.warning("%s attempt %s: worker interrupted; back in the queue", claim.task_id, claim.n)
+                             retry_at=time.time() if retry else None)
+        log.warning("%s attempt %s: worker interrupted; %s", claim.task_id, claim.n,
+                    "back in the queue" if retry else "out of attempts")
     except LostClaim:
         pass
 

@@ -361,6 +361,18 @@ def test_sigterm_stops_run_wait_and_another_worker_finishes_the_run(db, monkeypa
     assert [a["error"] for a in store.attempts(run_id)] == ["worker interrupted", None]
 
 
+def test_an_interrupted_last_attempt_is_not_retried(tmp_path):
+    store = Store(tmp_path / "harness.db")
+    store.create_run("r1", "local-bash", "oracle", "fake-model", {}, {"limits": {}}, ["bash-001"])
+    store.claim_setup("w", 120, "r1")
+    store.finish_setup("r1", "w")
+    for _ in range(worker.MAX_ATTEMPTS + 1):
+        if claim := store.claim_trial("w", 120):
+            worker._interrupted(store, claim, "w")
+    trial = store.trials("r1")[0]
+    assert (trial["state"], trial["outcome"], trial["attempt_count"]) == ("done", "infra_error", worker.MAX_ATTEMPTS)
+
+
 def test_a_second_signal_forces_the_exit():
     stop = worker.Stop()
     stop.handle(signal.SIGINT, None)

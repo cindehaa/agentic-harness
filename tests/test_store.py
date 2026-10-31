@@ -212,6 +212,16 @@ def test_forwarded_variables_are_redacted_whatever_their_name(monkeypatch):
     assert redact("got value-handed-to-the-world") == "got ***"
 
 
+def test_a_secret_in_the_score_is_redacted_in_the_db(store, monkeypatch):
+    monkeypatch.setenv("HARNESS_TEST_API_KEY", "sk-leaked-12345678")
+    submit(store, task_ids=("t1",))
+    claim = store.claim_trial("w1", 120)
+    store.finish_attempt(claim, "w1", Outcome("graded", Score("sk-leaked-12345678", "grader printed sk-leaked-12345678"), 1.0))
+    attempt, trial = store.attempts("run-1")[0], store.trials("run-1")[0]
+    assert json.loads(attempt["score"])["explanation"] == "grader printed ***"
+    assert json.loads(trial["score_value"]) == "***"
+
+
 def test_recorded_spend_is_never_erased_by_an_outcome_without_it(store):
     from agentic_harness.agents import AgentStats
 

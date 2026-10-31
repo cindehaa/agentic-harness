@@ -26,7 +26,7 @@ flowchart TB
   prep -->|"DockerError (build failed, Docker down)"| IE1
   prep --> startenv["env_factory(image, lifetime_s, limits, task.workdir).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
   claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
-  claim -->|"Ctrl-C / SIGTERM to the worker (harness worker, run --wait)"| intr["worker stops claiming, stops the trial's world (sidecars, volume), closes the attempt as infra_error (worker interrupted), retryable: back to pending at once, counts as an attempt; setup it held is released; a second signal exits at once (leases lapse: worker lost)"]
+  claim -->|"Ctrl-C / SIGTERM to the worker (harness worker, run --wait)"| intr["worker stops claiming, stops the trial's world (sidecars, volume), closes the attempt as infra_error (worker interrupted), retryable: back to pending at once unless it was the 3rd attempt (then done), counts as an attempt; setup it held is released; a second signal exits at once (leases lapse: worker lost)"]
   startenv -->|"EnvironmentLost (DockerError): missing image, docker run fails, Docker down"| IE1
   startenv --> mcp["start each of benchmark.mcp_servers(task) as a network-only sidecar; ready = port LISTEN"]
   mcp -->|"EnvironmentLost: image missing, not listening within 60 s (error has its logs)"| IE1
@@ -159,7 +159,8 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   sidecars and volumes), closes each open attempt as a retryable `infra_error`
   ("worker interrupted") and puts the trial back to `pending` at once, so another
   worker takes it; a setup it held is released the same way. The interrupted
-  attempt counts toward the 3 (attempt numbers are never reused). A trial thread
+  attempt counts toward the 3 (attempt numbers are never reused): an interrupted 3rd attempt ends the trial
+  `infra_error`, not re-queued. A trial thread
   that finishes afterwards no longer holds its claim and its result is discarded;
   a result it reached after the signal is ignored anyway, since Ctrl-C also
   reaches its `docker` commands. Then the worker's row is deleted and it exits 0
