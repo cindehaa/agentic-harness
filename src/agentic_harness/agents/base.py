@@ -112,6 +112,11 @@ class Agent(ABC):
         """`self.model` in the form the agent's own program takes. Default: as is (litellm-style)."""
         return self.model
 
+    def unenforced_limits(self) -> frozenset[str]:
+        """Limits fields this agent can't keep (e.g. "max_steps" for one that doesn't count its model calls). The
+        attempt records them as not enforced rather than pretending. Default: none."""
+        return frozenset()
+
     def preflight(self) -> None:
         """Raise PreflightError if this agent can't run at all. Must be cheap and spend no model tokens."""
 

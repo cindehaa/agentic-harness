@@ -10,34 +10,39 @@ from pathlib import Path
 
 from agentic_harness.agents.base import Agent, AgentLimitation, AgentStats, TransientError, Unsupported
 from agentic_harness.benchmarks.base import Benchmark, GraderError
-from agentic_harness.environments.base import EndReason, Environment, EnvironmentFactory, EnvironmentLost, Sidecar
+from agentic_harness.environments.base import (
+    EndReason, Environment, EnvironmentFactory, EnvironmentLost, EnvironmentState, ExecResult, Sidecar,
+)
 from agentic_harness.recording import EventLog, RecordingEnvironment, RecordingSession, TurnLimit
 from agentic_harness.redact import add_forwarded, redact, redact_file
-from agentic_harness.types import Limits, Outcome, Score, Task
+from agentic_harness.types import LimitOverrides, Limits, Outcome, Score, Task, effective_limits
 
 # Container lifetime: long enough to outlast the trial and grading (expiring is infra_error), yet still a
-# self-destruct timer if the harness dies.
-LIFETIME_FACTOR = 3  # times the trial timeout
-GRADE_MARGIN_S = 600  # plus time for grading to finish
+# self-destruct timer if the harness dies: LIFETIME_FACTOR x trial timeout + grade timeout + MARGIN_S.
+LIFETIME_FACTOR = 3
+MARGIN_S = 600  # starting the world and its sidecars, saving the workspace, starting the grader
 WORKSPACE_MAX_BYTES = 50_000_000  # the saved final workspace (workspace.tar) is cut off here
 
 
 def run_trial(
-    benchmark: Benchmark, agent: Agent, task: Task, limits: Limits, attempt_dir: Path, env_factory: EnvironmentFactory,
-    on_turn_end: Callable[[AgentStats], None] = lambda stats: None,
+    benchmark: Benchmark, agent: Agent, task: Task, defaults: Limits, attempt_dir: Path, env_factory: EnvironmentFactory,
+    on_turn_end: Callable[[AgentStats], None] = lambda stats: None, flags: LimitOverrides = LimitOverrides(),
 ) -> Outcome:
     """Run one attempt in a world from `env_factory`: events.jsonl as it goes, then outcome.json and transcript.json,
     all in attempt_dir, all redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome.
-    The agent gets the world wrapped in a RecordingEnvironment (its commands are traced); the benchmark gets it bare."""
+    The agent gets the world wrapped in a RecordingEnvironment (its commands are traced); the benchmark gets it bare.
+    Its limits: `defaults`, then what the benchmark declares for the task, then the run's explicit `flags`."""
     attempt_dir.mkdir(parents=True, exist_ok=True)
     add_forwarded(agent.forward_env)  # before the agent can print them
     began = time.monotonic()
     session: RecordingSession | None = None
     phases: dict[str, float] = {}
+    limits, sources = defaults, {}
     try:
+        limits, sources = effective_limits(defaults, benchmark.limits(task), flags)
         if missing := agent.capabilities.missing(benchmark.requirements(task)):  # the one compatibility check
             raise Unsupported(f"{agent.name} can't do what this task needs: {', '.join(missing)}")
-        lifetime_s = int(LIFETIME_FACTOR * limits.trial_timeout_s + GRADE_MARGIN_S)
+        lifetime_s = int(LIFETIME_FACTOR * limits.trial_timeout_s + limits.grade_timeout_s + MARGIN_S)
         with env_factory(agent.prepare_image(task.image), lifetime_s, limits, task.workdir) as env:
             log = EventLog(attempt_dir / "events.jsonl")
             servers = tuple(benchmark.mcp_servers(task))
@@ -48,7 +53,7 @@ def run_trial(
             session = RecordingSession(inner, limits.max_turns, log, on_turn_end)
             outcome = _agent_turns(benchmark, task, env, session, phases)
             if outcome is None:
-                outcome = _grade(benchmark, task, env, session, phases)
+                outcome = _grade(benchmark, task, env, session, phases, limits.grade_timeout_s)
     except EnvironmentLost as e:
         outcome = Outcome("infra_error", error=f"{type(e).__name__}: {e}", retryable=True)
     except Unsupported as e:
@@ -62,7 +67,8 @@ def run_trial(
         outcome = replace(outcome, agent_exit_status=stats.exit_status or session.limitation, cost_usd=stats.cost_usd,
                           model_calls=stats.model_calls, input_tokens=stats.input_tokens,
                           output_tokens=stats.output_tokens, turns=session.turns)
-    outcome = replace(outcome, phases=phases, duration_s=round(time.monotonic() - began, 3), error=outcome.error and redact(outcome.error))
+    outcome = replace(outcome, phases=phases, duration_s=round(time.monotonic() - began, 3), error=outcome.error and redact(outcome.error),
+                      limits=_limits_record(limits, sources, agent.unenforced_limits()))
     for path in attempt_dir.rglob("*"):  # files the agent wrote itself, e.g. mini's trajectory.json
         if path.is_file():
             redact_file(path)
@@ -112,22 +118,30 @@ def _container_death(benchmark: Benchmark, env: Environment) -> Outcome | None:
     return Outcome("graded", score, 0.0)  # decided by the harness, not the grader: 0 whatever the benchmark's scale
 
 
+def _limits_record(limits: Limits, sources: dict[str, str], unenforced: frozenset[str]) -> dict[str, dict]:
+    """What outcome.json and the attempt row keep: each limit's value and source, and which ones the agent can't keep."""
+    return {name: {"value": value, "source": sources.get(name, "default")} | ({"enforced": False} if name in unenforced else {})
+            for name, value in asdict(limits).items()}
+
+
 def _grade(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession,
-           phases: dict[str, float]) -> Outcome:
+           phases: dict[str, float], grade_timeout_s: float) -> Outcome:
     phases["grade_start"] = time.time()
     try:
-        return _graded(benchmark, task, env, session)
+        return _graded(benchmark, task, env, session, grade_timeout_s)
     finally:
         phases["grade_end"] = time.time()
 
 
-def _graded(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession) -> Outcome:
+def _graded(benchmark: Benchmark, task: Task, env: Environment, session: RecordingSession, grade_timeout_s: float) -> Outcome:
     try:
         env.kill_agent_processes()  # nothing the agent started may touch the world while it is graded
         _save_workspace(env, session)  # the agent's end state, before the grader adds anything
         # A grader that can't start (e.g. its image is missing) raises EnvironmentLost: infra_error, retried
         with env.attach_grader(benchmark.grader_image(task)) as grader:
-            score = benchmark.grade(task, grader, env, tuple(session.transcript))
+            deadline = time.monotonic() + grade_timeout_s
+            score = benchmark.grade(task, GradingDeadline(grader, deadline, grade_timeout_s),
+                                    GradingDeadline(env, deadline, grade_timeout_s), tuple(session.transcript))
     except GraderError as e:
         return Outcome("grader_error", error=str(e))
     except EnvironmentLost:
@@ -140,6 +154,53 @@ def _graded(benchmark: Benchmark, task: Task, env: Environment, session: Recordi
         return Outcome("graded", score, benchmark.score_to_float(score))
     except (TypeError, ValueError) as e:
         return Outcome("grader_error", error=f"unusable score value {score.value!r}: {e}")
+
+
+class GradingDeadline(Environment):
+    """What grade() is handed (its grader, and the trial's world): no command runs past the grade deadline. A command
+    given no timeout gets the rest of the grading time; one cut off by the deadline comes back timed_out (the adapter
+    judges it, as it would any timeout); one started after the deadline raises GraderError (grader_error)."""
+
+    def __init__(self, env: Environment, deadline: float, grade_timeout_s: float) -> None:
+        super().__init__(env.image, env.workdir)
+        self.env, self.deadline, self.grade_timeout_s = env, deadline, grade_timeout_s
+
+    def exec(self, cmd: str | list[str], timeout: float | None = None, cwd: str | None = None,
+             env: dict[str, str] | None = None, user: str | None = None) -> ExecResult:
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise GraderError(f"grading ran past its grade timeout ({self.grade_timeout_s:g}s)")
+        return self.env.exec(cmd, timeout=left if timeout is None else min(timeout, left), cwd=cwd, env=env, user=user)
+
+    def start(self) -> None:
+        self.env.start()
+
+    def stop(self) -> None:
+        self.env.stop()
+
+    def state(self) -> EnvironmentState | None:
+        return self.env.state()
+
+    def kill_agent_processes(self) -> None:
+        self.env.kill_agent_processes()
+
+    def save_workspace(self, local: Path, max_bytes: int) -> bool:
+        return self.env.save_workspace(local, max_bytes)
+
+    def attach(self, sidecar: Sidecar) -> Environment:
+        return self.env.attach(sidecar)
+
+    def write_file(self, path: str, content: str | bytes) -> None:
+        self.env.write_file(path, content)
+
+    def read_file(self, path: str) -> bytes:
+        return self.env.read_file(path)
+
+    def upload(self, local: Path, remote: str) -> None:
+        self.env.upload(local, remote)
+
+    def download(self, remote: str, local: Path) -> None:
+        self.env.download(remote, local)
 
 
 def _save_workspace(env: Environment, session: RecordingSession) -> None:

@@ -1,6 +1,6 @@
 """Shared data types for the agentic harness."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 Value = Any  # what a grader returns; must be JSON-serializable, e.g. True, 0.75, "C", {"passed": True}
@@ -112,6 +112,41 @@ class Limits:
     memory: str = "2g"
     cpus: float = 1.0
     pids_limit: int = 512  # processes; stops a fork bomb from taking the host down
+    grade_timeout_s: float = 120  # all of grade(): no grading command runs past it
+
+
+@dataclass(frozen=True)
+class LimitOverrides:
+    """Some of the Limits, each None unless set: what a benchmark declares for a task (Benchmark.limits), or the
+    flags a run was given explicitly. Only Limits' fields exist here, so operator controls (--max-running,
+    --concurrency, --max-run-cost) can't be set by a benchmark."""
+
+    trial_timeout_s: float | None = None
+    cost_usd: float | None = None
+    max_steps: int | None = None
+    command_timeout_s: float | None = None
+    max_turns: int | None = None
+    memory: str | None = None
+    cpus: float | None = None
+    pids_limit: int | None = None
+    grade_timeout_s: float | None = None
+
+    def given(self) -> dict[str, Any]:
+        return {name: value for name, value in asdict(self).items() if value is not None}
+
+
+LimitSource = Literal["default", "benchmark", "flag"]
+
+
+def effective_limits(defaults: Limits, declared: LimitOverrides, flags: LimitOverrides) -> tuple[Limits, dict[str, LimitSource]]:
+    """A trial's limits, layered: harness defaults < what the benchmark declares for the task < explicit run flags.
+    Also where each one came from."""
+    values = asdict(defaults)
+    sources: dict[str, LimitSource] = dict.fromkeys(values, "default")
+    for source, layer in (("benchmark", declared), ("flag", flags)):
+        for name, value in layer.given().items():
+            values[name], sources[name] = value, source
+    return Limits(**values), sources
 
 
 @dataclass(frozen=True)
@@ -133,6 +168,9 @@ class Outcome:
     # when each phase began or ended (time.time()): env_ready, agent_start, agent_end, grade_start, grade_end; a phase
     # the attempt never reached is missing
     phases: dict[str, float] = field(default_factory=dict)
+    # the limits this attempt ran under: name -> {"value", "source": default | benchmark | flag}, plus
+    # "enforced": False for one the agent can't keep (e.g. a step limit for an agent that doesn't count steps)
+    limits: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def score_to_float(value: Value) -> float:

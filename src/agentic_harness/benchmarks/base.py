@@ -8,7 +8,7 @@ from typing import Generic, TypeVar
 
 from agentic_harness.agents.base import AgentCapabilities, AgentSession
 from agentic_harness.environments.base import Environment
-from agentic_harness.types import McpServer, OriginalResult, ReferenceSolution, Score, Task, Transcript, score_to_float
+from agentic_harness.types import LimitOverrides, McpServer, OriginalResult, ReferenceSolution, Score, Task, Transcript, score_to_float
 
 TaskT = TypeVar("TaskT", bound=Task)  # each adapter's own Task subclass
 
@@ -47,6 +47,12 @@ class Benchmark(ABC, Generic[TaskT]):
         trial's network before the agent's turn and stops it with the trial. Their images must be local (setup()).
         Default: none (the agent acts only through its own tools)."""
         return []
+
+    def limits(self, task: TaskT) -> LimitOverrides:
+        """The limits this benchmark declares for the task (e.g. its own timeouts), only the ones it cares about. They
+        override the harness defaults; a run's explicit flags override them (and mark the run non-standard).
+        Default: none."""
+        return LimitOverrides()
 
     def grader_image(self, task: TaskT) -> str:
         """The image grade() runs in, attached to the trial's world (sharing its workspace, network and processes).

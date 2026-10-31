@@ -2,7 +2,9 @@
 so any backend (here an in-memory fake) can stand in for Docker."""
 
 import json
+import time
 from collections.abc import Callable
+from dataclasses import fields
 
 import pytest
 
@@ -10,7 +12,7 @@ from agentic_harness.agents import Agent, AgentCapabilities, AgentSession, Trans
 from agentic_harness.benchmarks import Benchmark
 from agentic_harness.environments import EndReason, Environment, EnvironmentLost, EnvironmentState, ExecResult
 from agentic_harness.runner import run_trial
-from agentic_harness.types import Limits, Message, Score, Task, Text
+from agentic_harness.types import LimitOverrides, Limits, Message, Score, Task, Text, effective_limits
 
 TASK = Task("fake", "t1", "fake:image")
 
@@ -26,6 +28,7 @@ class FakeEnvironment(Environment):
         self.lose_on_exec = False
         self.started = self.stopped = self.killed = False
         self.attached: list[FakeEnvironment] = []
+        self.timeouts: list[float | None] = []  # each exec's timeout
 
     def start(self):
         if self.image == "missing:image":
@@ -41,7 +44,7 @@ class FakeEnvironment(Environment):
         local.write_bytes(b"tar of " + self.files["answer.txt"])
         return False
     def write_file(self, path, content): self.files[path] = content.encode() if isinstance(content, str) else content
-    def read_file(self, path): return self.files[path]
+    def read_file(self, path): return self.files.get(path, b"")  # missing: empty
     def upload(self, local, remote): ...
 
     def attach(self, sidecar):
@@ -56,6 +59,7 @@ class FakeEnvironment(Environment):
     def exec(self, cmd, timeout=60, cwd=None, env=None, user=None) -> ExecResult:
         if self.lose_on_exec:
             raise EnvironmentLost("backend unreachable")
+        self.timeouts.append(timeout)
         return ExecResult(0, "", "")
 
 
@@ -76,7 +80,7 @@ class OneMessage(Benchmark[Task]):
     def run_agent(self, task, agent, env): agent.send(Message("user", (Text("write ok"),)))
 
     def grade(self, task, grader, env, transcript):
-        return Score(grader.files.get("answer.txt") == b"ok")
+        return Score(grader.read_file("answer.txt") == b"ok")
 
 
 class ScriptedAgent(Agent):
@@ -331,3 +335,74 @@ def test_the_world_starts_in_the_tasks_workdir(tmp_path):
     assert factory.env.workdir == "/app"
     run_trial(OneMessage(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path / "default", factory)
     assert factory.env.workdir == "/workspace"
+
+
+# --- limits: harness defaults < benchmark-declared < explicit run flags
+
+
+class DeclaresLimits(OneMessage):
+    """Declares its own trial and grade timeouts; its grader runs one command."""
+
+    def limits(self, task):
+        return LimitOverrides(trial_timeout_s=900, grade_timeout_s=180)
+
+    def grade(self, task, grader, env, transcript):
+        grader.exec(["check"])
+        grader.exec(["check"], timeout=5)
+        return super().grade(task, grader, env, transcript)
+
+
+def test_limits_layer_defaults_then_benchmark_then_flags():
+    limits, sources = effective_limits(Limits(), LimitOverrides(trial_timeout_s=900, grade_timeout_s=180),
+                                       LimitOverrides(grade_timeout_s=30, memory="4g"))
+    assert (limits.trial_timeout_s, limits.grade_timeout_s, limits.memory, limits.max_steps) == (900, 30, "4g", 50)
+    assert (sources["trial_timeout_s"], sources["grade_timeout_s"], sources["memory"], sources["max_steps"]) == (
+        "benchmark", "flag", "flag", "default")
+
+
+def test_a_trial_runs_under_its_effective_limits_and_records_them(tmp_path):
+    factory = Factory()
+    outcome = run_trial(DeclaresLimits(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, factory,
+                        flags=LimitOverrides(grade_timeout_s=30))
+    assert outcome.status == "graded" and factory.env.limits.trial_timeout_s == 900
+    assert factory.env.lifetime_s == 3 * 900 + 30 + 600  # outlives the agent's time and the grading
+    assert outcome.limits["trial_timeout_s"] == {"value": 900, "source": "benchmark"}
+    assert outcome.limits["grade_timeout_s"] == {"value": 30, "source": "flag"}
+    assert outcome.limits["max_steps"] == {"value": 50, "source": "default"}
+    assert json.loads((tmp_path / "outcome.json").read_text())["limits"] == outcome.limits
+
+
+def test_grading_commands_end_by_the_grade_timeout(tmp_path):
+    factory = Factory()
+    run_trial(DeclaresLimits(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, factory)
+    [grader] = factory.env.attached
+    no_timeout, five = grader.timeouts
+    assert 170 < no_timeout <= 180 and five == 5  # no timeout given: the rest of the grading time
+
+
+def test_grading_past_the_grade_timeout_is_a_grader_error(tmp_path):
+    class Slow(OneMessage):
+        def grade(self, task, grader, env, transcript):
+            time.sleep(0.2)
+            grader.exec(["check"])
+            return Score(True)
+
+    outcome = run_trial(Slow(), ScriptedAgent(write_ok), TASK, Limits(grade_timeout_s=0.1), tmp_path, Factory())
+    assert outcome.status == "grader_error" and "grade timeout (0.1s)" in outcome.error
+
+
+def test_a_limit_the_agent_cant_keep_is_recorded_as_not_enforced(tmp_path):
+    class NoStepCount(ScriptedAgent):
+        def unenforced_limits(self):
+            return frozenset({"max_steps"})
+
+    outcome = run_trial(OneMessage(), NoStepCount(write_ok), TASK, Limits(), tmp_path, Factory())
+    assert outcome.limits["max_steps"] == {"value": 50, "source": "default", "enforced": False}
+    assert "enforced" not in outcome.limits["trial_timeout_s"]
+
+
+def test_operator_controls_are_not_limits_a_benchmark_can_set():
+    assert [f.name for f in fields(LimitOverrides)] == [f.name for f in fields(Limits)]
+    for operator_only in ("max_running", "concurrency", "max_run_cost", "max_cost_usd"):
+        with pytest.raises(TypeError):
+            LimitOverrides(**{operator_only: 1})
