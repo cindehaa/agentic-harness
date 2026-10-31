@@ -123,3 +123,24 @@ container, copied in only to run).
   (edits inside this repo only), a tool allowlist (read/edit, `harness validate`, pytest, read-only
   docker; no git, no web) and a spend cap, then runs `harness validate` in a fresh process. A
   drafted adapter needs human review.
+
+### Proof: Terminal-Bench, drafted by `harness adapt` (2026-10-30)
+
+`harness adapt benchmarks/terminal-bench --tasks 3 --model sonnet --max-budget-usd 3` wrote
+`benchmarks/terminal_bench.py`, its registry entry and `tests/test_terminal_bench.py`; validate passed
+3/3 + 3/3 on its first run (commit `4d32315`, unedited).
+
+- **Got right:** each task's own Dockerfile built via `build_image` (base images pre-pulled); the
+  `task.yaml` instruction verbatim; Terminal-Bench's own grading design (tests + `run-tests.sh`
+  copied into the agent's container only at grade time, `TEST_DIR=/tests`, run from the WORKDIR,
+  `max_test_timeout_sec`); a faithful port of its pytest `-rA` summary parser; no summary →
+  `GraderError`; a fidelity note (agent starts in `/workspace`, not `/app`; grading needs network).
+- **Fixed by hand** (commit `40cf1ea`): it picked `fix-permissions`, whose solution is a
+  `solution.yaml` of tmux commands it joined into one script → replaced by `log-summary` (ships
+  `solution.sh`); it ran `solution.sh` through `sh -c` → now as Terminal-Bench's oracle does
+  (`bash /oracle/solution.sh` from the WORKDIR); `WORKDIR = "/app"` was hard-coded → a test checks
+  every adapted image's WorkingDir; the fidelity note now names the parser's two deliberate
+  differences (missing summary = `grader_error` where Terminal-Bench scores a fail; empty summary =
+  fail where its `all()` would pass).
+- Not built: `original_workflow` (Terminal-Bench's original run is its own `tb` harness with tmux
+  agents; mini has no Terminal-Bench mode), so no parity for it yet.

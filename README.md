@@ -69,6 +69,9 @@ difference is our harness. **Adapters drafted by `harness adapt` (or the
 [`add-benchmark` skill](.claude/skills/add-benchmark/SKILL.md)) need human review** before their scores are
 trusted, even when `validate` passes.
 
+The `terminal-bench` adapter (3 tasks: hello-world, log-summary, sqlite-db-truncate) was drafted this way and then
+hand-fixed; see [adapters.md](ideation/adapters.md) for what the draft got right and wrong.
+
 ### One command: submit and wait
 
 ```bash
