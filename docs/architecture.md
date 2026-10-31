@@ -20,8 +20,8 @@ This page adds the component map, the queue's state machines, and where data liv
 | Benchmark port | `benchmarks/base.py` | `tasks`, `setup`, `run_agent`, `grade`; optional `grader_image`, `requirements`, `mcp_servers`, `version`, `score_to_float`, `reference_solution`, `original_workflow` |
 | Benchmarks | `benchmarks/` | `bash-operations`, `python-tasks`, `terminal-bench` (3 tasks, drafted by `harness adapt`) |
 | Agent port | `agents/base.py` | `Agent.start` → `AgentSession.send`; `capabilities`, `forward_env`, `prepare_image` / `image_for`, `native_model`, `preflight`, `version`, `stats`, `new_events`; the agent-side exceptions |
-| Agents | `agents/` | `mini-swe-agent` (on the host, acts through our `exec`), `claude-code` (inside the world, cached derived image); `fake.py`: `NullAgent` / `OracleAgent` for `validate` (not in `AGENTS`) |
-| Environment port | `environments/base.py` | `exec` (with `env=`, `user=`), file transfer, `state` (+ `EndReason`), `kill_agent_processes`, `save_workspace`, `attach(Sidecar)` / `attach_grader` |
+| Agents | `agents/` | `mini-swe-agent` (on the host, acts through our `exec`), any ACP agent through one generic adapter (`acp.py` + `acp_client.py`, inside the world over `docker exec -i`, cached derived image), configured by data: `acp_agents.toml` (`claude-code`) or a private agent's own `.toml`; `fake.py`: `NullAgent` / `OracleAgent` for `validate` (not in `AGENTS`) |
+| Environment port | `environments/base.py` | `exec` (with `env=`, `user=`), `start_process` (an in-world agent's stdio), `workdir`, file transfer, `state` (+ `EndReason`), `kill_agent_processes`, `save_workspace`, `attach(Sidecar)` / `attach_grader` |
 | Docker backend | `environments/docker.py` | The `docker` CLI via `subprocess`: containers, named workspace volumes (mounted at the task's `workdir`, starting with the image's files there), limits, grader and MCP sidecars, image builds and pulls |
 | Adapter checks | `validate.py`, `parity.py`, `original.py` | `harness validate` (null + oracle agents through `run_trial`); `harness parity` (statistics; the benchmark's original way with mini's own Docker mode). `harness adapt` (in `cli.py`) runs `claude -p` with `.claude/skills/add-benchmark/SKILL.md` |
 
@@ -70,7 +70,7 @@ lost its lease (killed, hung, laptop asleep) can't overwrite the attempt now own
 | Runs, trials, attempts, workers | `runs/harness.db` | as state changes, so `status` is live |
 | Trace (messages, commands, lifecycle) | `events.jsonl` in the attempt folder → `events` table | appended per event; loaded per turn |
 | Transcript, outcome | `transcript.json`, `outcome.json` | at the end, atomically, before the DB commit |
-| Agent's own log | mini's `trajectory.json`, Claude Code's `trajectory.jsonl` | by the agent, redacted after the trial |
+| Agent's own log | mini's `trajectory.json`; an ACP agent's raw protocol `acp.jsonl` and its stderr `agent-stderr.log` | by the agent, redacted after the trial |
 | Spend | `attempts.cost_usd`, tokens, `model_calls` | at every turn's end, also on crash, timeout or interrupt |
 | Final workspace | `workspace.tar` (≤ 50 MB, never unpacked on the host) | after the pre-grade kill, before grading |
 | Setup failure | `runs/<run_id>/setup.log` | when `Benchmark.setup()` raises |

@@ -1,6 +1,6 @@
 # Implementation plan
 
-**Status (2026-10-30):** phases 0–8 are built, plus the Claude Code agent, MCP sidecars, cost + time
+**Status (2026-10-30):** phases 0–8 are built, plus agents over ACP (Claude Code among them), MCP sidecars, cost + time
 tracking, the dashboard, and the adapter checks (`validate`, `parity`, `adapt`). What is left is listed under
 "Remaining: extensions (not built)" at the end.
 
@@ -122,6 +122,8 @@ Decisions and survey: `action-space.md`.
   cached derived image (`Agent.prepare_image`), key forwarded per command, `--mcp-config` from the task's servers,
   `--resume` for later turns, stream-json → `trajectory.jsonl` + `tool_call` / `tool_result` events
   (`AgentSession.new_events`). Live: bash-operations 0.80, python-tasks 1.00, MCP fixture pass (Haiku 5.5, $0.012 total).
+  **Replaced 2026-10-30** by generic ACP support (`AcpAgent`, `agents/acp.py`; `claude-code` is a definition in
+  `agents/acp_agents.toml`; `action-space.md` → Agents over ACP). Live through ACP: the same scores.
 
 ## Scale-up design (talking points, not built)
 

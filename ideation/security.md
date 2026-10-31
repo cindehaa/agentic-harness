@@ -53,17 +53,19 @@ The code needs only two mechanisms:
 
 mini-swe-agent runs on the host, so its key never enters a container.
 
-**Built 2026-10-29** (Claude Code, `action-space.md` #4): `ClaudeCode.forward_env = ("ANTHROPIC_API_KEY",)`;
-`Environment.exec(env=...)` passes it as `docker exec -e NAME` with the value in the docker client's own environment,
-so it is never on the host's command line nor in an image layer; the command event records names only (`***`); every
-attempt file is redacted. Cost: the key is inside the agent's world while Claude Code runs, so the agent could read it.
+**Built 2026-10-29** (Claude Code, `action-space.md`), kept for ACP agents (2026-10-30): an agent definition's
+`forward_env` (claude-code: `ANTHROPIC_API_KEY`) is passed as `docker exec -e NAME` (`exec(env=...)`, and
+`start_process(env=...)` for the agent's own process) with the value in the docker client's own environment, so it
+is never on the host's command line nor in an image layer; the `command` / `process` events record names only
+(`***`); every attempt file (incl. the raw ACP log `acp.jsonl`) is redacted. Cost: the key is inside the agent's world
+while an in-world agent runs, so the agent could read it.
 `exec(user=)` is built too (for the unprivileged `agent` user), not used yet.
 
 ## Network (designed 2026-10-30, not built)
 
 Worlds have internet today. A benchmark will declare `network: bool` (default on; `environment.md` → Network); an
 offline one runs the trial container without internet, so the agent can neither look answers up nor send out
-what it finds. The in-world agent's API key is the gap: Claude Code must still reach the model API, so an offline
+what it finds. The in-world agent's API key is the gap: an in-world (ACP) agent must still reach the model API, so an offline
 world gets a model-API-only allowlist (Harbor's `network_allowlist`) or a model proxy that holds the key on the host
 (Inspect's approach; the key would then never enter the world either).
 

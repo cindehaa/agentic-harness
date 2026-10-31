@@ -22,7 +22,7 @@ flowchart TB
   budget -->|"no: spent"| SB["every trial still pending: done as skipped_budget (never started, no attempt); trials in flight finish"]
   claim --> caps{"run_trial: agent.capabilities.missing(benchmark.requirements(task)): content types, multi-turn, MCP"}
   caps -->|"a gap (e.g. mini on a task with MCP servers)"| UN
-  caps --> prep["agent.prepare_image(task.image): Claude Code builds its cached derived image"]
+  caps --> prep["agent.prepare_image(task.image): an ACP agent builds its cached derived image (task image + its install)"]
   prep -->|"DockerError (build failed, Docker down)"| IE1
   prep --> startenv["env_factory(image, lifetime_s, limits, task.workdir).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
   claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
@@ -33,12 +33,12 @@ flowchart TB
   mcp --> turns["benchmark.run_agent(task, session, env)"]
 
   turns -->|"Unsupported: content the agent can't read, e.g. a File"| UN["unsupported"]
-  turns -->|"returns: mini exit Submitted, LimitsExceeded (steps, cost), TimeLimit; Claude Code exit success, error_max_turns, error_max_budget_usd, TimeLimit (exec timeout: claude killed inside)"| check
+  turns -->|"returns: mini exit Submitted, LimitsExceeded (steps, cost), TimeLimit; ACP agent exit = its stopReason (end_turn, max_tokens, max_turn_requests, cancelled), TimeLimit (deadline: session/cancel, killed inside if it ignores it), LimitsExceeded (usage_update cost past the budget: session/cancel)"| check
   turns -->|"TurnLimit: more than max_turns messages"| check
-  turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError; Claude Code prompt_too_long, refusal"| check
+  turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError; ACP agent: stopReason refusal, or an error message about prompt length / context window"| check
   turns -->|"EnvironmentLost"| check
-  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries; Claude Code rate_limit, server_error, overloaded, HTTP 408/429/5xx/529 after its own retries), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
-  turns -->|"any other exception: auth, permission, bad request, adapter or benchmark bug; ClaudeCodeError (authentication_failed, billing_error, model_not_found, invalid_request, no result event, claude never ran)"| IE2["infra_error, NOT retryable: fails fast, logged as an error (traceback saved)"]
+  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries; ACP agent: an error message saying overloaded, rate limit, server_error, 502/503/529, after its own retries), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
+  turns -->|"any other exception: auth, permission, bad request, adapter or benchmark bug; AcpAgentError (any other error message, e.g. a bad key or unknown model; the agent process ended with the world still up; a definition the agent contradicts)"| IE2["infra_error, NOT retryable: fails fast, logged as an error (traceback saved)"]
 
   check{"after the turn: env.state() (Docker: docker inspect)"}
   check -->|"None (vanished, Docker unreachable)"| IE3
@@ -127,10 +127,14 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   `GraderSetupError` is gone (was: `apk add python3` failing → `infra_error`). If the
   grader can't start, that is `EnvironmentLost` → the world's state is checked again
   (rule 6), and if the world still runs → `infra_error`, retried.
-- **Claude Code's errors** (2026-10-29, `action-space.md` #9) come from its stream-json: the result event's
-  `terminal_reason: api_error` and the failed message's `error` kind, classified like mini's litellm errors. Its own
-  model-call retries are left alone too. The trace it produced before failing is still written
-  (`AgentSession.new_events`, read in a `finally`).
+- **ACP agents' errors** (2026-10-30, `action-space.md` → Agents over ACP #11): a JSON-RPC error answering
+  `session/prompt` carries only a message, so its words decide: overloaded / rate limit / 5xx → `TransientError`
+  (retried), prompt too long / context window → `AgentLimitation` (graded as it is), anything else → `AcpAgentError`
+  (`infra_error`, not retried); `stopReason: refusal` → `AgentLimitation`. The agent's process ending mid-turn:
+  the world gone → `EnvironmentLost` (the runner's death check decides), the world up → `AcpAgentError` with the
+  tail of the agent's stderr. The agent's own model-call retries are left alone too. The trace it produced before
+  failing is still written (`AgentSession.new_events`, read in a `finally`). (Before 2026-10-30 the dedicated Claude
+  Code adapter classified its stream-json result event's error kinds the same way.)
 - **mini's own retries are left alone.** mini retries failed model calls
   itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
   agent's scaffolding, part of what is measured; we don't change it
@@ -166,9 +170,10 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   timed out in (`RecordingSession.send`'s `finally`), and written to the
   attempt row at once (`Store.record_spend`, not fenced: money a worker spent
   before losing its claim was still spent; `MAX`, so an outcome without stats,
-  e.g. "worker interrupted", never erases it). Claude Code reports cost only in
-  its result event; a turn cut off before it is priced from its tokens with
-  litellm's table (`estimate_cost`).
+  e.g. "worker interrupted", never erases it). An ACP agent's cost is the last
+  `usage_update` cost it reported (the session's total); one that reports
+  tokens but no cost is priced with litellm; a turn killed after ignoring the
+  cancel keeps only what was reported before it.
 - **Run budget** (`harness run --max-run-cost USD`, `database.md` #22): once
   the run's recorded spend reaches it, no trial of the run is claimed and every
   trial still pending (a retry waiting out its backoff included) ends
