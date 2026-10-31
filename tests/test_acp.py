@@ -190,6 +190,13 @@ def test_an_agent_that_dies_is_an_agent_error_unless_the_world_died(tmp_path, mo
         say(session, "crash")
 
 
+def test_an_exception_in_our_handler_fails_the_turn_as_retryable(tmp_path, monkeypatch):
+    _, session = start(tmp_path, monkeypatch)
+    monkeypatch.setattr(session, "_tool", lambda u: 1 / 0)  # the library would only log it
+    with pytest.raises(TransientError, match="ZeroDivisionError"):
+        say(session, "work")
+
+
 def test_non_text_content_is_unsupported(tmp_path, monkeypatch):
     _, session = start(tmp_path, monkeypatch)
     with pytest.raises(Unsupported):

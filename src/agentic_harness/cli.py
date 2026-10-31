@@ -196,7 +196,7 @@ def parity(benchmark: str, agent: str, runs: int, task_ids: str | None, model: s
     run_ids, harness_scores = [], []
     for _ in range(runs):
         run_id = _submit(bench, the_agent, tasks, LimitOverrides(), None)
-        if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id, max_running=max_running):
+        if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id):
             raise SystemExit(130)
         run_ids.append(run_id)
         harness_scores.append({t["task_id"]: t["score_float"] if t["outcome"] == "graded" else None for t in _store().trials(run_id)})

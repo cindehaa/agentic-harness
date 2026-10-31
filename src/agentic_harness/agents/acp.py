@@ -200,6 +200,7 @@ class AcpSession(AgentSession):
         self.cost_reported = False
         self.input_tokens = 0
         self.output_tokens = 0
+        self.handler_error: Exception | None = None  # the library only logs our handlers' exceptions
         ready: Future = Future()
         serve = self._serve(ready, artifacts_dir / "agent-stderr.log")
         threading.Thread(target=asyncio.run, args=(serve,), daemon=True).start()
@@ -260,6 +261,8 @@ class AcpSession(AgentSession):
             self.ended_by, result = "LimitsExceeded", None
         finally:
             self._end_turn()
+            if self.handler_error:
+                raise TransientError(f"our ACP handler failed: {self.handler_error!r}") from self.handler_error
         self._count(result.usage if result else None)
         stop = result.stop_reason if result else None
         self.exit_status = self.ended_by or stop  # end_turn, max_tokens, max_turn_requests, refusal, cancelled
@@ -326,36 +329,44 @@ class AcpSession(AgentSession):
     # --- what the agent sends us (the library calls these on the loop thread)
 
     async def request_permission(self, session_id: str, tool_call, options, **kwargs) -> RequestPermissionResponse:
-        # The world is the sandbox: everything inside it is allowed. Once, never "always": an always-rule may be
-        # written into the workspace (e.g. Claude Code's .claude/settings.local.json) and graded with it.
-        chosen = next((o for kind in ("allow_once", "allow_always") for o in options if o.kind == kind), None)
-        self._trace("permission", {"tool_call": tool_call.tool_call_id, "granted": chosen.kind if chosen else None})
-        if chosen is None:
-            return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
-        return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=chosen.option_id))
+        try:
+            # The world is the sandbox: everything inside it is allowed. Once, never "always": an always-rule may be
+            # written into the workspace (e.g. Claude Code's .claude/settings.local.json) and graded with it.
+            chosen = next((o for kind in ("allow_once", "allow_always") for o in options if o.kind == kind), None)
+            self._trace("permission", {"tool_call": tool_call.tool_call_id, "granted": chosen.kind if chosen else None})
+            if chosen is None:
+                return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+            return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=chosen.option_id))
+        except Exception as e:
+            self.handler_error = self.handler_error or e
+            raise
 
     async def session_update(self, session_id: str, update, **kwargs) -> None:
-        if session_id != self.session_id:
-            return
-        u = update.model_dump(mode="json", by_alias=True, exclude_unset=True)  # the fields the agent sent
-        kind = u.get("sessionUpdate")
-        cancel = False
-        with self.lock:
-            if kind == "agent_message_chunk":
-                self.text.append(_text(u.get("content")))
-            elif kind == "agent_thought_chunk":
-                self.thought.append(_text(u.get("content")))
-            elif kind in ("tool_call", "tool_call_update"):
-                self._tool(u)
-            elif kind == "plan":
-                self.events.append(("plan", {"entries": u.get("entries")}))
-            elif kind == "usage_update" and isinstance(u.get("cost"), dict):
-                self.cost = max(self.cost, float(u["cost"].get("amount") or 0))  # cumulative over the session
-                self.cost_reported = True
-                if self.cost >= self.limits.cost_usd and self.ended_by is None:
-                    self.ended_by, cancel = "LimitsExceeded", True
-        if cancel:  # outside the lock: send() may be waiting for it
-            await self.conn.cancel(session_id=self.session_id)
+        try:
+            if session_id != self.session_id:
+                return
+            u = update.model_dump(mode="json", by_alias=True, exclude_unset=True)  # the fields the agent sent
+            kind = u.get("sessionUpdate")
+            cancel = False
+            with self.lock:
+                if kind == "agent_message_chunk":
+                    self.text.append(_text(u.get("content")))
+                elif kind == "agent_thought_chunk":
+                    self.thought.append(_text(u.get("content")))
+                elif kind in ("tool_call", "tool_call_update"):
+                    self._tool(u)
+                elif kind == "plan":
+                    self.events.append(("plan", {"entries": u.get("entries")}))
+                elif kind == "usage_update" and isinstance(u.get("cost"), dict):
+                    self.cost = max(self.cost, float(u["cost"].get("amount") or 0))  # cumulative over the session
+                    self.cost_reported = True
+                    if self.cost >= self.limits.cost_usd and self.ended_by is None:
+                        self.ended_by, cancel = "LimitsExceeded", True
+            if cancel:  # outside the lock: send() may be waiting for it
+                await self.conn.cancel(session_id=self.session_id)
+        except Exception as e:
+            self.handler_error = self.handler_error or e
+            raise
 
     def _tool(self, u: dict) -> None:
         """Gathers a tool call's updates (its input may arrive after the call itself); traced once it ends."""

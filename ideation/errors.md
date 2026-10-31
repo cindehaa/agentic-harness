@@ -37,7 +37,7 @@ flowchart TB
   turns -->|"TurnLimit: more than max_turns messages"| check
   turns -->|"AgentLimitation: ContextWindowExceededError, ContentPolicyViolationError; ACP agent: stopReason refusal, or an error message about prompt length / context window"| check
   turns -->|"EnvironmentLost"| check
-  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries; ACP agent: an error message saying overloaded, rate limit, server_error, 502/503/529, after its own retries), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
+  turns -->|"TransientError (mini: litellm APIConnectionError incl. timeouts, RateLimitError, InternalServerError incl. overloaded, ServiceUnavailableError, BadGatewayError, after mini's own retries; ACP agent: an error message saying overloaded, rate limit, server_error, 502/503/529, after its own retries, or an exception in our own handler session_update / request_permission, raised from send() when the prompt ends), ConnectionError, TimeoutError"| IE5["infra_error, retryable (traceback saved)"]
   turns -->|"any other exception: auth, permission, bad request, adapter or benchmark bug; AcpAgentError (any other error message, e.g. a bad key or unknown model; the agent process ended with the world still up; a definition the agent contradicts)"| IE2["infra_error, NOT retryable: fails fast, logged as an error (traceback saved)"]
 
   check{"after the turn: env.state() (Docker: docker inspect)"}
@@ -133,7 +133,9 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   ("maximum number of turns", 2026-10-31) → the turn ends `LimitsExceeded` (graded), anything else → `AcpAgentError`
   (`infra_error`, not retried); `stopReason: refusal` → `AgentLimitation`. The agent's process ending mid-turn:
   the world gone → `EnvironmentLost` (the runner's death check decides), the world up → `AcpAgentError` with the
-  tail of the agent's stderr. The agent's own model-call retries are left alone too. The trace it produced before
+  tail of the agent's stderr. An exception in our own handlers (`session_update`, `request_permission`; the library
+  only logs it) is stored and raised from `send()` once the prompt ends as `TransientError` (`infra_error`,
+  retried; 2026-10-31). The agent's own model-call retries are left alone too. The trace it produced before
   failing is still written (`AgentSession.new_events`, read in a `finally`). (Before 2026-10-30 the dedicated Claude
   Code adapter classified its stream-json result event's error kinds the same way.)
 - **Grade timeout** (2026-10-31, `agents-and-runner.md` → Limits in three layers): `grade()` gets its grader
