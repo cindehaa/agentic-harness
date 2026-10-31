@@ -39,6 +39,13 @@ def test_default_cwd_is_workspace(env):
     assert env.exec("pwd").stdout.strip() == "/workspace"
 
 
+def test_started_process_talks_through_pipes_in_the_workdir_with_its_variables(env, monkeypatch):
+    monkeypatch.setenv("SOME_KEY", "host-value")
+    proc = env.start_process(["sh", "-c", 'pwd; echo "$SOME_KEY"; read line; echo "got $line"'], env={"SOME_KEY": "v"})
+    out, _ = proc.communicate(b"hello\n", timeout=30)
+    assert out.decode().splitlines() == ["/workspace", "v", "got hello"]
+
+
 def test_string_runs_through_shell(env):
     assert env.exec("echo a && echo b").stdout == "a\nb\n"
 

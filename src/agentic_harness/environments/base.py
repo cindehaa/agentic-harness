@@ -1,5 +1,6 @@
 """The world a task runs in: somewhere to run commands and move files."""
 
+import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -60,8 +61,9 @@ class Sidecar:
 class Environment(ABC):
     """One isolated world (e.g. one Docker container). Use as a context manager so it is always stopped."""
 
-    def __init__(self, image: str) -> None:
+    def __init__(self, image: str, workdir: str = "/workspace") -> None:
         self.image = image
+        self.workdir = workdir  # where commands (and agents) start; relative paths resolve here
 
     @abstractmethod
     def start(self) -> None: ...
@@ -75,6 +77,13 @@ class Environment(ABC):
         """Run a command: a string through `sh -c` (agents), a list directly (graders, the harness).
         `timeout` is in seconds; None means no timeout. `env` adds variables for this command only (e.g. an agent's
         API key: never written into the image); `user` runs it as that user (default: the image's, root here)."""
+
+    def start_process(self, argv: list[str], env: dict[str, str] | None = None,
+                      user: str | None = None) -> subprocess.Popen:
+        """Start a long-running process in the world (in its workdir) whose stdin, stdout and stderr are pipes on the
+        host: an agent the harness talks to over a protocol (ACP). Killing the returned process ends only our side;
+        kill_agent_processes() ends the one in the world. `env` and `user` as for exec()."""
+        raise NotImplementedError(f"{type(self).__name__} can't run a process the harness talks to")
 
     @abstractmethod
     def state(self) -> EnvironmentState | None:

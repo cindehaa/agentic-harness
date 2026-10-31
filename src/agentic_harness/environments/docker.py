@@ -44,11 +44,10 @@ class DockerEnvironment(Environment):
 
     def __init__(self, image: str, lifetime_s: int = 7200, limits: Limits = Limits(), workdir: str = "/workspace",
                  labels: dict[str, str] | None = None) -> None:
-        super().__init__(image)
+        super().__init__(image, workdir)
         self.labels = labels or {}  # extra docker labels on its container and volume (and its sidecars'), e.g. ATTEMPT_LABEL
         self.limits = limits  # memory, cpus, pids_limit become docker run flags
         self.lifetime_s = lifetime_s  # the container's main process is `sleep lifetime_s`: a self-destruct timer if the harness dies
-        self.workdir = workdir  # default cwd for exec; relative paths resolve here
         self.container_id: str | None = None
         self.volume: str | None = None  # the workspace volume, removed in stop(); None for an attached grader
         self.sleep_pid: str | None = None  # the main `sleep` (child of the init, PID 1); kill_agent_processes spares it
@@ -165,6 +164,13 @@ class DockerEnvironment(Environment):
             if not self._alive():
                 raise DockerError("container is gone")
         return ExecResult(proc.returncode, stdout, stderr, truncated=truncated)
+
+    def start_process(self, argv: list[str], env: dict[str, str] | None = None,
+                      user: str | None = None) -> subprocess.Popen:
+        names = [a for name in env or {} for a in ("-e", name)]  # values from docker's own environment, as in exec()
+        full = ["docker", "exec", "-i", "-w", self.workdir, *names, *(["-u", user] if user else []), self._id(), *argv]
+        return subprocess.Popen(full, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=os.environ | env if env else None)
 
     def state(self) -> EnvironmentState | None:
         """From `docker inspect`'s State. None if Docker is unreachable or the container is gone (both infra_error)."""

@@ -81,7 +81,7 @@ class RecordingEnvironment(Environment):
     (command, env names, user, exit code, output capped at OUTPUT_CAP, duration, turn). Everything else is passed straight through."""
 
     def __init__(self, env: Environment, log: EventLog) -> None:
-        super().__init__(env.image)
+        super().__init__(env.image, env.workdir)
         self.env = env
         self.log = log
 
@@ -102,6 +102,10 @@ class RecordingEnvironment(Environment):
             "duration_s": _since(began),
         })
         return r
+
+    def start_process(self, argv: list[str], env: dict[str, str] | None = None, user: str | None = None):
+        self.log.write("process", {"command": argv, "env": {name: "***" for name in env or {}}, "user": user})
+        return self.env.start_process(argv, env=env, user=user)
 
     def start(self) -> None:
         self.env.start()
