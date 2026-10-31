@@ -30,13 +30,15 @@ Create `.env` in the repo root (gitignored; the `harness` CLI loads it on every 
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
-MSWEA_MODEL_NAME=anthropic/claude-haiku-5-5   # mini-swe-agent's default model; --model overrides it per run
+HARNESS_MODEL=anthropic/claude-haiku-5-5      # the model for every agent (litellm-style); --model overrides it per run
+MSWEA_MODEL_NAME=anthropic/claude-haiku-5-5   # only for the starter's `mini` CLI examples; the harness never reads it
 MSWEA_CONFIGURED=true                         # skips mini's first-run setup wizard (it hangs or crashes without a TTY)
 ```
 
-`MSWEA_MODEL_NAME` is mini-swe-agent's own setting; the harness resolves it once, at submit time, and stores it on
-the run. `MSWEA_CONFIGURED` only matters for the `mini` CLI used by the starter examples (`make bash-example`,
-`make py-example`); the harness drives mini through its Python API.
+`HARNESS_MODEL` is the one model setting: the harness resolves it (or `--model`) once, at submit time, stores it on
+the run, and each agent translates it into its own form (mini passes it to litellm as is; Claude Code drops the
+`anthropic/` prefix for its `--model`). `MSWEA_MODEL_NAME` and `MSWEA_CONFIGURED` only matter for the `mini` CLI used
+by the starter examples (`make bash-example`, `make py-example`); the harness drives mini through its Python API.
 
 Optional: `make init-extra-benchmarks` fetches Terminal-Bench, SWE-bench, τ²-bench and MiniWoB++ as submodules
 (no adapters for them yet; see [benchmarks/README.md](benchmarks/README.md)).
@@ -98,7 +100,7 @@ Per-run limits (stored with the run; defaults shown):
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--model` | `$MSWEA_MODEL_NAME` | model for the agent |
+| `--model` | `$HARNESS_MODEL` | model for the agent, litellm-style (also on `harness parity`) |
 | `--trial-timeout` | 600 | seconds per trial |
 | `--cost-limit` | 1.0 | model spend per trial, USD |
 | `--max-run-cost` | none | budget for the whole run, USD: once spent, no more trials start; the rest end `skipped_budget` (trials in flight finish) |
@@ -307,7 +309,8 @@ The full rules (and a Claude Code skill that follows them) are in
 
 | Method | Required | What it does |
 |---|---|---|
-| `Agent.name`, `Agent.model_env` | yes / no | registry key; the env var holding its default model |
+| `Agent.name` | yes | registry key |
+| `Agent.native_model()` | no | the run's litellm-style model in the agent's own form (default: as is) |
 | `Agent.start(env, artifacts_dir, limits)` | yes | a fresh session that acts only through `env` and stops within `limits` |
 | `AgentSession.send(message)` | yes | give the agent a message, block until it hands back, return its reply |
 | `AgentSession.stats()` | no | exit status, cost, model calls, input/output tokens for the records (also after a crash) |

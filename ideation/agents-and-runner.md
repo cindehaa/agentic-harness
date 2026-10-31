@@ -62,8 +62,10 @@ for a future `harness cleanup`.
 
 - The CLI loads the repo `.env` at entry (`python-dotenv`; variables already set in the shell win), so mini's
   settings and API keys need no `set -a; . ./.env`.
-- The model is resolved once, at submit: `--model`, else the agent's `model_env` variable (`MSWEA_MODEL_NAME` for
-  mini), and stored in `runs.model`. Workers build the agent from that; adapters never read `os.environ` for it.
+- The model is resolved once, at submit: `--model`, else `HARNESS_MODEL` (one harness-wide, litellm-style setting;
+  2026-10-30, was each agent's `model_env`, i.e. `MSWEA_MODEL_NAME`), and stored in `runs.model`. Each agent
+  translates it with `Agent.native_model()` (mini: as is; Claude Code: without `anthropic/`). `MSWEA_MODEL_NAME`
+  stays in `.env` only for the starter's `mini` CLI examples. Workers build the agent from that; adapters never read `os.environ` for it.
   No model → a clear CLI error, nothing submitted.
 - `Agent.preflight()` (mini: litellm knows the model, its provider's key is set; no tokens spent) runs at submit and
   when a worker starts, before it claims anything (`errors.md`).

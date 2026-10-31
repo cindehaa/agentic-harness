@@ -69,7 +69,7 @@ says what a task needs (default: text, single turn, `mcp` iff it declares MCP se
 | 9 | Errors (from the result event's `terminal_reason: api_error` + the failed message's `error`): `prompt_too_long` / `refusal` (and `stop_reason: refusal`) → `AgentLimitation`; `rate_limit` / `server_error` / `overloaded` or HTTP 408/429/5xx/529 → `TransientError`; everything else (`authentication_failed`, `billing_error`, `model_not_found`, `invalid_request`, no result event) → `ClaudeCodeError` (`infra_error`, not retried) | As for mini (`errors.md`). Verified shapes with a bad key (401) and an unknown model (404) |
 | 10 | Trace: the raw stream is saved as `trajectory.jsonl`; tool calls / results become `tool_call` / `tool_result` events (output capped like commands) through `AgentSession.new_events()`, which the recording session writes after each turn (also when the agent raised) | Commands Claude Code runs bypass our exec, so this is our trace for it. The stream goes to a file in the world (`/tmp/claude-code-turn-<n>.jsonl`), not exec's 1 MB-capped stdout, so a long run keeps its result and a run killed at the deadline keeps what it did |
 | 11 | Reply = `Message("agent", (Text(result text),))`; exit status = Claude Code's own `subtype` (`success`, `error_max_turns`, `error_max_budget_usd`, ...) or `TimeLimit` / `LimitsExceeded` | The harness adds nothing |
-| 12 | Model: same setting as mini (`model_env = "MSWEA_MODEL_NAME"`, litellm-style `anthropic/claude-haiku-5-5` in `runs.model`); preflight: an Anthropic model + `ANTHROPIC_API_KEY` set | Both agents run the same model by default and record it the same way (open question below) |
+| 12 | Model (2026-10-30): the harness-wide `HARNESS_MODEL` / `--model`, litellm-style `anthropic/claude-haiku-5-5` in `runs.model`; `ClaudeCode.native_model()` drops `anthropic/` for its `--model`; preflight: an Anthropic model + `ANTHROPIC_API_KEY` set | Both agents run the same model by default and record it the same way; no agent reads another agent's settings (was `MSWEA_MODEL_NAME`, mini's own) |
 
 ### Fidelity cost (agent tooling; standard in Harbor / Inspect installed agents)
 
@@ -90,7 +90,9 @@ says what a task needs (default: text, single turn, `mcp` iff it declares MCP se
 
 ### Open questions
 
-- Model setting: reuse mini's `MSWEA_MODEL_NAME`, or Claude Code's own `ANTHROPIC_MODEL`?
+- ~~Model setting: reuse mini's `MSWEA_MODEL_NAME`, or Claude Code's own `ANTHROPIC_MODEL`?~~ Neither (2026-10-30):
+  one harness-wide `HARNESS_MODEL`, translated per agent (#12).
+- Offline benchmarks: Claude Code's web tools are moot once the world has no internet (`environment.md` → Network).
 - Turn off Claude Code's web tools (`--disallowed-tools WebFetch,WebSearch`) for benchmarks meant to be offline?
 - τ²-style grading needs the MCP server's state: give `grade()` the service sidecars too?
 - Derived images (~0.4–0.7 GB each) are never removed; a `harness cleanup` could prune them.

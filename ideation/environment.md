@@ -61,6 +61,16 @@ Code: `src/agentic_harness/environments/docker.py`; tests: `tests/test_docker_en
 | 9 | `kill_agent_processes()` kills every process except PID 1 (the init) and the main `sleep` (its PID is read from `/proc/1/task/1/children` at start), via passes over `/proc` repeated until one kills nothing (at most 5; 2026-10-29: one pass missed 30-170 children of a fork loop, forked after `/proc` was listed) | A plain `kill -9 -1` also kills the sleep, and `--init` exits when its child does: the container dies before grading (found while building it) |
 | 10 | `attach_grader(image)`: `docker run --volumes-from <trial> --network container:<trial> --pid container:<trial>` with the trial's `--memory` / `--cpus` / `--pids-limit` and lifetime, the same label; the trial's `stop()` stops its graders first (a volume in use can't be removed) | One Docker flag per thing shared; nothing is copied. Inside the grader, `localhost` and `ps` are the trial's |
 
+## Network (designed 2026-10-30, not built)
+
+Network access is a property of the world, so the benchmark declares it: `network: bool`, default on (every
+benchmark today needs it or doesn't care). An offline benchmark would run the trial container without internet
+(`docker run --network none`, or an internal network); its attached sidecars already share the trial's network
+namespace, so they would be offline too. An agent on the host (mini) is unaffected: its model calls never leave
+from the container. An agent inside the world (Claude Code) still needs its model API, so offline means "the model
+API only": an egress allowlist, as Harbor's `network_allowlist` does, or a model proxy the container can reach while
+everything else is blocked, as Inspect does. Security side: `security.md` → Network.
+
 **Caveat:** on an `exec` timeout we kill the `docker exec` client, which does NOT kill
 the process inside the container. Leftover processes are killed before grading
 (`kill_agent_processes()`, repeated passes over `/proc`, so a fork loop can't outrun it).

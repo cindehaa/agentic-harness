@@ -53,6 +53,14 @@ so it is never on the host's command line nor in an image layer; the command eve
 attempt file is redacted. Cost: the key is inside the agent's world while Claude Code runs, so the agent could read it.
 `exec(user=)` is built too (for the unprivileged `agent` user), not used yet.
 
+## Network (designed 2026-10-30, not built)
+
+Worlds have internet today. A benchmark will declare `network: bool` (default on; `environment.md` → Network); an
+offline one runs the trial container without internet, so the agent can neither look answers up nor send out
+what it finds. The in-world agent's API key is the gap: Claude Code must still reach the model API, so an offline
+world gets a model-API-only allowlist (Harbor's `network_allowlist`) or a model proxy that holds the key on the host
+(Inspect's approach; the key would then never enter the world either).
+
 ## (c) Judge model
 
 Default to the benchmark's prescribed model, overridable. Recorded in
