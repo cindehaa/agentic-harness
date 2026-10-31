@@ -102,11 +102,11 @@ def _interrupted(store: Store, claim: Claim, worker: str) -> None:
 def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_id: str | None = None) -> bool:
     """Run `concurrency` workers until stopped (Ctrl-C, SIGTERM) or, with exit_when_idle, until no run is left
     unfinished. With run_id, work only on that run (what `harness run --wait` does). True if it was stopped."""
-    preflight(db_path, run_id)
     prefix = f"{socket.gethostname()}-{os.getpid()}"
     stop = Stop()
+    checks = Preflight()
     threads = [
-        threading.Thread(target=_loop, args=(db_path, f"{prefix}-{i}", exit_when_idle, run_id, stop), name=f"worker-{i}", daemon=True)
+        threading.Thread(target=_loop, args=(db_path, f"{prefix}-{i}", exit_when_idle, run_id, stop, checks), name=f"worker-{i}", daemon=True)
         for i in range(concurrency)
     ]
     with closing(Store(db_path)) as store:
@@ -149,22 +149,41 @@ def _stop_gracefully(db_path: Path, stop: Stop, threads: list[threading.Thread])
             t.join(0.2)
 
 
-def preflight(db_path: Path, run_id: str | None = None) -> None:
-    """Before claiming anything: every agent + model the unfinished runs (or this run) need can run at all. Raises
-    PreflightError naming the run, so a missing key fails once, loudly, not as an infra_error in every trial."""
-    with closing(Store(db_path)) as store:
-        runs = store.unfinished_runs(run_id)
-    for run in runs:
-        try:
-            resolve_agent(run["agent"])(run["model"]).preflight()
-        except PreflightError as e:
-            raise PreflightError(f"run {run['id']} ({run['agent']}, {run['model']}): {e}") from None
+class Preflight:
+    """Each run is checked once per worker process, before any of its work is claimed: its benchmark is known and
+    its agent + model can run here at all. A run that can't fails on its own, once, loudly (not as an infra_error
+    in every trial), and the other runs keep flowing."""
+
+    def __init__(self) -> None:
+        self._checked: set[str] = set()
+        self._lock = threading.Lock()  # held through the check: no thread claims a run's work while it is checked
+
+    def check_new_runs(self, store: Store, run_id: str | None = None) -> None:
+        with self._lock:
+            for run in store.unfinished_runs(run_id):
+                if run["id"] in self._checked:
+                    continue
+                self._checked.add(run["id"])
+                if (error := preflight_error(run)) and store.fail_run(run["id"], error):
+                    log.error("run %s failed: %s", run["id"], error)
 
 
-def _loop(db_path: Path, worker: str, exit_when_idle: bool, run_id: str | None, stop: Stop) -> None:
+def preflight_error(run: sqlite3.Row) -> str | None:
+    """Why this run can't run here, or None."""
+    if run["benchmark"] not in BENCHMARKS:
+        return f"unknown benchmark {run['benchmark']!r}"
+    try:
+        resolve_agent(run["agent"])(run["model"]).preflight()
+    except (ValueError, ImportError, PreflightError) as e:  # ValueError: an agent name not in the registry
+        return f"pre-flight check failed ({run['agent']}, {run['model']}): {e}"
+    return None
+
+
+def _loop(db_path: Path, worker: str, exit_when_idle: bool, run_id: str | None, stop: Stop, checks: Preflight) -> None:
     store = Store(db_path)
     while not stop.requested.is_set():
         try:
+            checks.check_new_runs(store, run_id)
             if _work_once(store, db_path, worker, run_id, stop):
                 continue
             if exit_when_idle and not store.unfinished(run_id):
@@ -197,12 +216,12 @@ def _work_once(store: Store, db_path: Path, worker: str, run_id: str | None, sto
 
 def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row, stop: Stop) -> None:
     """Benchmark.setup() for the run's tasks. If it raises, the run fails with the traceback saved in setup.log."""
-    benchmark = BENCHMARKS[run["benchmark"]]()
     task_ids = {t["task_id"] for t in store.trials(run["id"])}
     log.info("run %s: setting up %s", run["id"], run["benchmark"])
     error = None
     with _heartbeat(db_path, lambda s: s.renew_setup_lease(run["id"], worker, LEASE_S)):
         try:
+            benchmark = BENCHMARKS[run["benchmark"]]()  # in here: an unknown name fails the run, not the worker
             tasks = [t for t in benchmark.tasks() if t.id in task_ids]
             benchmark.setup(tasks)
             prepare_images(benchmark, resolve_agent(run["agent"])(run["model"]), tasks)

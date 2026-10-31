@@ -208,6 +208,35 @@ class Store:
                     "UPDATE trials SET state = 'done', outcome = 'infra_error', attempt_count = 1 WHERE run_id = ?", (run_id,)
                 )
 
+    def fail_run(self, run_id: str, error: str) -> bool:
+        """The run can't run at all (unknown agent or benchmark, failed pre-flight check): it fails, and every trial
+        not done ends infra_error: a waiting one with an attempt row holding the error, one in flight with its open
+        attempt closed (the worker running it loses its claim). False if the run had already ended."""
+        with self._transaction():
+            now = time.time()
+            cursor = self.db.execute(
+                "UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+                (now, run_id),
+            )
+            if cursor.rowcount == 0:
+                return False
+            self.db.execute(
+                "UPDATE attempts SET outcome = 'infra_error', error = ?, finished_at = ? WHERE outcome IS NULL"
+                " AND trial_id IN (SELECT id FROM trials WHERE run_id = ? AND state = 'running')",
+                (error, now, run_id),
+            )
+            self.db.execute(
+                "INSERT INTO attempts (trial_id, n, outcome, error, finished_at)"
+                " SELECT id, attempt_count + 1, 'infra_error', ?, ? FROM trials WHERE run_id = ? AND state = 'pending'",
+                (error, now, run_id),
+            )
+            self.db.execute(
+                "UPDATE trials SET attempt_count = attempt_count + (state = 'pending'), state = 'done',"
+                " outcome = 'infra_error', claimed_by = NULL, lease_until = NULL WHERE run_id = ? AND state != 'done'",
+                (run_id,),
+            )
+        return True
+
     # --- the queue ---
 
     def claim_trial(self, worker: str, lease_s: float, run_id: str | None = None) -> Claim | None:

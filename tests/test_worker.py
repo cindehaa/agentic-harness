@@ -18,8 +18,8 @@ from agentic_harness import worker
 from agentic_harness.agents import AGENTS, Agent, AgentSession, AgentStats, PreflightError, TransientError
 from agentic_harness.benchmarks import BENCHMARKS, BashOperations
 from agentic_harness.cli import cli
-from agentic_harness.store import Store
-from agentic_harness.types import Message, Score, Text
+from agentic_harness.store import LostClaim, Store
+from agentic_harness.types import Message, Outcome, Score, Text
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -179,12 +179,41 @@ def test_non_retryable_infra_error_fails_fast(db):
     assert "adapter bug" in store.attempts(run_id)[0]["error"]
 
 
-def test_worker_preflight_failure_claims_nothing(db):
+def test_a_run_that_fails_preflight_fails_alone_and_other_runs_flow(db):
     store = Store(db)
-    store.create_run("r1", "local-bash", "no-key", "fake-model", {}, {"limits": {}}, ["bash-001"])
-    result = CliRunner().invoke(cli, ["worker", "--exit-when-idle"])
-    assert result.exit_code != 0 and "pre-flight check failed" in result.output and "needs ANTHROPIC_API_KEY" in result.output
-    assert store.run("r1")["setup_claimed_by"] is None and store.trials("r1")[0]["state"] == "pending"
+    store.create_run("bad", "local-bash", "no-key", "fake-model", {}, {"limits": {}}, ["bash-001", "bash-002"])
+    store.create_run("unknown-agent", "local-bash", "nobody", "fake-model", {}, {"limits": {}}, ["bash-001"])
+    store.create_run("unknown-bench", "no-such-bench", "oracle", "fake-model", {}, {"limits": {}}, ["bash-001"])
+    good = submit("oracle", task_ids="bash-001")
+    work()  # starts, and exits once idle: the failed runs are not left unfinished
+    for run_id, why in (("bad", "needs ANTHROPIC_API_KEY"), ("unknown-agent", "unknown agent 'nobody'"),
+                        ("unknown-bench", "unknown benchmark 'no-such-bench'")):
+        assert store.run(run_id)["status"] == "failed" and store.run(run_id)["setup_claimed_by"] is None
+        assert {(t["state"], t["outcome"], t["attempt_count"]) for t in store.trials(run_id)} == {("done", "infra_error", 1)}
+        assert all(why in a["error"] for a in store.attempts(run_id)), [a["error"] for a in store.attempts(run_id)]
+    assert store.run(good)["status"] == "done" and store.trials(good)[0]["outcome"] == "graded"
+
+
+def test_failing_a_run_closes_its_attempt_in_flight(db):
+    store = Store(db)
+    store.create_run("r1", "local-bash", "oracle", "fake-model", {}, {"limits": {}}, ["bash-001", "bash-002"])
+    store.claim_setup("w", 120)
+    store.finish_setup("r1", "w")
+    claim = store.claim_trial("w", 120)
+    assert store.fail_run("r1", "pre-flight check failed: no key") is True
+    assert [(t["state"], t["outcome"], t["attempt_count"]) for t in store.trials("r1")] == [("done", "infra_error", 1)] * 2
+    assert {a["error"] for a in store.attempts("r1")} == {"pre-flight check failed: no key"}
+    with pytest.raises(LostClaim):  # the worker running it finds its claim gone; its result is discarded
+        store.finish_attempt(claim, "w", Outcome("graded", Score(True), 1.0))
+    assert store.fail_run("r1", "again") is False
+
+
+def test_an_unknown_benchmark_found_at_setup_fails_the_run(db):
+    store = Store(db)
+    store.create_run("r1", "no-such-bench", "oracle", "fake-model", {}, {"limits": {}}, ["bash-001"])
+    run = store.claim_setup("w", 120)
+    worker._setup(store, db, "w", run, worker.Stop())
+    assert store.run("r1")["status"] == "failed" and "KeyError" in store.attempts("r1")[0]["error"]
 
 
 def test_a_retry_that_succeeds_is_graded(db):

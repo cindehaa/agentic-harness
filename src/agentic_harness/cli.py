@@ -263,10 +263,7 @@ def worker(concurrency: int, exit_when_idle: bool):
     _store().close()  # fail early on a database from another schema version
     _log_to_stderr()
     click.echo(f"Worker started: {concurrency} at a time, database {DB_PATH}", err=True)
-    try:
-        stopped = worker_module.work(DB_PATH, concurrency, exit_when_idle)
-    except PreflightError as e:
-        raise click.ClickException(f"pre-flight check failed, nothing claimed: {e}") from None
+    stopped = worker_module.work(DB_PATH, concurrency, exit_when_idle)
     if stopped:
         click.echo("Worker stopped", err=True)
 
