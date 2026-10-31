@@ -1,6 +1,8 @@
 # Security: hidden grader assets and credentials
 
-**Status:** Decided 2026-10-29. Design only; nothing built yet.
+**Status:** Decided 2026-10-29. Built: credentials (b) (allowlist + redaction) and `exec(user=)`. Not built:
+the unprivileged `agent` user and `agent_user` (a), network (designed 2026-10-30), judge model (c), intermediate
+grading (d).
 
 ## (a) Hidden grading assets, METR-style (pronounced "meter")
 
@@ -18,13 +20,15 @@ shared trial container.
   with `Environment.upload` are not root-only by default. After upload, run an
   explicit `chown -R root:root <path>` + `chmod 700 <path>` (as root).
 - **Caveat:** permissions hide files, not installed tools. Grader-only tools go
-  in a root-only prefix; final grading can still install them at grade time.
+  in a root-only prefix. (Installing them at grade time was superseded 2026-10-29: the grader sidecar's own
+  image carries them, `environment-and-grading.md` #7.)
 - Each adapter declares `agent_user`. Default `"root"` for fidelity
   (Terminal-Bench tasks expect root).
 - **Our two benchmarks:** root; grader files go only into the attached grader sidecar, never into the
   agent's world (2026-10-29, `environment-and-grading.md` #7). With a sidecar, the permission scheme
   above is needed only for tools a grader must run inside the world itself.
-- `Environment.exec` gains a `user` parameter when first needed.
+- `Environment.exec` gains a `user` parameter when first needed. (Built 2026-10-29 with Claude Code; nothing
+  passes it yet, since no adapter declares a non-root `agent_user`.)
 
 ## (b) Credentials
 
@@ -42,8 +46,9 @@ The code needs only two mechanisms:
 1. **Allowlist at the container boundary.** Agent config `forward_env` names the
    variables an agent may get; values are injected at runtime with
    `docker exec -e`, never written into image layers.
-2. **Redaction at the log boundary.** The recorder replaces every `.env` value
-   with `***`.
+2. **Redaction at the log boundary.** The recorder replaces `.env` values
+   with `***` (built: values whose key contains KEY / TOKEN / SECRET / PASSWORD and that are ≥ 8 characters,
+   `redact.py`, `database.md` #17).
 
 mini-swe-agent runs on the host, so its key never enters a container.
 

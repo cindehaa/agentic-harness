@@ -143,8 +143,12 @@ class Benchmark(ABC, Generic[TaskT]):
     def tasks(self) -> list[TaskT]: ...
     def setup(self, tasks: list[TaskT]) -> None: ...  # optional, once per run (build images, download data)
     def run_agent(self, task: TaskT, agent: AgentSession, env: Environment) -> None: ...  # one or more turns
-    def grade(self, task: TaskT, env: Environment, transcript: Transcript) -> Score: ...
+    def grade(self, task: TaskT, grader: Environment, env: Environment, transcript: Transcript) -> Score: ...
 ```
+
+(`grade` gained `grader` on 2026-10-29, see below. Optional hooks added since, all with defaults:
+`grader_image`, `requirements`, `mcp_servers`, `version`, `score_to_float`, `reference_solution`,
+`original_workflow`; the README's "Adding a benchmark" table lists them.)
 
 A simple benchmark is a **one-turn trial**:
 
@@ -169,11 +173,11 @@ until the simulated user stops.
 - **Messages carry typed `Content`:** `Text`, `File` (path in the world,
   media type), or `Data` (a structured, JSON-serializable value). Prior
   context is earlier messages. Files are always placed in the container.
-- **World = `Environment`.** Today it offers shell + files only (`exec`,
-  `write_file`/`read_file`, `upload`/`download`). There is no capabilities
-  field until a second capability exists. Later: browser, tools (MCP), and a
-  simulated-user channel; a mismatch between what the benchmark needs and what
-  the agent can use will then make the trial `unsupported`.
+- **World = `Environment`.** It offers shell + files (`exec`,
+  `write_file`/`read_file`, `upload`/`download`), plus tools from MCP sidecars the task declares (built
+  2026-10-29). A mismatch between what the benchmark needs and what the agent can use makes the trial
+  `unsupported` (built: `AgentCapabilities` vs `Benchmark.requirements(task)`, checked once in the runner,
+  `action-space.md`). Not built: browser / GUI, a simulated-user channel.
 
 ### World setup: baked into the image (D, 2026-10-29)
 
@@ -203,8 +207,8 @@ We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
 `types.py` holds `Task` (`benchmark`, `id`, `image`; adapters subclass it),
 `Content` (`Text | File | Data`), `Message` (role `"user" | "agent"`, `content`),
 `Transcript` and `Score`/`Value`. `ExecResult` lives in
-`environments/base.py`. `Outcome` (see "Outcome model" below) and `Limits` are
-deferred to Phase 3.
+`environments/base.py`. `Outcome` (see "Outcome model" below) and `Limits` were
+deferred to Phase 3 and are built (`types.py`, with `McpServer`, `ReferenceSolution`, `OriginalResult`).
 
 - **`Value = Any`**, but it must be JSON-serializable. The recorder checks;
   a non-serializable value makes the outcome `grader_error`.
@@ -226,7 +230,7 @@ point and where it leads: [`errors.md`](errors.md)):
 |---|---|---|---|
 | `graded` | Normal: the grader ran and returned a `Score` | counts (its score) | no |
 | `grader_error` | The agent ran, then the grader crashed or its output was unparseable | excluded; reported prominently (count + list) | no |
-| `infra_error` | Harness/infra failure (container died, image pull failed) | excluded | yes, per retry policy |
+| `infra_error` | Harness/infra failure (container died, image pull failed) | excluded | only when `retryable` (2026-10-29 audit), up to 3 attempts |
 | `unsupported` | The agent can't handle the task's content (e.g. a `File` it can't read, multi-turn without resume) | excluded; reported separately | no |
 | `skipped_budget` | Trial outcome only (never an attempt's): the run's budget (`harness run --max-run-cost`) was spent before this trial started, so it never ran (no attempt row) | excluded; reported separately | no |
 
@@ -249,8 +253,7 @@ point and where it leads: [`errors.md`](errors.md)):
 
 **Score → number for aggregation.** Inspect-style default conversion:
 `True`/`"C"` → 1.0, `"P"` → 0.5, `False`/`"I"`/`"N"` → 0.0, int/float as-is.
-Overridable per benchmark (e.g. a `Benchmark.score_to_float(score)` method,
-added in Phase 4). **Accuracy** = mean of that number over `graded` trials
+Overridable per benchmark (`Benchmark.score_to_float(score)`, built in Phase 3). **Accuracy** = mean of that number over `graded` trials
 only; `grader_error`, `infra_error`, `unsupported` and `skipped_budget` are
 excluded and each reported separately.
 
@@ -321,10 +324,11 @@ declared image (`Benchmark.original_workflow`). Details and the first live resul
 
 ## Scope
 
-Phase 1 implements only text messages, a shell + files container, and
-one-turn `run_agent`. Multimodal parts, browsers, tools, simulated
-users and multi-turn resume are designed for but not built (parity runs: built 2026-10-29). They
-go in the README as design notes.
+Phase 1 implemented only text messages, a shell + files container, and
+one-turn `run_agent`. Built since: multi-turn resume (mini: history; Claude Code: `--resume`), MCP tools,
+parity runs (2026-10-29). Still designed for but not built: multimodal parts (`File` / `Data` exist in
+`types.py`, no agent accepts them), browsers / GUI, simulated users (τ²-bench). They are in the README's
+limitations.
 
 ## Sources
 

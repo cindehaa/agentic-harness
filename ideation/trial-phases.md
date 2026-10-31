@@ -1,9 +1,13 @@
 # Decision: one job per trial (phases are not split into separate jobs)
 
+**Status:** Decided; built (the queue unit is a `trials` row, `database.md` #1).
+
 **Decision:** a trial (one task × one agent) is a single queue job. Start env,
-agent, and grade run back to back in the same live container. Phases are
-still tracked individually (per-phase status, timing, logs, retries), but
-they are not scheduled independently.
+agent, and grade run back to back against the same live world (since
+2026-10-29 the grader runs in a sidecar attached to that world,
+`environment-and-grading.md` #7). Phases are still tracked individually
+(per-phase timestamps, `database.md` #23; logs; retries), but they are not
+scheduled independently.
 
 ## What we considered
 
@@ -42,7 +46,7 @@ the live environment (installed packages, running services, permissions).
 
 ## If we revisit
 
-The cheap path: add a `kind` column to the job queue (`trial` | `grade`),
+Not built (`harness regrade` included). The cheap path: add a `kind` column to the queue (`trials`: `trial` | `grade`),
 snapshot the workspace after the agent phase, and let adapters opt in with
 `grade_from_snapshot = True`. Benchmarks that need the live environment
 keep using the single `trial` job.

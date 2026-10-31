@@ -1,5 +1,9 @@
 # Implementation plan
 
+**Status (2026-10-30):** phases 0–8 are built, plus the Claude Code agent, MCP sidecars, cost + time
+tracking, the dashboard, and the adapter checks (`validate`, `parity`, `adapt`). What is left is listed under
+"Remaining: extensions (not built)" at the end. Live state: `progress.md`.
+
 Each phase ends with something runnable and a few "explain-back" questions —
 if you can't answer them out loud, the phase isn't done. Ownership says who
 writes the first draft: **You** = you write it, Claude reviews;
@@ -30,11 +34,11 @@ Changed 2026-10-29: no `LocalEnvironment`; Docker starts in ~1s and a fake local
 | `Task`, `Score`, `Benchmark` ABC, registry | You |
 | `Environment` ABC | Claude |
 | `DockerEnvironment` (image in constructor): start, exec(cmd, timeout), copy in/out, stop | Claude |
-| Workspace lives in the container (no bind mount; `download()` gets it out). Grading always runs in the trial container, after the agent | You |
+| Workspace lives in the container (no bind mount; `download()` gets it out). Grading always runs in the trial container, after the agent (**superseded 2026-10-29**: a named volume per trial, grading in an attached grader sidecar, `environment-and-grading.md` #7) | You |
 | Guaranteed cleanup (`finally`, container labels, `harness cleanup`) | Claude |
 | `BashOperations`, `PythonTasks` adapters (world setup, incl. python-tasks' `prepare.py`, baked into images in `Benchmark.setup()`) | You (first), Claude (second, for comparison) |
-| Hand-written oracle solutions + pytest for setup → oracle → grade (in Docker) | Claude |
-| `harness tasks --benchmark X` (list tasks) | Claude |
+| Hand-written oracle solutions + pytest for setup → oracle → grade (in Docker) (moved into the adapters as `reference_solution`, 2026-10-29, for `harness validate`) | Claude |
+| `harness tasks --benchmark X` (list tasks) (**not built**) | Claude |
 
 **Done when:** tests show oracle solutions pass and empty workspaces fail, for every task, in Docker, via the adapter interface only.
 **Explain-back:** Where do the two benchmarks' differences live, and why nowhere else? What would adding a third benchmark touch? What happens to a container if the process is killed mid-trial? Why is python-tasks setup baked into the image by `Benchmark.setup()` instead of run on the host?
@@ -47,20 +51,20 @@ Decided 2026-10-29; details and alternatives in `agents-and-runner.md`. Ownershi
 
 | Piece | Owner |
 |---|---|
-| Agent registry `AGENTS = {"mini-swe-agent": MiniSweAgent}`; `--agent` = name or path (basename used); `--model` overrides `MSWEA_MODEL_NAME` from `.env` | Claude |
+| Agent registry `AGENTS = {"mini-swe-agent": MiniSweAgent}`; `--agent` = name or path (basename used); `--model` overrides `MSWEA_MODEL_NAME` from `.env` (**superseded 2026-10-30**: `HARNESS_MODEL`) | Claude |
 | `MiniSweAgent` adapter: mini's `DefaultAgent` + `get_model` on the host; env wrapper forwards `execute` to `env.exec`, raises `Submitted`, reports the container's OS; API key never enters the container | Claude, you review closely |
 | Multi-turn: a second `send()` appends the user message to mini's history and continues | Claude |
 | Reply = `Message("agent", (Text(submission),))`; mini's exit status (`Submitted` / `LimitsExceeded` / `TimeLimit`) kept in the trial's records | Claude |
-| Limits: deadline checked in the command wrapper (raises `TimeLimit`), mini's cost/step limits, model-call timeout. Defaults: 10 min/trial, $1, 50 steps, 60 s/command; container `lifetime_s` = trial timeout + margin | Claude |
+| Limits: deadline checked in the command wrapper (raises `TimeLimit`), mini's cost/step limits, model-call timeout. Defaults: 10 min/trial, $1, 50 steps, 60 s/command; container `lifetime_s` = trial timeout + margin (audit: 3 × timeout + 600 s) | Claude |
 | Container death during the agent turn, decided from `docker inspect` (rule 6 in `agents-and-runner.md`); drop `--rm` from `docker run` (`stop()` still removes) | Claude |
 | Trial runner: start container → `run_agent` (wrapped session) → container died? → kill leftovers → `grade` (`GraderError` → `grader_error`) → write outcome/transcript/trace → stop container (always) | Claude, you review closely |
-| Per-attempt files until the DB: `runs/<run_id>/<trial_id>/attempt-<n>/` with `outcome.json`, `transcript.json`, `trajectory.json`; record agent name, model, agent submodule SHA per run | Claude |
+| Per-attempt files until the DB: `runs/<run_id>/<trial_id>/attempt-<n>/` (now `attempt-<attempt_id>`, `database.md` #19) with `outcome.json`, `transcript.json`, `trajectory.json`; record agent name, model, agent submodule SHA per run | Claude |
 | `harness run` synchronous — runs trials in-process, prints results | Claude |
 
 **Done when:** `harness run --agent agents/mini-swe-agent --benchmark bash-operations --task_ids bash-001` passes in Docker.
 
-- **DECIDED (2026-10-29):** container `lifetime_s` is linked to the trial limit (timeout + margin), no longer a fixed 7200 s.
-- **DECIDED (2026-10-29):** `--agent agents/mini-swe-agent` resolves via the `AGENTS` registry by basename; model from `--model` or `.env`; agent name, model and submodule SHA recorded per run.
+- **DECIDED (2026-10-29):** container `lifetime_s` is linked to the trial limit (timeout + margin), no longer a fixed 7200 s. (Audit: 3 × timeout + 600 s.)
+- **DECIDED (2026-10-29):** `--agent agents/mini-swe-agent` resolves via the `AGENTS` registry by basename; model from `--model` or `.env` (2026-10-30: `HARNESS_MODEL`); agent name, model and submodule SHA recorded per run.
 **Explain-back:** Walk through one trial line by line. What happens on agent timeout? Where does the trajectory end up? Why does mini run on the host? When is a dead container the agent's fault?
 
 ## Phase 4+5 — Database + queue + workers + status/results (merged 2026-10-29)
@@ -137,23 +141,53 @@ Decisions and survey: `action-space.md`.
 - `kill_agent_processes` repeats its `/proc` pass (fork loops); workspace volume removal retried, leftovers logged.
 - `harness status` warns when trials wait and no worker is running.
 - Break-it cases covered by tests: bad image name, grader crash, fork loop, container killed from inside, worker killed (lease) or interrupted (signal).
+- 2026-10-30: `harness worker --max-running N` (global cap across workers, checked in the claim; `database.md` #15);
+  mini's model calls capped at the trial's remaining time (`agents-and-runner.md` → Built); `run --concurrency`
+  without `--wait` is a usage error.
 - Cost + time tracking (schema v4, `database.md` #20–23): tokens / model calls / cost per attempt, always recorded (error, timeout, interrupt); phase timestamps; `harness run --max-run-cost` (`skipped_budget`); `status` live spend + elapsed; `results` cost per (passing) task, tokens, time breakdown, throughput.
 
 **Not done:** `harness cancel`, a Docker daemon restart mid-run (untested; containers then read as gone → retryable `infra_error`).
 
 ## Phase 7 — Extensions (pick by time left)
 
+Built:
+
 - ~~Claude Code agent adapter~~ built 2026-10-29 (`action-space.md`).
-- **τ²-bench (designed, not built; out of scope for the take-home):** an adapter whose `mcp_servers(task)` serves
-  τ²'s own code from one MCP sidecar: the domain's tools (airline / retail / telecom) and the simulated user
-  (as a tool, or driven by `run_agent` as a second agent), graded by τ²'s own evaluator (reward from the final
-  domain database state + the conversation). Precedent: Harbor's tau3 adapter (MCP sidecar). Needs `grade()` to
-  reach the service sidecar's state (open question in `action-space.md`); mini is `unsupported` for it.
-- `harness validate --benchmark X` with `NullAgent` / `OracleAgent` (reuses Phase 1 oracle solutions).
-- "Add a benchmark" Claude Code skill gated on `harness validate`.
-- A GUI for the CLI (idea, 2026-10-29): e.g. `harness status --gui` serving a local live dashboard of runs/trials from `runs/harness.db`, or a terminal UI (live-updating `status`).
+- ~~`harness validate --benchmark X` with `NullAgent` / `OracleAgent`~~ built 2026-10-29 (reference solutions moved
+  into the adapters; `adapters.md` → Built).
+- ~~"Add a benchmark" Claude Code skill gated on `harness validate`~~ built 2026-10-29
+  (`.claude/skills/add-benchmark/SKILL.md` + `harness adapt`); proof: the `terminal-bench` adapter (3 tasks),
+  drafted by `harness adapt`, hand-fixed, 2026-10-30.
+- ~~`harness parity`~~ built 2026-10-29 (baseline C: `Benchmark.original_workflow`).
+- ~~A GUI for the CLI (idea: `harness status --gui` or a TUI)~~ built 2026-10-29 as `harness dashboard` (read-only
+  local web view).
+- One harness-wide model setting (`HARNESS_MODEL`, `Agent.native_model()`), 2026-10-30.
+
+Not built: τ²-bench (designed, out of scope for the take-home): an adapter whose `mcp_servers(task)` serves
+τ²'s own code from one MCP sidecar: the domain's tools (airline / retail / telecom) and the simulated user
+(as a tool, or driven by `run_agent` as a second agent), graded by τ²'s own evaluator (reward from the final
+domain database state + the conversation). Precedent: Harbor's tau3 adapter (MCP sidecar). Needs `grade()` to
+reach the service sidecar's state (open question in `action-space.md`); mini is `unsupported` for it.
 
 ## Phase 8 — Deliverables
 
+Built 2026-10-29, kept current since:
+
 - README: setup, run instructions, write-up, design decisions (link `ideation/`).
-- Architecture diagram (Excalidraw).
+- Architecture diagram: Mermaid in the README, `docs/architecture.excalidraw`, `docs/architecture.md`.
+
+## Remaining: extensions (not built)
+
+Each is designed or noted in the linked doc; none is needed for Parts 1–2.
+
+- `harness cancel` (Phase 6 leftover) and `harness tasks` (Phase 1).
+- `harness regrade` / grading from a snapshot (`trial-phases.md` → If we revisit).
+- Pipelined grading pool (Scale-up above).
+- Multi-machine workers: SQLite → Postgres with SQLAlchemy Core + Alembic (`database.md` #8, #10).
+- The unprivileged `agent` user and `agent_user` (`security.md` (a)); network as a benchmark-declared world
+  property with a model-API-only allowlist (`environment.md` → Network, `security.md` → Network).
+- τ²-bench via an MCP sidecar (Phase 7); GUI / desktop benchmarks (`action-space.md` → Still open).
+- Parity beyond mini-swe-agent on the two starter benchmarks: `original_workflow` for Claude Code and for
+  Terminal-Bench (`adapters.md` → Built).
+- Open for Cindy: mini's `environment.env` (PAGER=cat etc.) that parity showed our `MiniSweAgent` drops
+  (`adapters.md` → Built).

@@ -1,8 +1,9 @@
 # Validating adapters, parity, and AI-written adapters
 
-**Status:** built 2026-10-29: `harness validate`, `harness parity` (baseline C), the
-`add-benchmark` skill and `harness adapt`. Sections 1–2 were the design; "Built" below records
-what changed while building.
+**Status:** built 2026-10-29/30: `harness validate`, `harness parity` (baseline C), the
+`add-benchmark` skill, `harness adapt`, and the Terminal-Bench proof. Sections 1–2 were the design; "Built" below
+records what changed while building (it supersedes 1–2 where they differ). Open: mini's `environment.env`
+difference parity found; no `original_workflow` for Claude Code or Terminal-Bench.
 
 Both are optional extensions on top of the core harness. They build on the
 `Benchmark` adapter interface (`tasks`, `setup`, `run_agent`, `grade`) and answer the
@@ -23,7 +24,8 @@ built-in fake agents:
 | Image check | — | image pulls, required tools exist (e.g. python for in-container grading) | alpine-has-no-python style surprises |
 
 - Neither sample benchmark ships solutions, so we write oracle solutions for
-  them (e.g. `benchmarks/<name>/solutions/<task_id>.sh`) — tiny for these tasks.
+  them (e.g. `benchmarks/<name>/solutions/<task_id>.sh`) — tiny for these tasks. (Built instead as
+  harness-written `Benchmark.reference_solution(task)` in each adapter; see Built.)
   Benchmarks without solutions get the null check only, reported as such.
 - Output: per-task pass/fail table plus a summary; non-zero exit if any check
   fails so it can run in CI.
@@ -45,7 +47,8 @@ new adapter, with `harness validate` as the gate:
 
 1. Read the new benchmark's README, dataset and scripts.
 2. Read the `Benchmark` base class and one existing adapter as the example.
-3. Write `adapters/<name>.py` (+ oracle solutions if missing and feasible).
+3. Write `adapters/<name>.py` (+ oracle solutions if missing and feasible). (Built: `src/agentic_harness/benchmarks/<name>.py`,
+   its `BENCHMARKS` entry and `tests/test_<name>.py`.)
 4. Run `harness validate --benchmark <name>`; fix and repeat until it passes.
 5. Report what it assumed (how pass/fail is read, what the grader needs installed).
 
@@ -127,7 +130,7 @@ container, copied in only to run).
 ### Proof: Terminal-Bench, drafted by `harness adapt` (2026-10-30)
 
 `harness adapt benchmarks/terminal-bench --tasks 3 --model sonnet --max-budget-usd 3` wrote
-`benchmarks/terminal_bench.py`, its registry entry and `tests/test_terminal_bench.py`; validate passed
+`src/agentic_harness/benchmarks/terminal_bench.py`, its registry entry and `tests/test_terminal_bench.py`; validate passed
 3/3 + 3/3 on its first run (commit `4d32315`, unedited).
 
 - **Got right:** each task's own Dockerfile built via `build_image` (base images pre-pulled); the

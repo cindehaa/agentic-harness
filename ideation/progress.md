@@ -1,11 +1,26 @@
 # Progress
 
 **Last updated:** 2026-10-30
-**Now:** one harness-wide model setting (2026-10-30, `agents-and-runner.md` → Config): `--model`, else `HARNESS_MODEL` in `.env`, translated per agent by `Agent.native_model()`; `MSWEA_MODEL_NAME` kept only for the `mini` CLI examples. Network as a benchmark-declared world property: designed, not built (`environment.md` / `security.md` → Network). Before that: adapter checks built (2026-10-29/30, [`adapters.md`](adapters.md) → Built): `harness validate` (NullAgent must fail, OracleAgent applies `Benchmark.reference_solution` and must pass; harness-written vs benchmark-provided solutions), `harness parity` (baseline C: `Benchmark.original_workflow` = the benchmark's own scripts + mini's own `DockerEnvironment`; live bash-operations × mini 3 runs: 1.000 ± 0 both sides, ranges overlap, $0.015), `.claude/skills/add-benchmark/SKILL.md` + `harness adapt` (claude -p drafts, then validate). Proof: `TerminalBench` adapter (hello-world, log-summary, sqlite-db-truncate) drafted by `harness adapt`, hand-fixed, validate 3/3 + 3/3. Awaiting Cindy's review. Before that: cost + time tracking built (2026-10-29, `database.md` #20–23): agents report tokens, model calls and cost (also on error / timeout / interrupt; recorded at each turn's end), per-attempt phase timestamps, `harness run --max-run-cost` (waiting trials end `skipped_budget`), `status` live spend + elapsed, `results` cost per task / per passing task, tokens, time breakdown. Schema v4: an older `runs/harness.db` must be deleted. Awaiting Cindy's review. Before that: `harness dashboard` built (2026-10-29): a read-only local web view (`dashboard.py`, standard-library server on 127.0.0.1, SQLite opened `mode=ro`; `dashboard/` React + htm, no build step) of runs, trials, attempts and traces, polling every 2 s. Awaiting Cindy's review. Before that: Phase 6 hardening built (2026-10-29, `implementation-plan.md` → Phase 6): `harness results` summary by default with wall time and queue wait, graceful Ctrl-C / SIGTERM (trials handed back as "worker interrupted"), `harness cleanup [--all] [--images]`, explicit time-bounded image pre-pull at run setup, repeated pre-grade kill passes, retried volume removal, `status` no-worker warning. Schema v3 (`attempts.started_at` / `finished_at`): an older `runs/harness.db` must be deleted. Awaiting Cindy's review. Before that: action space + MCP + Claude Code built (2026-10-29, [`action-space.md`](action-space.md)): one `AgentCapabilities` check in the runner, MCP servers as network-only attached sidecars (`Benchmark.mcp_servers`, `Environment.attach(Sidecar)`), `exec(env=, user=)`, `ClaudeCode` adapter (in-world, cached derived image, `--mcp-config`, stream-json trace). Live on Haiku 5.5: bash-operations 0.80, python-tasks 1.00, MCP fixture pass. Awaiting Cindy's review. τ²-bench: designed, not built (out of scope). Before that: general grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
-**Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
-**Next:** `harness cancel` (Phase 6 leftover); Phase 7 extensions.
+**Now:** Parts 1–2 and the chosen extensions are built: every phase 0–8, the Claude Code agent, MCP sidecars, cost + time tracking, the dashboard, `validate` / `parity` / `adapt` and the Terminal-Bench proof. Docs checked against the code (2026-10-30). Awaiting Cindy's line-by-line review of everything from Phase 4+5 on.
+**Errors:** every failure point and its outcome: [`errors.md`](errors.md).
+**Next:** Cindy's review and explain-back; one open question (mini's `environment.env`, which parity showed we drop, [`adapters.md`](adapters.md) → Built); the extensions in [`implementation-plan.md`](implementation-plan.md) → Remaining (gray below).
 
-Legend: 🟩 done / decided · 🟨 in progress · 🟥 next up · ⬜ not started · ⬜ dashed border = open question · dashed arrow = decision applies here
+## Log (newest first)
+
+- 2026-10-30: `harness worker --max-running N` (global cap on running trials across workers, checked inside the claim); mini's model calls capped at the trial's remaining time; `run --concurrency` without `--wait` is a usage error.
+- 2026-10-30: one harness-wide model setting: `--model`, else `HARNESS_MODEL`, translated per agent by `Agent.native_model()`; `MSWEA_MODEL_NAME` only for the `mini` CLI examples ([`agents-and-runner.md`](agents-and-runner.md) → Config). Network as a benchmark-declared world property: designed, not built ([`environment.md`](environment.md) → Network).
+- 2026-10-30: `TerminalBench` adapter (hello-world, log-summary, sqlite-db-truncate) drafted by `harness adapt`, hand-fixed; validate 3/3 + 3/3 ([`adapters.md`](adapters.md) → Proof).
+- 2026-10-29: adapter checks: `harness validate` (NullAgent must fail, OracleAgent applies `Benchmark.reference_solution` and must pass), `harness parity` (baseline C; live bash-operations × mini, 3 runs: 1.000 ± 0 both sides, $0.015), `.claude/skills/add-benchmark/SKILL.md` + `harness adapt`.
+- 2026-10-29: cost + time tracking ([`database.md`](database.md) #20–23, schema v4): tokens, model calls and cost per attempt (always recorded), phase timestamps, `--max-run-cost` (`skipped_budget`), live spend in `status`, cost / time metrics in `results`.
+- 2026-10-29: `harness dashboard`: read-only local web view (`dashboard.py`, standard-library server on 127.0.0.1, SQLite opened read-only; `dashboard/` React + htm, no build step).
+- 2026-10-29: Phase 6 hardening ([`implementation-plan.md`](implementation-plan.md) → Phase 6): results summary by default, graceful Ctrl-C / SIGTERM, `harness cleanup [--all] [--images]`, explicit image pre-pull, repeated pre-grade kill passes, retried volume removal, no-worker warning.
+- 2026-10-29: action space + MCP + Claude Code ([`action-space.md`](action-space.md)): `AgentCapabilities` check, MCP servers as network-only sidecars, `exec(env=, user=)`, `ClaudeCode` adapter. Live on Haiku 5.5: bash-operations 0.80, python-tasks 1.00, MCP fixture pass.
+- 2026-10-29: grading in an attached grader sidecar ([`environment-and-grading.md`](environment-and-grading.md) #7).
+- 2026-10-29: architecture-audit refactor ([`audit-2026-10-29.md`](audit-2026-10-29.md)).
+- 2026-10-29: Phase 4+5 merged: database, queue, workers, `status` / `results` ([`database.md`](database.md) #9–19).
+- 2026-10-29: Phase 3: agent + trial runner ([`agents-and-runner.md`](agents-and-runner.md)); Phases 0–1 before it.
+
+Legend: 🟩 built / decided and built · 🟨 in progress · 🟥 next up · ⬜ not built · ⬜ dashed border = open question · dashed arrow = decision applies here
 
 ```mermaid
 flowchart TB
@@ -19,25 +34,26 @@ flowchart TB
     read["Read benchmark scripts + DockerEnvironment"]
   end
 
-  subgraph DEC["Decided (see environment-and-grading.md, task-input.md, environment.md, security.md, fidelity-vs-integrity.md, agents-and-runner.md)"]
+  subgraph DEC["Decided (environment-and-grading.md, task-input.md, environment.md, security.md, fidelity-vs-integrity.md, agents-and-runner.md)"]
     direction LR
-    d_own["Harness owns containers; agents get Environment handle"]
-    d_db["Only harness writes DB"]
-    d_sleep["Container keep-alive: sleep timeout+margin"]
+    d_own["Harness owns containers; agents get an Environment handle"]
+    d_db["Only the harness writes the DB"]
+    d_sleep["Container keep-alive: sleep 3 x trial timeout + 600 s"]
     d_same["Grade in an attached grader sidecar: shares the trial's workspace volume, network, processes (2026-10-29; was same container)"]
     d_pre["Pre-grade: kill leftover agent procs, save workspace.tar, start the grader (grader files only in the grader)"]
-    d_out["Outcome: graded / grader_error / infra_error / unsupported, infra_error = infra, retried (renamed from error 2026-10-29)"]
+    d_out["Outcome: graded / grader_error / infra_error / unsupported (+ skipped_budget per trial); only retryable infra_error retried"]
     d_score["Score → number: Inspect-style default, per-benchmark override"]
-    d_grerr["grader_error excluded from accuracy, reported prominently (count + list); accuracy = mean over graded only (2026-10-29)"]
-    d_integ["Integrity = trace + saved workspace (no special mechanism; fidelity-vs-integrity.md)"]
+    d_grerr["grader_error excluded from accuracy, reported prominently; accuracy = mean over graded only"]
+    d_integ["Integrity = trace + saved workspace (fidelity-vs-integrity.md)"]
     d_logs["Exec output streamed to host artifacts"]
-    d_deps["Grader tools come from Benchmark.grader_image (pre-pulled in setup); nothing installed at grade time (2026-10-29)"]
+    d_deps["Grader tools come from Benchmark.grader_image (pre-pulled); nothing installed at grade time"]
     d_turns["Turn model (benchmark-driven turns)"]
-    d_iface["Benchmark API locked: tasks / setup / run_agent / grade"]
+    d_iface["Benchmark API: tasks / setup / run_agent / grade(task, grader, env, transcript)"]
     d_bake["Setup baked into images (D)"]
-    d_metr["METR-style hidden grader assets"]
-    d_cred["Credentials: allowlist + redaction"]
-    d_env["Environment API locked: start/stop/exec/write_file/read_file/upload/download"]
+    d_cred["Credentials: allowlist (forward_env) + redaction"]
+    d_env["Environment API: start/stop/exec/write_file/read_file/upload/download"]
+    d_metr["METR-style hidden grader assets: unprivileged agent user (designed, not built)"]
+    d_net["Network as a benchmark-declared world property (designed 2026-10-30, not built)"]
   end
 
   subgraph P1["Phase 1: core types + Docker environment + benchmark adapters"]
@@ -47,38 +63,39 @@ flowchart TB
     reg["Benchmark registry"]
     envabc["Environment ABC"]
     dockenv["DockerEnvironment"]
-    mount["Workspace in container + download"]
+    mount["Workspace: named volume per trial; save_workspace / download"]
     cleanup["Guaranteed cleanup (context manager, labels)"]
     hcleanup["harness cleanup command"]
     bashad["BashOperations adapter"]
     pyad["PythonTasks adapter"]
-    oracle["Oracle solutions + adapter tests"]
-    tasks["harness tasks"]
+    oracle["Reference solutions (harness-written) + adapter tests"]
+    tasks["harness tasks (not built)"]
   end
 
   subgraph P3["Phase 3: agent + trial runner (agents-and-runner.md)"]
     direction TB
     subgraph P3D["Decided 2026-10-29"]
       direction LR
-      d3_reg["Agent registry AGENTS; --agent = name or path (basename); --model overrides .env; record agent, model, submodule SHA per run"]
+      d3_reg["Agent registry AGENTS; --agent = name or path (basename); --model, else HARNESS_MODEL (2026-10-30); versions recorded per run"]
       d3_host["mini runs on host via Python API; env wrapper forwards execute to env.exec; API key never in container"]
-      d3_multi["Multi-turn built now: 2nd send() continues mini's history"]
-      d3_reply["Reply = agent's own submission only; mini exit status kept in records"]
-      d3_lim["Limits: deadline in command wrapper + mini cost/step + model-call timeout; 10 min, $1, 50 steps, 60 s/command; lifetime = timeout + margin"]
-      d3_dead["Container death in agent turn: docker inspect decides infra_error vs graded-failed; drop --rm"]
-      d3_files["Until DB: runs/run_id/trial_id/attempt-n/ (outcome, transcript, trajectory)"]
-      d3_errs["Error paths (errors.md): AgentLimitation (context full, model refused) → grade as is; provider/auth/unknown → infra_error; grading DockerError → re-check container state"]
+      d3_multi["Multi-turn: 2nd send() continues mini's history"]
+      d3_reply["Reply = agent's own submission only; exit status kept in records"]
+      d3_lim["Limits: deadline in command wrapper + cost/step limits + model-call timeout; 10 min, $1, 50 steps, 60 s/command"]
+      d3_dead["Container death in agent turn: EndReason decides infra_error vs graded fail; no --rm"]
+      d3_files["Attempt folders: runs/RUN/TASK/attempt-ID/"]
+      d3_errs["Error paths (errors.md): AgentLimitation → grade as is; TransientError → retryable infra_error; auth / bugs → infra_error, not retried"]
     end
-    agentsess["AgentSession stub (send)"]
+    agentsess["AgentSession (send)"]
     agentabc["Agent registry + adapters"]
     mini["MiniSweAgent adapter (host, env wrapper, multi-turn)"]
-    norm["DockerEnvironment: drop --rm, lifetime from trial limit"]
+    norm["DockerEnvironment: no --rm, lifetime from trial limit"]
     subgraph TR["Trial runner"]
       direction LR
       startenv["start env"] --> agentph["agent"] --> died["container died?"] --> killleft["kill leftovers"] --> grade["grade"] --> record["write outcome / transcript (trace: events.jsonl as it happens)"] --> stopenv["stop env (always)"]
     end
-    fb["Fallbacks: retry start env, timeout→grade, regrade"]
-    runsync["harness run (sync)"]
+    fb["Fallbacks: retryable infra_error retried; timeout → graded as is"]
+    regrade["harness regrade (not built)"]
+    runsync["harness run --wait (was: sync run)"]
   end
 
   subgraph P4["Phase 4+5 (merged): persistence + status/results"]
@@ -88,7 +105,7 @@ flowchart TB
       truns[("runs")] --> ttrials[("trials")] --> tatt[("attempts")]
       tatt --> tev[("events")]
     end
-    d4_schema["Decided 2026-10-29 (database.md): runs/harness.db, WAL; queue in trials; attempts never overwritten; score raw JSON + score_float; agent-neutral events by turn; files in attempts.artifacts_dir (no artifacts table); versions + config per run"]
+    d4_schema["Decided 2026-10-29 (database.md): runs/harness.db, WAL; queue in trials; attempts never overwritten; score raw JSON + score_float; agent-neutral events by turn; files in attempts.artifacts_dir; versions + config per run"]
     traj["Trace: events.jsonl → events (RecordingSession + RecordingEnvironment)"]
     files["Artifacts on disk"]
     status["harness status"]
@@ -101,9 +118,9 @@ flowchart TB
     enqueue["harness run enqueues"]
     claim["Atomic claim + lease"]
     worker["harness worker --concurrency N"]
-    retry["Retry policy: retry infra_error only"]
-    d5_setup["Decided: first worker claims runs.setup_claimed_by, runs setup(), sets run running; trials claimable only then; setup failure → run failed, trials infra_error"]
-    d45["Decided 2026-10-29 (database.md #9–18): run returns id (--wait = inline worker); sqlite3 + handwritten SQL in store.py; BEGIN IMMEDIATE claim; 120 s lease renewed every 30 s; infra_error retried up to 3 attempts; worker threads; events.jsonl → events per turn; secret redaction; grader that can't start → infra_error"]
+    retry["Retry policy: retryable infra_error only"]
+    d5_setup["Decided: first worker claims runs.setup_claimed_by, runs setup(), sets run running; setup failure → run failed, trials infra_error"]
+    d45["Decided 2026-10-29 (database.md #9–19): run returns id (--wait = inline worker); sqlite3 + handwritten SQL; BEGIN IMMEDIATE claim; 120 s lease, 30 s heartbeat; fenced writes; up to 3 attempts; threads; secret redaction"]
   end
 
   subgraph AUD["Architecture audit (2026-10-29, audit-2026-10-29.md)"]
@@ -136,19 +153,30 @@ flowchart TB
     p6_kill["kill_agent_processes: repeated /proc passes"]
     p6_vol["Volume removal retried; leftovers logged"]
     cost["Cost + time tracking: tokens / calls / cost per attempt (always recorded), phase timestamps, --max-run-cost (skipped_budget), status spend, results metrics (schema v4)"]
-    cancel["harness cancel"]
     dash["harness dashboard: read-only web view (runs, trials, attempt traces)"]
     breakit["Break-it tests"]
+    maxrun["Global cap: worker --max-running N across all workers (2026-10-30)"]
+    p6_mtime["mini model calls capped at the trial's remaining time (2026-10-30)"]
+    cancel["harness cancel (not built)"]
   end
 
   subgraph P7["Phase 7: extensions"]
     direction TB
-    claude["ClaudeCode adapter"]
     validate["harness validate"]
     nullor["Null / Oracle agents + Benchmark.reference_solution"]
     skill["Add-benchmark skill + harness adapt"]
     parity["harness parity: baseline C (Benchmark.original_workflow, agent's own Docker mode)"]
     tbench["TerminalBench adapter (3 tasks), drafted by harness adapt, hand-fixed, validates"]
+    model["One model setting: --model / HARNESS_MODEL, Agent.native_model (2026-10-30)"]
+    origmore["original_workflow for Claude Code and Terminal-Bench (not built)"]
+    q_env["Open: mini.yaml environment.env (PAGER=cat ...) dropped by our MiniSweAgent; parity found it"]
+  end
+
+  subgraph SCALE["Scale-up (designed, not built)"]
+    direction LR
+    pipe["Pipelined grading pool"]
+    pg["Multi-machine workers: Postgres + SQLAlchemy Core + Alembic"]
+    gui["GUI / desktop benchmarks (display + tools beyond the shell)"]
   end
 
   subgraph P8["Phase 8: deliverables"]
@@ -180,6 +208,7 @@ flowchart TB
   dockenv --> startenv
   TR --> fb
   TR --> runsync
+  fb -.-> regrade
   record --> tatt
   a_rec --> traj --> tev
   record --> files --> tatt
@@ -189,15 +218,17 @@ flowchart TB
   worker --> claim --> ttrials
   worker --> TR
   claim --> retry
-  P5 --> AUD --> ACT --> P6
+  P5 --> AUD --> ACT --> P6 --> P7 --> P8
   x_caps --> x_mcp --> x_exec --> x_cc -.-> x_tau
-  agentabc --> claude
+  agentabc --> x_cc
   nullor --> validate
   oracle --> nullor
   validate --> skill
   validate -.-> parity
   skill --> tbench
-  P7 --> P8
+  parity -.-> origmore
+  parity -.-> q_env
+  P7 -.-> SCALE
   d_own -.-> envabc
   d_own -.-> agentabc
   d_sleep -.-> dockenv
@@ -234,6 +265,7 @@ flowchart TB
   d_bake -.-> bashad
   d_bake -.-> pyad
   d_metr -.-> grade
+  d_net -.-> dockenv
   d_cred -.-> agentabc
   d_cred -.-> record
   d_env -.-> envabc
@@ -245,19 +277,18 @@ flowchart TB
   classDef open fill:#ececec,stroke:#999,color:#555,stroke-dasharray:4 3
 
   class repo,base,notes,cmd,ex,read done
-  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_metr,d_cred,d_score,d_grerr,d_integ done
+  class d_own,d_db,d_sleep,d_same,d_pre,d_out,d_logs,d_deps,d_turns,d_iface,d_env,d_bake,d_cred,d_score,d_grerr,d_integ done
   class d3_reg,d3_host,d3_multi,d3_reply,d3_lim,d3_dead,d3_files,d3_errs done
-  class types,envabc,benchabc,agentsess,dockenv,mount,cleanup done
+  class types,envabc,benchabc,agentsess,dockenv,mount,cleanup,hcleanup done
   class q_status,d4_schema,d5_setup,d45 done
   class reg,bashad,pyad,oracle done
-  class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync done
-  class truns,ttrials,tatt,tev,files,status,results,enqueue,claim,worker,retry done
-  class traj done
+  class agentabc,mini,norm,startenv,agentph,died,killleft,grade,record,stopenv,runsync,fb done
+  class truns,ttrials,tatt,tev,files,status,results,enqueue,claim,worker,retry,traj done
   class a_port,a_retry,a_life,a_lim,a_lazy,a_rec,a_cfg,a_small done
+  class x_caps,x_mcp,x_exec,x_cc done
+  class prepull,p6_stop,p6_res,p6_status,p6_kill,p6_vol,cost,dash,breakit,maxrun,p6_mtime done
+  class validate,nullor,skill,parity,tbench,model done
   class readme,diagram done
-  class x_caps,x_mcp,x_exec,x_cc,claude done
-  class x_tau open
-  class hcleanup,prepull,p6_stop,p6_res,p6_status,p6_kill,p6_vol,breakit,dash,cost done
-  class tasks,fb,cancel todo
-  class validate,nullor,skill,parity,tbench done
+  class d_metr,d_net,tasks,regrade,x_tau,cancel,origmore,pipe,pg,gui todo
+  class q_env open
 ```

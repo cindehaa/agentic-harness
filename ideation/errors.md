@@ -1,6 +1,6 @@
 # Error paths in a trial
 
-**Last updated:** 2026-10-29
+**Last updated:** 2026-10-30
 
 A living doc: every place a trial can fail, and which outcome it ends in.
 Conditions are the code's own (`runner.py`, `worker.py`, `store.py`,
@@ -84,21 +84,18 @@ flowchart TB
     lg["graded"]
     lge["grader_error"]
     lie["infra_error"]
-    lun["unsupported"]
-    lpl["planned (not built)"]
+    lun["unsupported / skipped_budget"]
   end
 
   classDef graded fill:#d3f0d3,stroke:#1e5e1e,color:#1e5e1e
   classDef gradererr fill:#ffe0a8,stroke:#8a5a00,color:#6b4500
   classDef infraerr fill:#f8d0d0,stroke:#7a1f1f,color:#7a1f1f
   classDef unsupported fill:#e0e0e0,stroke:#666,color:#444
-  classDef planned fill:#f5f5f5,stroke:#999,color:#777,stroke-dasharray:4 3
 
   class G,GF,lg graded
   class GE,lge gradererr
   class IE1,IE2,IE3,IE5,lost,intr,final,abort,refuse,lie infraerr
   class UN,lun,SB unsupported
-  class lpl planned
 ```
 
 Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).

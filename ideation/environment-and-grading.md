@@ -1,5 +1,8 @@
 # Decision: the harness owns containers; grading runs in an attached grader sidecar
 
+**Status:** #1 and #7 built (2026-10-29). #2 and the grade-time install are superseded by #7 and kept for the
+reasoning; #3 is updated in place.
+
 ## 1. The harness owns every container
 
 **Decision:** the harness alone starts, `exec`s into, and stops containers.
@@ -7,15 +10,16 @@ Agents never start containers. They receive an `Environment` handle
 (`exec`, copy in/out) and send their commands through it. Only the harness
 writes to the DB. Neither the agent nor anything inside the container does.
 
-- Each trial container starts with `sleep <trial timeout + margin>` as its
-  main process. A container lives only while its main process runs, so this
+- Each trial container starts with `sleep <lifetime>` as its
+  main process (lifetime = 3 × trial timeout + 600 s since the 2026-10-29 audit; was trial timeout + margin). A container lives only while its main process runs, so this
   keeps it alive for `docker exec`. It also acts as a self-destruct timer:
   if the harness crashes without cleaning up, the container still exits
   shortly after the trial would have timed out.
 - This keeps us from overfitting to mini-swe-agent. Its `DockerEnvironment`
   (in the submodule) starts its own container. Our `MiniSweAgent` adapter
-  instead hands it an object that forwards commands to our `env.exec()`, and
-  Claude Code gets the same handle.
+  instead hands it an object that forwards commands to our `env.exec()`.
+  Claude Code is launched through the same handle (`env.exec`), then runs its own
+  tools inside the world (`action-space.md`).
 
 **Why:** one place controls the container lifecycle, timeouts, and cleanup.
 Results can't be forged from inside the sandbox: the harness runs the
@@ -73,7 +77,7 @@ onsite talking point.
    when `agent_user` is root: every process except PID 1 (the init) and its main
    `sleep` (not a plain `kill -9 -1`: that also kills the sleep, and the container
    dies before grading; `environment.md` #9); `pkill -9 -u agent`
-   when the agent runs as the unprivileged `agent` user (see `security.md`).
+   when the agent runs as the unprivileged `agent` user (see `security.md`; not built).
    Either way, nothing the agent left running can interfere with grading.
 2. **Copy the benchmark's grader files in late.** They enter the container
    only now, so the agent never saw them and couldn't edit them.
@@ -105,7 +109,8 @@ This supersedes the earlier `passed` / `failed` (+ reason `grader_error`) /
 
 Every `exec`'s output streams through the harness and is written to the
 attempt's artifact directory on the host
-(`runs/<run_id>/<trial_id>/attempt-<n>/`) as it happens. If the container
+(`runs/<run_id>/<task_id>/attempt-<attempt_id>/`, `database.md` #19; was `attempt-<n>`) as it happens:
+the trace, `events.jsonl`, one `command` event per exec. If the container
 dies mid-trial, everything up to that point is already saved.
 
 ## 6. Out of scope
@@ -166,6 +171,8 @@ time. Host grading has the tools but no live state, and runs agent-written code 
   `localhost` is the trial's) and processes (`--pid container:<trial>`), with the same
   resource limits. Stopped with the trial (the runner's `with`, and the trial's `stop()`
   removes its graders first). The base interface says what is shared, not how.
+  (Generalized the same day: `attach(Sidecar(image, ...))`, with `attach_grader(image)` =
+  `attach(Sidecar(image))`; MCP servers use it with `shares_world=False`, `action-space.md`.)
 - `Benchmark.grader_image(task) -> str`, default `task.image` (the world's own tools).
   `grade(task, grader, env, transcript)`: `grader` is the sidecar; `env` (the trial
   container) stays available for checks only the world's own programs can do.
