@@ -12,10 +12,10 @@ Update this whenever error handling changes.
 ```mermaid
 flowchart TB
   setup["worker (first to claim runs.setup_claimed_by), once per run: Benchmark.setup(tasks) pulls base images and builds the task images; then every grader / MCP-server image is pulled and the agent's derived images built (each pull bounded at 600 s)"]
-  setup -->|"raises"| abort["run failed (traceback + build log in runs/run/setup.log); every trial done as infra_error (not retried)"]
+  setup -->|"raises (incl. an unknown benchmark name, BenchmarkUnavailable: its data, e.g. an opt-in submodule, isn't on disk)"| abort["run failed (traceback + build log in runs/run/setup.log); every trial done as infra_error (not retried)"]
   setup -->|"setup worker's lease expires"| setup
-  preflight["worker start (and harness run at submit): Agent.preflight() for every unfinished run: model known to litellm, its API key set; no tokens spent"]
-  preflight -->|"PreflightError"| refuse["worker refuses to start, names the run; nothing claimed"]
+  preflight["each worker, once per run before claiming any of its work (harness run also checks at submit): benchmark known, agent known, Agent.preflight(): model known to litellm, its API key set; no tokens spent"]
+  preflight -->|"unknown benchmark or agent, PreflightError"| refuse["Store.fail_run: run failed; every trial not done ends infra_error with the reason (not retried; one in flight loses its claim); the worker and the other runs go on"]
   preflight --> setup
   setup --> budget{"run's spend (every attempt's cost_usd, recorded at each turn's end) under runs.max_cost_usd?"}
   budget -->|"yes, or no budget"| claim["a worker claims a trial (lease 120 s, renewed every 30 s)"]
@@ -24,7 +24,7 @@ flowchart TB
   caps -->|"a gap (e.g. mini on a task with MCP servers)"| UN
   caps --> prep["agent.prepare_image(task.image): Claude Code builds its cached derived image"]
   prep -->|"DockerError (build failed, Docker down)"| IE1
-  prep --> startenv["env_factory(image, lifetime_s, limits).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
+  prep --> startenv["env_factory(image, lifetime_s, limits, task.workdir).start(), DockerEnvironment injected by the worker (attempt row + folder attempt-id created with the claim)"]
   claim -->|"lease expires: worker killed or hung"| lost["another worker reclaims it: the open attempt is closed as infra_error (worker lost), counts as an attempt"]
   claim -->|"Ctrl-C / SIGTERM to the worker (harness worker, run --wait)"| intr["worker stops claiming, stops the trial's world (sidecars, volume), closes the attempt as infra_error (worker interrupted), retryable: back to pending at once, counts as an attempt; setup it held is released; a second signal exits at once (leases lapse: worker lost)"]
   startenv -->|"EnvironmentLost (DockerError): missing image, docker run fails, Docker down"| IE1
@@ -135,6 +135,12 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   itself (e.g. `ContentPolicyViolationError` up to 10 times). That is the
   agent's scaffolding, part of what is measured; we don't change it
   (`agents-and-runner.md`). Our retries are whole attempts, for `infra_error` only.
+  The trial deadline still holds (2026-10-30): each call, each retry included, gets at most the time left, and a
+  call due after the deadline raises `TimeLimit` instead (mini's loop ends as for a command past it: graded).
+- **A run that can't run here** (2026-10-30): each worker checks every run once before claiming its work (benchmark
+  and agent known, `Agent.preflight()`). A failure fails that run alone (`Store.fail_run`: trials not done end
+  `infra_error` with the reason, not retried); the worker starts anyway and the other runs keep flowing, so
+  `--exit-when-idle` still exits. (Was: the whole worker refused to start.)
 - **Worker interrupted** (Ctrl-C or SIGTERM to `harness worker` / `run --wait`).
   The worker stops claiming, stops the worlds of its trials in flight (with their
   sidecars and volumes), closes each open attempt as a retryable `infra_error`

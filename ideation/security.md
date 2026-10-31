@@ -48,7 +48,8 @@ The code needs only two mechanisms:
    `docker exec -e`, never written into image layers.
 2. **Redaction at the log boundary.** The recorder replaces `.env` values
    with `***` (built: values whose key contains KEY / TOKEN / SECRET / PASSWORD and that are ≥ 8 characters,
-   `redact.py`, `database.md` #17).
+   `redact.py`, `database.md` #17). Since 2026-10-30 also secret-named variables in the harness's environment (a key
+   exported in the shell, not in `.env`) and every forwarded variable (`forward_env`), whatever its name.
 
 mini-swe-agent runs on the host, so its key never enters a container.
 

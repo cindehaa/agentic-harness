@@ -74,8 +74,9 @@ As built today (`runner.py`; every failure point: `errors.md`):
   translates it with `Agent.native_model()` (mini: as is; Claude Code: without `anthropic/`). `MSWEA_MODEL_NAME`
   stays in `.env` only for the starter's `mini` CLI examples. Workers build the agent from that; adapters never read `os.environ` for it.
   No model → a clear CLI error, nothing submitted.
-- `Agent.preflight()` (mini: litellm knows the model, its provider's key is set; no tokens spent) runs at submit and
-  when a worker starts, before it claims anything (`errors.md`).
+- `Agent.preflight()` (mini: litellm knows the model, its provider's key is set; no tokens spent) runs at submit and,
+  in each worker, once per run before it claims any of that run's work; a run that fails it fails alone (2026-10-30,
+  `errors.md`; was: the worker refused to start).
 - `harness run` flags for the limits: `--trial-timeout` (600 s), `--cost-limit` ($1), `--max-steps` (50),
   `--memory` (2g), `--cpus` (1.0); stored in `runs.config`. `--concurrency` stays on `harness worker` and `run --wait`.
 

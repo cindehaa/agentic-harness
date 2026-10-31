@@ -11,18 +11,18 @@ This page adds the component map, the queue's state machines, and where data liv
 |---|---|---|
 | CLI | `cli.py` | Validates and submits runs (agent pre-flight, model resolved, limits and versions stored); reads status and results; `cleanup`. Runs trials itself only in `run --wait` (an inline worker), `validate` and `parity` |
 | Dashboard | `dashboard.py`, `dashboard/` | `harness dashboard`: a standard-library HTTP server on 127.0.0.1 reading the DB (opened read-only) and attempt folders; a React + htm page, no build step |
-| Worker | `worker.py` | N threads per process. Each loop: reclaim expired leases → claim a run's setup or a trial (with `--max-running`, only while fewer trials run across all workers) → run it under a lease heartbeat → commit the outcome |
+| Worker | `worker.py` | N threads per process. Each loop: check new runs once (benchmark and agent known, agent pre-flight; a run that fails fails alone) → reclaim expired leases → claim a run's setup or a trial (with `--max-running`, only while fewer trials run across all workers) → run it under a lease heartbeat → commit the outcome |
 | Store | `store.py` | The SQLite schema and every query: atomic claims, fenced writes, retries, spend and the run budget, accuracy |
 | Metrics | `metrics.py` | Cost and time metrics for `results`, derived from the attempts' spend and phase timestamps |
 | Trial runner | `runner.py` | One attempt start to finish; turns every failure into an `Outcome` (never raises) |
 | Recording | `recording.py` | Wraps the agent session and the agent's world; appends every message and command to `events.jsonl` |
-| Redaction | `redact.py` | Masks `.env` secrets in everything written |
+| Redaction | `redact.py` | Masks secrets in everything written: `.env` values, secret-named environment variables, every variable an agent forwards into its world |
 | Benchmark port | `benchmarks/base.py` | `tasks`, `setup`, `run_agent`, `grade`; optional `grader_image`, `requirements`, `mcp_servers`, `version`, `score_to_float`, `reference_solution`, `original_workflow` |
 | Benchmarks | `benchmarks/` | `bash-operations`, `python-tasks`, `terminal-bench` (3 tasks, drafted by `harness adapt`) |
-| Agent port | `agents/base.py` | `Agent.start` → `AgentSession.send`; `capabilities`, `prepare_image`, `native_model`, `preflight`, `version`, `stats`, `new_events`; the agent-side exceptions |
+| Agent port | `agents/base.py` | `Agent.start` → `AgentSession.send`; `capabilities`, `forward_env`, `prepare_image` / `image_for`, `native_model`, `preflight`, `version`, `stats`, `new_events`; the agent-side exceptions |
 | Agents | `agents/` | `mini-swe-agent` (on the host, acts through our `exec`), `claude-code` (inside the world, cached derived image); `fake.py`: `NullAgent` / `OracleAgent` for `validate` (not in `AGENTS`) |
 | Environment port | `environments/base.py` | `exec` (with `env=`, `user=`), file transfer, `state` (+ `EndReason`), `kill_agent_processes`, `save_workspace`, `attach(Sidecar)` / `attach_grader` |
-| Docker backend | `environments/docker.py` | The `docker` CLI via `subprocess`: containers, named workspace volumes, limits, grader and MCP sidecars, image builds and pulls |
+| Docker backend | `environments/docker.py` | The `docker` CLI via `subprocess`: containers, named workspace volumes (mounted at the task's `workdir`, starting with the image's files there), limits, grader and MCP sidecars, image builds and pulls |
 | Adapter checks | `validate.py`, `parity.py`, `original.py` | `harness validate` (null + oracle agents through `run_trial`); `harness parity` (statistics; the benchmark's original way with mini's own Docker mode). `harness adapt` (in `cli.py`) runs `claude -p` with `.claude/skills/add-benchmark/SKILL.md` |
 
 Dependencies point inward: the runner imports only the three ports, and the worker injects the backend
@@ -38,6 +38,8 @@ stateDiagram-v2
   [*] --> pending: harness run
   pending --> running: a worker claims setup (leased) and Benchmark.setup() succeeds
   pending --> failed: setup raises (setup.log saved; every trial ends infra_error)
+  pending --> failed: a worker's pre-flight check of the run fails (unknown benchmark or agent, key missing)
+  running --> failed: the same check, in a worker started later (every trial not done ends infra_error)
   running --> done: last trial done
   running --> done: budget (--max-run-cost) spent and nothing in flight (waiting trials end skipped_budget)
 ```
@@ -54,6 +56,8 @@ stateDiagram-v2
   running --> pending: lease expired (worker lost): attempt closed as infra_error by another worker
   running --> pending: worker interrupted (Ctrl-C / SIGTERM): attempt closed as retryable infra_error
   pending --> done: run budget spent before it started (skipped_budget, no attempt)
+  pending --> done: its run failed a worker's pre-flight check (infra_error, not retried)
+  running --> done: the same; the worker running it loses its claim
 ```
 
 Every write that ends an attempt or renews a lease is fenced on `claimed_by` and `attempt_count`, so a worker that

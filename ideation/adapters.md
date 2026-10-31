@@ -138,7 +138,9 @@ container, copied in only to run).
   `task.yaml` instruction verbatim; Terminal-Bench's own grading design (tests + `run-tests.sh`
   copied into the agent's container only at grade time, `TEST_DIR=/tests`, run from the WORKDIR,
   `max_test_timeout_sec`); a faithful port of its pytest `-rA` summary parser; no summary →
-  `GraderError`; a fidelity note (agent starts in `/workspace`, not `/app`; grading needs network).
+  `GraderError`; a fidelity note (agent starts in `/workspace`, not `/app`; grading needs network). The `/workspace`
+  difference is gone since 2026-10-30: tasks declare their workdir (`Task.workdir`, `environment.md` #15) and
+  Terminal-Bench's is `/app`.
 - **Fixed by hand** (commit `40cf1ea`): it picked `fix-permissions`, whose solution is a
   `solution.yaml` of tmux commands it joined into one script → replaced by `log-summary` (ships
   `solution.sh`); it ran `solution.sh` through `sh -c` → now as Terminal-Bench's oracle does

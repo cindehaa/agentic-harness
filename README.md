@@ -59,7 +59,8 @@ harness cleanup    Remove leftover containers and volumes (--all, --images)
 ```
 
 Every command's flags: `harness <command> --help`. Agents: `mini-swe-agent` (runs on the host) and `claude-code`
-(runs inside the task's container). Benchmarks: `bash-operations`, `python-tasks`, `terminal-bench`.
+(runs inside the task's container). Benchmarks: `bash-operations`, `python-tasks`, `terminal-bench` (needs its
+opt-in submodule; without it, `run` and `validate` say which `make` target fetches it).
 
 ### Checking an adapter
 
@@ -104,6 +105,9 @@ harness worker --concurrency 4 --max-running 6                           # cap o
 `--concurrency` threads, one trial (one container) per thread. `--max-running N` (or `HARNESS_MAX_RUNNING`; also on
 `run --wait`) caps the trials running at once across every worker: a claim only succeeds while fewer than N trials
 hold an unexpired lease. `harness run --concurrency` without `--wait` is a usage error (use `harness worker`).
+Each worker checks every run once before claiming its work (benchmark known, agent known, agent pre-flight such as
+its API key set); a run that fails the check fails on its own, with the reason on each trial, and the other runs
+keep flowing.
 
 Per-run limits (stored with the run; defaults shown):
 
@@ -228,7 +232,7 @@ flowchart TB
 
   subgraph docker["Docker, per trial"]
     direction LR
-    trial["trial container<br/>task image + /workspace volume<br/>(+ claude, for claude-code)"]
+    trial["trial container<br/>task image + workspace volume at task.workdir<br/>(+ claude, for claude-code)"]
     grader["grader sidecar<br/>grader_image(task)"]
     mcp["MCP server sidecars<br/>mcp_servers(task), network only"]
   end
@@ -266,7 +270,9 @@ and the queue's state machine.
    `Benchmark.requirements(task)`; a gap ends the trial `unsupported` before any world starts.
 3. **Start the world.** The runner starts `agent.prepare_image(task.image)` (the task's image; for Claude Code a
    cached image with its binary added) through the `Environment` port (Docker: `sleep` as the main process, a named
-   `/workspace` volume, memory/CPU/process limits), then the task's MCP servers as network-only sidecars.
+   volume at the task's `workdir` (default `/workspace`; Terminal-Bench's `/app`) that starts with the image's own
+   files there, memory/CPU/process limits), then the task's MCP servers as network-only sidecars. Commands and
+   agents start in the workdir.
 4. **Agent turns.** The benchmark drives them in `run_agent`: it sends messages through a recording session, and the
    agent acts on the world until it hands back. Every message and command goes to `events.jsonl`; spend is recorded
    at every turn's end.
@@ -302,7 +308,8 @@ and the queue's state machine.
 - **Per-container resource limits.** `--memory`, `--cpus`, `--pids-limit`; going over them is the agent's
   failure, not infra. ([environment](ideation/environment.md))
 - **Credentials.** An allowlist at the container boundary (an agent's `forward_env`, injected at exec time, never
-  in image layers) and redaction of `.env` secrets in every trace, file and DB row. mini runs on the host, so its
+  in image layers) and redaction in every trace, file and DB row: `.env` secrets, secret-named variables in the
+  harness's environment, and every forwarded variable. mini runs on the host, so its
   key never enters a container. ([security](ideation/security.md))
 - **MCP as the action layer beyond the shell.** Tools a benchmark exposes as MCP servers in network-only sidecars,
   so agents keep their own loop; one capability check decides `unsupported` (mini is bash-only, Claude Code speaks
@@ -326,7 +333,7 @@ in [`benchmarks/__init__.py`](src/agentic_harness/benchmarks/__init__.py).
 | Method | Required | What it does |
 |---|---|---|
 | `name` | yes | registry key, e.g. `"bash-operations"` |
-| `tasks()` | yes | every task, as a `Task` subclass carrying the benchmark's native fields and an `image` |
+| `tasks()` | yes | every task, as a `Task` subclass carrying the benchmark's native fields and an `image` (and, keyword-only, a `workdir`: default `/workspace`); raise `BenchmarkUnavailable` if its data isn't on disk |
 | `run_agent(task, agent, env)` | yes | drive the turns; usually one `agent.send(Message("user", (Text(...),)))` |
 | `grade(task, grader, env, transcript)` | yes | run the benchmark's grader in `grader`, return a `Score`; raise `GraderError` on unreadable output |
 | `setup(tasks)` | no | once per run: build/pull images (`build_image`, `ensure_image` from `agentic_harness.environments`) |
@@ -349,13 +356,14 @@ The full rules (and a Claude Code skill that follows them) are in
 |---|---|---|
 | `Agent.name` | yes | registry key |
 | `Agent.capabilities` | no | `AgentCapabilities(content_types, multi_turn, mcp)`; default: one text message |
+| `Agent.forward_env` | no | host variables (e.g. its API key) it passes into the world per command; their values are redacted |
 | `Agent.native_model()` | no | the run's litellm-style model in the agent's own form (default: as is) |
 | `Agent.start(env, artifacts_dir, limits, mcp_servers)` | yes | a fresh session that acts only through `env` and stops within `limits` |
 | `Agent.prepare_image(task_image)` / `image_for` | no | an agent that runs inside the world returns a derived image (default: the task's) |
 | `AgentSession.send(message)` | yes | give the agent a message, block until it hands back, return its reply |
 | `AgentSession.stats()` | no | exit status, cost, model calls, input/output tokens for the records (also after a crash) |
 | `AgentSession.new_events()` | no | trace events the agent produced itself (e.g. Claude Code's tool calls, which bypass our `exec`) |
-| `Agent.preflight()` | no | cheap check at submit and worker start (model known, key set) |
+| `Agent.preflight()` | no | cheap check at submit, and once per run in each worker (model known, key set); a run that fails it fails alone |
 | `Agent.version()` | no | recorded in `runs.versions` |
 
 Raise `Unsupported` for content the agent can't take, `AgentLimitation` when the agent itself can't go on (the
@@ -410,7 +418,8 @@ The runner's outcome rules are also tested without Docker against a fake environ
 - Network as a benchmark-declared world property (offline worlds, a model-API-only allowlist for in-world agents).
 - The unprivileged `agent` user (agents run as root in the world today).
 - `harness cancel`, `harness regrade`.
-- Parity beyond mini-swe-agent: no `original_workflow` for Claude Code, nor for Terminal-Bench.
+- Parity beyond mini-swe-agent: no `original_workflow` for Claude Code, nor for Terminal-Bench (so no parity run
+  for Terminal-Bench yet).
 - Adapters for the other vendored upstream benchmarks (SWE-bench, τ²-bench, MiniWoB++).
 
 **Known gaps**
@@ -423,6 +432,10 @@ The runner's outcome rules are also tested without Docker against a fake environ
   on the host command line, or in our logs.
 - Our `MiniSweAgent` runs commands with `sh -c` where mini's own Docker mode uses `bash -lc`, a difference
   `harness parity` exposed and left open ([adapters](ideation/adapters.md) → Built).
+- Terminal-Bench's own `run-tests.sh` installs curl and uv from the network at grade time, so grading those tasks
+  needs internet (kept as the benchmark ships it; a failed download is a `grader_error`).
+- mini's own retry backoff (4-60 s between attempts) can still run past the trial deadline; each model call is
+  capped to the time left, and none starts after it.
 - No migrations: a schema change means deleting `runs/harness.db`.
-- `harness cleanup` treats every labelled container that isn't a live attempt's as leftover, including one a test
-  started by hand.
+- `harness cleanup` treats every container labelled `agentic-harness=1` that isn't a live attempt's as leftover,
+  including one started by hand with that label (the test suite labels its own differently, per test module).

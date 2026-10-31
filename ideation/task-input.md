@@ -204,7 +204,8 @@ We dropped "Episode" (jargon); a trial's back-and-forth is just its turns.
 
 ### Types
 
-`types.py` holds `Task` (`benchmark`, `id`, `image`; adapters subclass it),
+`types.py` holds `Task` (`benchmark`, `id`, `image`, and since 2026-10-30 a keyword-only `workdir`, default
+`/workspace`, `environment.md` #15; adapters subclass it),
 `Content` (`Text | File | Data`), `Message` (role `"user" | "agent"`, `content`),
 `Transcript` and `Score`/`Value`. `ExecResult` lives in
 `environments/base.py`. `Outcome` (see "Outcome model" below) and `Limits` were

@@ -26,7 +26,9 @@ Read both, plus `src/agentic_harness/benchmarks/base.py` (the interface) and
    problem statement / prompt field. The harness adds nothing: no "You are...", no paths, no hints.
 3. **Typed Task subclass** (`@dataclass(frozen=True)`, subclass of `Task`): keep the benchmark's
    native fields you need (the instruction, the base image, timeouts...) under readable names.
-   `id` is the benchmark's own task id; `image` is the image the world starts from.
+   `id` is the benchmark's own task id; `image` is the image the world starts from. If the benchmark's tasks
+   live at a fixed path (e.g. the image's WORKDIR, `/app`), pass `workdir=` (keyword-only, default `/workspace`):
+   the agent starts there and the workspace volume is mounted there, with the image's files.
 4. **No dependency picking.** Don't `apt-get`/`apk add`/`pip install` anything the benchmark does
    not install itself. If the grader needs tools the world lacks, grade in a sidecar image that has
    them (`grader_image`), never by adding tools to the agent's world.
