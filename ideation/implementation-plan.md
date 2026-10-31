@@ -2,7 +2,7 @@
 
 **Status (2026-10-30):** phases 0–8 are built, plus the Claude Code agent, MCP sidecars, cost + time
 tracking, the dashboard, and the adapter checks (`validate`, `parity`, `adapt`). What is left is listed under
-"Remaining: extensions (not built)" at the end. Live state: `progress.md`.
+"Remaining: extensions (not built)" at the end.
 
 Each phase ends with something runnable and a few "explain-back" questions —
 if you can't answer them out loud, the phase isn't done. Ownership says who

@@ -387,7 +387,7 @@ world is then graded as is), and `TransientError` for provider or network blips 
 ├── tests/                     # pytest (Docker required); fixtures/mcp-server: a tiny MCP server image
 ├── docs/                      # architecture.md, architecture.excalidraw
 ├── examples/                  # the starter's mini CLI examples
-├── ideation/                  # design notes: one per decision area, plus progress.md
+├── ideation/                  # design notes: one per decision area
 └── runs/                      # harness.db + attempt folders (gitignored)
 ```
 
