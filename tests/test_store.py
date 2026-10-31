@@ -6,7 +6,8 @@ import time
 
 import pytest
 
-from agentic_harness.redact import redact, secret_values
+from agentic_harness import redact as redact_module
+from agentic_harness.redact import environ_secrets, redact, secret_values
 from agentic_harness.store import LostClaim, SchemaMismatch, Store
 from agentic_harness.types import Outcome, Score
 
@@ -166,6 +167,22 @@ def test_secret_values_from_env_file(tmp_path):
     secrets = secret_values(env)
     assert secrets == ("sk-ant-12345678", "hunter2hunter2")  # longest first
     assert redact("key sk-ant-12345678 and hunter2hunter2, model anthropic/claude", secrets) == "key *** and ***, model anthropic/claude"
+
+
+def test_secret_named_variables_in_the_environment_are_redacted(monkeypatch):
+    monkeypatch.setenv("SHELL_ONLY_API_TOKEN", "tok-from-the-shell-123")  # exported in the shell, not in .env
+    monkeypatch.setenv("SHORT_KEY", "abc")  # too short: would also replace ordinary words
+    monkeypatch.setenv("HARNESS_TEST_GREETING", "not-a-secret-value")  # not a secret name
+    assert environ_secrets({"A_PASSWORD": "pw-123456", "PLAIN": "pw-123456x"}) == {"pw-123456"}
+    assert redact("tok-from-the-shell-123 abc not-a-secret-value") == "*** abc not-a-secret-value"
+
+
+def test_forwarded_variables_are_redacted_whatever_their_name(monkeypatch):
+    monkeypatch.setenv("HARNESS_TEST_FORWARDED", "value-handed-to-the-world")
+    monkeypatch.setattr(redact_module, "_forwarded", set())
+    assert redact("value-handed-to-the-world") == "value-handed-to-the-world"
+    redact_module.add_forwarded(["HARNESS_TEST_FORWARDED", "HARNESS_TEST_UNSET"])
+    assert redact("got value-handed-to-the-world") == "got ***"
 
 
 def test_recorded_spend_is_never_erased_by_an_outcome_without_it(store):

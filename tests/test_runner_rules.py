@@ -225,6 +225,18 @@ def test_agent_commands_are_traced_by_turn_and_redacted(tmp_path, monkeypatch):
     assert command["command"] == "echo ***" and command["exit_code"] == 0 and command["duration_s"] >= 0
 
 
+def test_variables_the_agent_forwards_are_redacted(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_TEST_HANDED_IN", "handed-in-value-42")  # not a secret-looking name
+    monkeypatch.setattr("agentic_harness.redact._forwarded", set())
+
+    class Forwarding(ScriptedAgent):
+        forward_env = ("HARNESS_TEST_HANDED_IN",)
+
+    run_trial(OneMessage(), Forwarding(lambda env: env.exec("echo handed-in-value-42")), TASK, Limits(), tmp_path, Factory())
+    events = (tmp_path / "events.jsonl").read_text()
+    assert "handed-in-value-42" not in events and "echo ***" in events
+
+
 def test_harness_decided_failure_scores_0_without_asking_the_benchmark(tmp_path):
     class OddScale(OneMessage):
         def score_to_float(self, score):

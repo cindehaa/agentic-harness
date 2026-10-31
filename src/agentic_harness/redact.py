@@ -1,6 +1,9 @@
-"""Secret values from `.env` become *** before anything is written to disk or the database."""
+"""Secret values become *** before anything is written to disk or the database: those in `.env`, any secret-named
+variable in the harness's own environment, and every variable an agent forwards into its worlds."""
 
 import functools
+import os
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from agentic_harness.paths import REPO_ROOT
@@ -17,14 +20,37 @@ def secret_values(env_file: Path) -> tuple[str, ...]:
     for line in env_file.read_text().splitlines():
         name, sep, value = line.strip().removeprefix("export ").partition("=")
         value = value.strip().strip("'\"")
-        if sep and not name.startswith("#") and any(w in name.upper() for w in SECRET_WORDS) and len(value) >= MIN_LENGTH:
+        if sep and not name.startswith("#") and _secret_name(name) and len(value) >= MIN_LENGTH:
             values.append(value)
     return tuple(sorted(values, key=len, reverse=True))
 
 
+def environ_secrets(environ: Mapping[str, str]) -> set[str]:
+    """The values of secret-named variables (same rule as .env), e.g. a key exported in the shell, not in .env."""
+    return {value for name, value in environ.items() if _secret_name(name) and len(value) >= MIN_LENGTH}
+
+
+_forwarded: set[str] = set()
+
+
+def add_forwarded(names: Iterable[str]) -> None:
+    """Variables the harness forwards into a world (an agent's forward_env): their values are redacted from now on,
+    whatever their names, since the agent can print them."""
+    _forwarded.update(value for name in names if len(value := os.environ.get(name, "")) >= MIN_LENGTH)
+
+
+def _secret_name(name: str) -> bool:
+    return any(w in name.upper() for w in SECRET_WORDS)
+
+
 @functools.cache
-def _secrets() -> tuple[str, ...]:
+def _env_file_secrets() -> tuple[str, ...]:
     return secret_values(REPO_ROOT / ".env")
+
+
+def _secrets() -> tuple[str, ...]:
+    """Longest first. The environment is read each time: it can change after start-up (the CLI loads .env)."""
+    return tuple(sorted(set(_env_file_secrets()) | environ_secrets(os.environ) | _forwarded, key=len, reverse=True))
 
 
 def redact(text: str, secrets: tuple[str, ...] | None = None) -> str:

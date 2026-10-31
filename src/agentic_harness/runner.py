@@ -12,7 +12,7 @@ from agentic_harness.agents.base import Agent, AgentLimitation, AgentStats, Tran
 from agentic_harness.benchmarks.base import Benchmark, GraderError
 from agentic_harness.environments.base import EndReason, Environment, EnvironmentFactory, EnvironmentLost, Sidecar
 from agentic_harness.recording import EventLog, RecordingEnvironment, RecordingSession, TurnLimit
-from agentic_harness.redact import redact, redact_file
+from agentic_harness.redact import add_forwarded, redact, redact_file
 from agentic_harness.types import Limits, Outcome, Score, Task
 
 # Container lifetime: long enough to outlast the trial and grading (expiring is infra_error), yet still a
@@ -30,6 +30,7 @@ def run_trial(
     all in attempt_dir, all redacted. Never raises (except KeyboardInterrupt): every failure becomes an Outcome.
     The agent gets the world wrapped in a RecordingEnvironment (its commands are traced); the benchmark gets it bare."""
     attempt_dir.mkdir(parents=True, exist_ok=True)
+    add_forwarded(agent.forward_env)  # before the agent can print them
     began = time.monotonic()
     session: RecordingSession | None = None
     phases: dict[str, float] = {}

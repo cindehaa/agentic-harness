@@ -86,6 +86,7 @@ class Agent(ABC):
 
     name: ClassVar[str]  # registry key, e.g. "mini-swe-agent"
     capabilities: ClassVar[AgentCapabilities] = AgentCapabilities()  # the least: one text message
+    forward_env: ClassVar[tuple[str, ...]] = ()  # host variables (e.g. its API key) it passes into the world; redacted
 
     def __init__(self, model: str) -> None:
         self.model = model  # litellm-style, resolved at submit time (runs.model); adapters never read the environment for it
