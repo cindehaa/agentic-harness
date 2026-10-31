@@ -18,23 +18,21 @@ def original_side(benchmark: Benchmark, tasks: list[Task], agent_name: str, mode
                   concurrency: int) -> tuple[Scores, float, list[str]]:
     """Every task `runs` times through benchmark.original_workflow: the scores, the total spend, and the errors."""
     jobs = [(i, t) for i in range(runs) for t in tasks]
-    errors: list[str] = []
 
-    def one(job: tuple[int, Task]) -> tuple[float | None, float]:
+    def one(job: tuple[int, Task]) -> tuple[float | None, float, str | None]:
         i, task = job
         try:
             result = benchmark.original_workflow(task, agent_name, model, out_dir / f"run-{i + 1}" / task.id)
         except Exception:  # infrastructure, like the harness's infra_error: that trial is left out, and listed
-            errors.append(f"run {i + 1} {task.id}: {traceback.format_exc().strip().splitlines()[-1]}")
-            return None, 0.0
-        return benchmark.score_to_float(result.score), result.cost_usd
+            return None, 0.0, f"run {i + 1} {task.id}: {traceback.format_exc().strip().splitlines()[-1]}"
+        return benchmark.score_to_float(result.score), result.cost_usd, None
 
     with ThreadPoolExecutor(concurrency) as pool:
-        results = list(pool.map(one, jobs))
+        results = list(pool.map(one, jobs))  # in job order, however the threads finish
     scores: Scores = [{} for _ in range(runs)]
-    for (i, task), (score, _) in zip(jobs, results):
+    for (i, task), (score, _, _) in zip(jobs, results):
         scores[i][task.id] = score
-    return scores, sum(cost for _, cost in results), sorted(errors)  # threads finish in any order
+    return scores, sum(cost for _, cost, _ in results), [error for _, _, error in results if error]
 
 
 def summarize(scores: Scores) -> dict:

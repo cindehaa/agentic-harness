@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -34,10 +35,12 @@ def test_overlap():
 
 
 class Canned(BashOperations):
-    """Original runs without Docker or a model: bash-001 passes, bash-002 fails, bash-003's infrastructure breaks."""
+    """Original runs without Docker or a model: bash-001 passes, bash-002 fails, bash-003's infrastructure breaks
+    (sooner in later runs, so the threads finish out of order)."""
 
     def original_workflow(self, task, agent_name, model, out_dir):
         if task.id == "bash-003":
+            time.sleep(0.05 * (12 - int(out_dir.parent.name.removeprefix("run-"))))
             raise RuntimeError("setup.py failed")
         return OriginalResult(Score(task.id == "bash-001"), cost_usd=0.01)
 
@@ -45,10 +48,10 @@ class Canned(BashOperations):
 def test_original_side_scores_costs_and_errors(tmp_path):
     bench = Canned()
     tasks = [t for t in bench.tasks() if t.id in ("bash-001", "bash-002", "bash-003")]
-    scores, cost, errors = original_side(bench, tasks, "mini-swe-agent", "m", 2, tmp_path, concurrency=2)
-    assert scores == [{"bash-001": 1.0, "bash-002": 0.0, "bash-003": None}] * 2
-    assert cost == pytest.approx(0.04)
-    assert errors == ["run 1 bash-003: RuntimeError: setup.py failed", "run 2 bash-003: RuntimeError: setup.py failed"]
+    scores, cost, errors = original_side(bench, tasks, "mini-swe-agent", "m", 11, tmp_path, concurrency=11)
+    assert scores == [{"bash-001": 1.0, "bash-002": 0.0, "bash-003": None}] * 11
+    assert cost == pytest.approx(0.22)
+    assert errors == [f"run {i} bash-003: RuntimeError: setup.py failed" for i in range(1, 12)]  # run order, not text order
 
 
 def test_no_original_workflow_for_other_agents(tmp_path):
