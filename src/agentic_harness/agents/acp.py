@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from agentic_harness.agents.acp_client import AcpClosed, AcpConnection, AcpError
@@ -33,8 +33,14 @@ STDERR_CAP = 1_000_000  # bytes of the agent's own log kept in agent-stderr.log
 # can't go on" (Claude Code's own error names among them)
 TRANSIENT_HINTS = ("overloaded", "rate limit", "rate_limit", "server_error", "529", "503", "502")
 LIMITATION_HINTS = ("prompt is too long", "prompt_too_long", "context window", "context_length")
+# The agent kept a step limit we gave it (limits_meta) by failing the prompt: the trial's limit, not an error
+STEP_LIMIT_HINTS = ("maximum number of turns",)  # Claude Code: "Reached maximum number of turns (N)"
 
 _build_lock = threading.Lock()  # worker threads share one Docker; build each derived image once
+
+
+class StepLimitReached(Exception):
+    """The agent stopped at the step limit it was given, reporting it as an error."""
 
 
 class AcpAgentError(RuntimeError):
@@ -60,15 +66,20 @@ class AcpDefinition:
     model_env: str | None = None  # the variable the agent reads its model from; None: the agent's own default
     model_prefix: str = ""  # the litellm provider prefix the agent's model names drop, e.g. "anthropic/"
     capabilities: AgentCapabilities = AgentCapabilities(multi_turn=True)  # every ACP session takes many prompts
+    # Limits the agent keeps itself, given to it in session/new's _meta: Limits field -> dotted path in _meta, e.g.
+    # {"max_steps": "claudeCode.options.maxTurns"}. ACP has no standard field for them.
+    limits_meta: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, name: str, data: dict) -> "AcpDefinition":
         caps = data.get("capabilities", {})
+        if unknown := set(data.get("limits_meta", {})) - {f.name for f in fields(Limits)}:
+            raise ValueError(f"{name}: limits_meta names no limit {sorted(unknown)}")
         return cls(
             name=name, version=str(data["version"]), command=tuple(data["command"]), install=data["install"],
             install_dir=data["install_dir"], world_setup=data.get("world_setup", ""),
             forward_env=tuple(data.get("forward_env", ())), env=data.get("env", {}), model_env=data.get("model_env"),
-            model_prefix=data.get("model_prefix", ""),
+            model_prefix=data.get("model_prefix", ""), limits_meta=data.get("limits_meta", {}),
             capabilities=AgentCapabilities(frozenset(caps.get("content_types", ["text"])), True, caps.get("mcp", False)),
         )
 
@@ -114,6 +125,11 @@ class AcpAgent(Agent):
     def native_model(self) -> str:
         return self.model.removeprefix(self.definition.model_prefix)
 
+    def unenforced_limits(self) -> frozenset[str]:
+        """The harness keeps the deadline, the budget, the turns and the container limits itself; an agent's own
+        model calls and commands it can't see, so those hold only if the definition passes them on (limits_meta)."""
+        return frozenset({"max_steps", "command_timeout_s"} - set(self.definition.limits_meta))
+
     def preflight(self) -> None:
         """The model is one the agent runs, and its variables are set. No API call: that would spend tokens."""
         prefix = self.definition.model_prefix
@@ -147,7 +163,7 @@ class AcpAgent(Agent):
             env_vars[d.model_env] = self.native_model()
         proc = env.start_process(list(d.command), env=env_vars)
         session = AcpSession(env, proc, self.model, artifacts_dir, limits)
-        session.open(env.workdir, mcp_servers)
+        session.open(env.workdir, mcp_servers, _meta(d.limits_meta, limits))
         return session
 
 
@@ -177,7 +193,7 @@ class AcpSession(AgentSession):
         self.output_tokens = 0
         self.conn = AcpConnection(proc.stdin, proc.stdout, self._on_request, self._on_notification, self._log)
 
-    def open(self, cwd: str, mcp_servers: tuple[McpServer, ...]) -> None:
+    def open(self, cwd: str, mcp_servers: tuple[McpServer, ...], meta: dict | None = None) -> None:
         """initialize + session/new. The definition said what the agent can do (the runner checked that); the agent's
         own answer must agree, or the definition is wrong."""
         init = self._call("initialize", {
@@ -194,6 +210,7 @@ class AcpSession(AgentSession):
         new = self._call("session/new", {
             "cwd": cwd,
             "mcpServers": [{"type": "http", "name": s.name, "url": s.url, "headers": []} for s in mcp_servers],
+            **({"_meta": meta} if meta else {}),
         })
         self.session_id = new["sessionId"]
         # the model the agent says it runs: a session config option of category "model" (ACP's generic form)
@@ -215,6 +232,8 @@ class AcpSession(AgentSession):
         except TimeoutError:
             self.ended_by = "TimeLimit"
             result = self._cancel(id_)
+        except StepLimitReached:
+            self.ended_by, result = "LimitsExceeded", {}
         finally:
             self._end_turn()
         if self.conn.failure:  # a bug in our handlers, not the agent's doing
@@ -253,6 +272,8 @@ class AcpSession(AgentSession):
             self._lost(str(e))
         except AcpError as e:
             text = str(e).lower()
+            if any(h in text for h in STEP_LIMIT_HINTS):
+                raise StepLimitReached(str(e)) from None
             if any(h in text for h in LIMITATION_HINTS):
                 raise AgentLimitation(str(e)) from None
             if any(h in text for h in TRANSIENT_HINTS):
@@ -392,6 +413,18 @@ class AcpSession(AgentSession):
     def _stderr_tail(self) -> str:
         tail = self.stderr_tail.decode("utf-8", errors="replace").strip()
         return f"; agent stderr: {tail}" if tail else ""
+
+
+def _meta(limits_meta: dict[str, str], limits: Limits) -> dict:
+    """session/new's _meta: each limit the agent keeps itself, at its dotted path."""
+    meta: dict = {}
+    for name, path in limits_meta.items():
+        *parents, key = path.split(".")
+        node = meta
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[key] = getattr(limits, name)
+    return meta
 
 
 def _text(content: dict | None) -> str:

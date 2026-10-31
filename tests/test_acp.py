@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -109,6 +110,26 @@ def test_setup_passes_the_worlds_workdir_the_mcp_servers_and_the_agents_variable
     assert env == {"FAKE_API_KEY": "sk-fake-123456789", "FIXED": "1", "FAKE_MODEL": "claude-haiku-5-5"}
 
 
+def test_limits_the_agent_keeps_itself_go_in_session_new_meta(tmp_path, monkeypatch):
+    agent = AcpAgent(replace(DEFINITION, limits_meta={"max_steps": "fake.options.maxTurns"}), "anthropic/claude-haiku-5-5")
+    monkeypatch.setenv("FAKE_API_KEY", "sk-fake-123456789")
+    session = agent.start(HostWorld(), tmp_path, Limits(max_steps=7))
+    assert json.loads(say(session, "setup"))["_meta"] == {"fake": {"options": {"maxTurns": 7}}}
+    assert agent.unenforced_limits() == {"command_timeout_s"}  # the harness can't see the agent's own commands
+
+
+def test_without_limits_meta_the_step_limit_is_not_enforced_and_nothing_is_sent(tmp_path, monkeypatch):
+    _, session = start(tmp_path, monkeypatch)
+    assert "_meta" not in json.loads(say(session, "setup"))
+    assert AcpAgent(DEFINITION, "anthropic/claude-haiku-5-5").unenforced_limits() == {"max_steps", "command_timeout_s"}
+
+
+def test_limits_meta_must_name_a_limit():
+    with pytest.raises(ValueError, match="names no limit"):
+        AcpDefinition.from_dict("x", {"version": "1", "command": ["a"], "install": {}, "install_dir": "/a",
+                                      "limits_meta": {"max_stepz": "a.b"}})
+
+
 def test_a_definition_claiming_mcp_the_agent_lacks_fails_setup(tmp_path, monkeypatch):
     with pytest.raises(AcpAgentError, match="MCP servers over HTTP"):
         start(tmp_path, monkeypatch, world=HostWorld("nohttp"), servers=(McpServer("s", "img", (), 1),))
@@ -179,6 +200,12 @@ def test_errors_are_classified_by_their_message(tmp_path, monkeypatch, message, 
         say(session, f"fail {message}")
 
 
+def test_an_agent_failing_the_prompt_at_its_step_limit_ends_the_turn_like_one(tmp_path, monkeypatch):
+    _, session = start(tmp_path, monkeypatch)
+    assert say(session, "fail Internal error: Reached maximum number of turns (7)") == ""
+    assert session.exit_status == "LimitsExceeded"  # graded like mini at its step limit, not an agent error
+
+
 def test_an_agent_that_dies_is_an_agent_error_unless_the_world_died(tmp_path, monkeypatch):
     world, session = start(tmp_path, monkeypatch)
     with pytest.raises(AcpAgentError, match="ended"):
@@ -204,6 +231,7 @@ def test_claude_code_is_a_built_in_acp_agent():
     assert agent.native_model() == "claude-haiku-5-5" and agent.model == "anthropic/claude-haiku-5-5"
     assert agent.capabilities.multi_turn and agent.capabilities.mcp and agent.capabilities.content_types == {"text"}
     assert agent.forward_env == ("ANTHROPIC_API_KEY",)
+    assert agent.definition.limits_meta == {"max_steps": "claudeCode.options.maxTurns"}  # Claude Code's own max turns
     assert "claude-code" in built_in_definitions()
 
 

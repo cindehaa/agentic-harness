@@ -17,3 +17,6 @@ env = { DISABLE_AUTOUPDATER = "1" }
 model_env = "ANTHROPIC_MODEL"  # Claude Code's own model setting; it takes names without litellm's "anthropic/"
 model_prefix = "anthropic/"
 capabilities = { content_types = ["text"], mcp = true }
+# The step limit (--max-steps) as Claude Code's own max turns (API round trips): the adapter passes
+# _meta.claudeCode.options to the Claude Agent SDK; reaching it ends the prompt with stopReason max_turn_requests
+limits_meta = { max_steps = "claudeCode.options.maxTurns" }
