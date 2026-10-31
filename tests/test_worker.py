@@ -1,7 +1,3 @@
-"""Submit with `harness run`, run with `harness worker`: scripted fake agents, real Docker, no model.
-
-Grading reads hello.txt directly (a one-line grader), so these tests don't depend on evaluate.py."""
-
 import json
 import os
 import signal
@@ -33,13 +29,11 @@ def images():
 
 
 class LocalGrade(BashOperations):
-    """bash-operations with a one-line grader: passed = hello.txt says Hello World."""
-
     name = "local-bash"
     setups = 0
 
     def setup(self, tasks):
-        LocalGrade.setups += 1  # the images were built by the fixture
+        LocalGrade.setups += 1
 
     def grade(self, task, grader, env, transcript):
         return Score(grader.exec(["cat", "hello.txt"]).stdout.strip() == "Hello World")
@@ -53,8 +47,6 @@ class BrokenSetup(LocalGrade):
 
 
 class Oracle(Agent):
-    """Writes hello.txt only when asked for Hello World (bash-001), so bash-002 fails."""
-
     name = "oracle"
     calls = 0
 
@@ -81,7 +73,7 @@ class Crashing(Oracle):
     name = "crashing"
 
     def act(self, env, text):
-        raise TransientError("provider down")  # -> infra_error, retryable
+        raise TransientError("provider down")
 
 
 class FlakyOnce(Oracle):
@@ -97,19 +89,17 @@ class Buggy(Oracle):
     name = "buggy"
 
     def act(self, env, text):
-        raise RuntimeError("adapter bug")  # -> infra_error, not retryable
+        raise RuntimeError("adapter bug")
 
 
 class Sleeper(Oracle):
     name = "sleeper"
 
     def act(self, env, text):
-        env.exec("sleep 300", timeout=None)  # until its world is stopped
+        env.exec("sleep 300", timeout=None)
 
 
 class Counting(Oracle):
-    """Notes how many trials are in their agent turn at once, across every worker in this process."""
-
     name = "counting"
     lock = threading.Lock()
     now = peak = 0
@@ -139,7 +129,7 @@ def db(tmp_path, monkeypatch):
     for bench in (LocalGrade, BrokenSetup):
         monkeypatch.setitem(BENCHMARKS, bench.name, bench)
     for agent in (Oracle, Crashing, FlakyOnce, Buggy, Sleeper, Counting, NoKey):
-        monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")  # registry entries are "module:Class"
+        monkeypatch.setitem(AGENTS, agent.name, f"{__name__}:{agent.__name__}")
         agent.calls = 0
     LocalGrade.setups = 0
     return tmp_path / "harness.db"
@@ -148,7 +138,7 @@ def db(tmp_path, monkeypatch):
 def submit(agent: str, benchmark: str = "local-bash", task_ids: str = "bash-001,bash-002", *extra: str) -> str:
     result = CliRunner().invoke(cli, ["run", "--agent", agent, "--model", "fake-model", "--benchmark", benchmark, "--task_ids", task_ids, *extra])
     assert result.exit_code == 0, result.output
-    return result.output.split()[2].rstrip(":")  # "Submitted run <id>: ..."
+    return result.output.split()[2].rstrip(":")
 
 
 def work(concurrency: int = 2) -> None:
@@ -185,7 +175,7 @@ def test_infra_error_is_retried_up_to_three_attempts(db):
     assert (trial["state"], trial["outcome"], trial["attempt_count"]) == ("done", "infra_error", 3)
     attempts = store.attempts(run_id)
     assert [a["outcome"] for a in attempts] == ["infra_error"] * 3 and "provider down" in attempts[0]["error"]
-    assert len({a["artifacts_dir"] for a in attempts}) == 3  # each attempt has its own folder
+    assert len({a["artifacts_dir"] for a in attempts}) == 3
 
 
 def test_non_retryable_infra_error_fails_fast(db):
@@ -203,7 +193,7 @@ def test_a_run_that_fails_preflight_fails_alone_and_other_runs_flow(db):
     store.create_run("unknown-agent", "local-bash", "nobody", "fake-model", {}, {"limits": {}}, ["bash-001"])
     store.create_run("unknown-bench", "no-such-bench", "oracle", "fake-model", {}, {"limits": {}}, ["bash-001"])
     good = submit("oracle", task_ids="bash-001")
-    work()  # starts, and exits once idle: the failed runs are not left unfinished
+    work()
     for run_id, why in (("bad", "needs ANTHROPIC_API_KEY"), ("unknown-agent", "unknown agent 'nobody'"),
                         ("unknown-bench", "unknown benchmark 'no-such-bench'")):
         assert store.run(run_id)["status"] == "failed" and store.run(run_id)["setup_claimed_by"] is None
@@ -221,7 +211,7 @@ def test_failing_a_run_closes_its_attempt_in_flight(db):
     assert store.fail_run("r1", "pre-flight check failed: no key") is True
     assert [(t["state"], t["outcome"], t["attempt_count"]) for t in store.trials("r1")] == [("done", "infra_error", 1)] * 2
     assert {a["error"] for a in store.attempts("r1")} == {"pre-flight check failed: no key"}
-    with pytest.raises(LostClaim):  # the worker running it finds its claim gone; its result is discarded
+    with pytest.raises(LostClaim):
         store.finish_attempt(claim, "w", Outcome("graded", Score(True), 1.0))
     assert store.fail_run("r1", "again") is False
 
@@ -260,8 +250,8 @@ def test_run_setup_makes_every_image_a_trial_starts_local(db, monkeypatch):
     monkeypatch.setattr(Oracle, "prepare_image", lambda self, image: prepared.append(image) or image)
     run_id = submit("oracle")
     work()
-    assert pulled == ["python:3.11-slim"]  # the grader image, once for both tasks
-    assert prepared[:2] == [t.image for t in LocalGrade().tasks()[:2]]  # the agent's images, before any trial
+    assert pulled == ["python:3.11-slim"]
+    assert prepared[:2] == [t.image for t in LocalGrade().tasks()[:2]]
     assert Store(db).run(run_id)["status"] == "done"
 
 
@@ -286,7 +276,7 @@ def test_a_dead_workers_trial_is_reclaimed_and_finished(db):
     store = Store(db)
     store.claim_setup("dead", 120)
     store.finish_setup(run_id, "dead")
-    store.claim_trial("dead", lease_s=-1)  # claimed, then the worker was killed: its lease is already over
+    store.claim_trial("dead", lease_s=-1)
     work(concurrency=1)
     trial = store.trials(run_id)[0]
     assert (trial["outcome"], trial["attempt_count"]) == ("graded", 2)
@@ -297,11 +287,11 @@ def test_run_wait_runs_only_its_own_run(db):
     other = submit("oracle", task_ids="bash-002")
     result = CliRunner().invoke(cli, ["run", "--agent", "oracle", "--model", "fake-model", "--benchmark", "local-bash", "--task_ids", "bash-001", "--wait"])
     assert result.exit_code == 0, result.output
-    assert "Accuracy: 1.00 (n=1 graded, 1 passed)" in result.output  # it prints the results
+    assert "Accuracy: 1.00 (n=1 graded, 1 passed)" in result.output
     run_id = result.output.split()[2].rstrip(":")
     store = Store(db)
     assert store.run(run_id)["status"] == "done"
-    assert store.run(other)["status"] == "pending"  # left for the workers
+    assert store.run(other)["status"] == "pending"
 
 
 def test_no_leftover_containers():
@@ -332,8 +322,6 @@ def _labelled(kind: str) -> list[str]:
 
 
 def _signal_when_running(sig: signal.Signals, containers: int) -> None:
-    """From another thread: once `containers` trial worlds exist (and their agents had a moment to start), signal
-    this process, as Ctrl-C (SIGINT) or `kill` (SIGTERM) would."""
     def run():
         deadline = time.monotonic() + 60
         while len(_labelled("container")) < containers and time.monotonic() < deadline:
@@ -347,16 +335,16 @@ def test_ctrl_c_stops_the_worker_and_puts_its_trials_back_in_the_queue(db):
     run_id = submit("sleeper")
     _signal_when_running(signal.SIGINT, containers=2)
     began = time.monotonic()
-    result = CliRunner().invoke(cli, ["worker", "--concurrency", "2"])  # no --exit-when-idle: only the signal stops it
+    result = CliRunner().invoke(cli, ["worker", "--concurrency", "2"])
     assert result.exit_code == 0 and "Worker stopped" in result.output, result.output
-    assert time.monotonic() - began < 60  # not the agents' 300 s
+    assert time.monotonic() - began < 60
     store = Store(db)
     assert [(t["state"], t["attempt_count"]) for t in store.trials(run_id)] == [("pending", 1)] * 2
     assert [(a["outcome"], a["error"]) for a in store.attempts(run_id)] == [("infra_error", "worker interrupted")] * 2
-    assert [a["cost_usd"] for a in store.attempts(run_id)] == [0.01] * 2  # spent before the stop: still counted
-    assert store.live_workers(0) == 0  # its row is gone
+    assert [a["cost_usd"] for a in store.attempts(run_id)] == [0.01] * 2
+    assert store.live_workers(0) == 0
     assert _labelled("container") == [] and _labelled("volume") == []
-    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler  # put back
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
 
 
 def test_sigterm_stops_run_wait_and_another_worker_finishes_the_run(db, monkeypatch):
@@ -365,7 +353,7 @@ def test_sigterm_stops_run_wait_and_another_worker_finishes_the_run(db, monkeypa
                                       "--task_ids", "bash-001", "--wait"])
     assert result.exit_code == 130 and "stays queued" in result.output, result.output
     run_id = result.output.split()[2].rstrip(":")
-    monkeypatch.setattr(Sleeper, "act", Oracle.act)  # the next worker's agent finishes
+    monkeypatch.setattr(Sleeper, "act", Oracle.act)
     work()
     store = Store(db)
     trial = store.trials(run_id)[0]
@@ -388,7 +376,7 @@ def test_an_interrupted_setup_is_released_for_another_worker(db):
     stop.track_setup(store.claim_setup("w1", 120)["id"], "w1")
     stop.hand_back(store)
     assert store.run("r1")["setup_claimed_by"] is None
-    assert store.claim_setup("w2", 120)["id"] == "r1"  # at once, not after the lease
+    assert store.claim_setup("w2", 120)["id"] == "r1"
 
 
 PHASES = ("queued_at", "started_at", "env_ready_at", "agent_start_at", "agent_end_at", "grade_start_at", "grade_end_at",
@@ -404,7 +392,7 @@ def test_attempts_record_spend_and_phase_timestamps_in_order(db):
     for a in store.attempts(run_id):
         times = [a[p] for p in PHASES]
         assert None not in times and times == sorted(times), dict(a)
-        assert a["queued_at"] == run["setup_finished_at"]  # a first attempt is claimable once setup is done
+        assert a["queued_at"] == run["setup_finished_at"]
         assert (a["cost_usd"], a["model_calls"], a["input_tokens"], a["output_tokens"]) == (0.01, 3, 1000, 50)
 
 
@@ -413,7 +401,7 @@ def test_a_failed_attempts_spend_is_recorded(db):
     work()
     attempts = Store(db).attempts(run_id)
     assert [(a["outcome"], a["cost_usd"]) for a in attempts] == [("infra_error", 0.01)] * 3
-    assert all(a["agent_end_at"] and a["grade_start_at"] is None for a in attempts)  # never graded
+    assert all(a["agent_end_at"] and a["grade_start_at"] is None for a in attempts)
     assert Store(db).trials(run_id)[0]["cost_usd"] == pytest.approx(0.03)
 
 
@@ -427,7 +415,7 @@ def test_a_retrys_queue_wait_starts_when_its_backoff_ends(db, monkeypatch):
 
 
 def test_max_run_cost_stops_the_run_once_spent(db):
-    run_id = submit("oracle", "local-bash", "bash-001,bash-002", "--max-run-cost", "0.01")  # one oracle trial's spend
+    run_id = submit("oracle", "local-bash", "bash-001,bash-002", "--max-run-cost", "0.01")
     work(concurrency=1)
     store = Store(db)
     assert store.run(run_id)["max_cost_usd"] == 0.01 and store.run(run_id)["status"] == "done"
@@ -437,7 +425,7 @@ def test_max_run_cost_stops_the_run_once_spent(db):
 
 
 def test_max_running_caps_trials_across_two_workers(db, monkeypatch):
-    monkeypatch.setattr(worker.socket, "gethostname", lambda: threading.current_thread().name)  # two worker ids
+    monkeypatch.setattr(worker.socket, "gethostname", lambda: threading.current_thread().name)
     Counting.now = Counting.peak = 0
     run_id = submit("counting")
     workers = [threading.Thread(target=worker.work, args=(db, 2, True), kwargs={"max_running": 1}, name=f"w{i}")
@@ -447,7 +435,7 @@ def test_max_running_caps_trials_across_two_workers(db, monkeypatch):
     for w in workers:
         w.join(120)
     trials = Store(db).trials(run_id)
-    assert [t["outcome"] for t in trials] == ["graded"] * 2 and Counting.peak == 1  # four threads, one trial at a time
+    assert [t["outcome"] for t in trials] == ["graded"] * 2 and Counting.peak == 1
 
 
 def test_worker_max_running_flag_and_env(db):
@@ -455,7 +443,7 @@ def test_worker_max_running_flag_and_env(db):
     result = CliRunner().invoke(cli, ["worker", "--exit-when-idle"], env={"HARNESS_MAX_RUNNING": "2"})
     assert result.exit_code == 0 and "at most 2 running across all workers" in result.output, result.output
     result = CliRunner().invoke(cli, ["worker", "--exit-when-idle", "--max-running", "0"])
-    assert result.exit_code == 2  # at least 1
+    assert result.exit_code == 2
 
 
 def test_each_trial_runs_under_defaults_then_the_benchmarks_limits_then_the_flags_given(db, monkeypatch):

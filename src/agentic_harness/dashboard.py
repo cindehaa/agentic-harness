@@ -1,9 +1,3 @@
-"""The dashboard: a read-only local web view of runs/harness.db and the attempt folders.
-
-Standard library only. The server never writes: SQLite is opened read-only, and the only files it serves are the
-dashboard's own static files and the files inside an attempt folder under runs/.
-"""
-
 import json
 import re
 import sqlite3
@@ -21,10 +15,10 @@ STATIC_DIR = REPO_ROOT / "dashboard"
 STATIC_FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
 CONTENT_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json",
                  ".jsonl": "text/plain", ".log": "text/plain", ".tar": "application/x-tar"}
-WORKER_ALIVE_S = 120  # a worker heartbeats every 30 s; silent for a whole lease (worker.LEASE_S) = gone
+WORKER_ALIVE_S = 120
 
 RUN_ID = re.compile(r"[\w.-]+")
-FILE_NAME = re.compile(r"\w[\w.-]*")  # one name inside an attempt folder: no slashes, no leading dot
+FILE_NAME = re.compile(r"\w[\w.-]*")
 
 RUNS_SQL = """
 WITH spent AS (
@@ -71,21 +65,19 @@ class NotFound(Exception):
 
 
 class Dashboard:
-    """The data behind the endpoints: one read-only connection per request (the server is threaded)."""
-
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.runs_dir = db_path.parent.resolve()
 
     @contextmanager
     def _db(self):
-        if not self.db_path.exists():  # nothing submitted yet; mode=ro fails rather than creating the file
+        if not self.db_path.exists():  # mode=ro fails rather than creating the file
             raise NotFound("no database yet")
         db = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=5000")
         version = db.execute("SELECT version FROM schema_version").fetchone()[0]
-        if version != SCHEMA_VERSION:  # the queries below would fail on missing columns; say why instead
+        if version != SCHEMA_VERSION:
             db.close()
             raise SchemaMismatch(f"{self.db_path} has schema version {version}, this harness needs {SCHEMA_VERSION}: "
                                  f"delete it (or check out the harness that made it)")
@@ -111,7 +103,7 @@ class Dashboard:
                                   (run_id,)).fetchall()
         return {
             **found[0], "versions": _parse(row["versions"]), "config": _parse(row["config"]),
-            "metrics": run_metrics(row, trials, attempts),  # the same numbers `harness results` prints
+            "metrics": run_metrics(row, trials, attempts),
             "trials": [{**dict(t), "score_value": _parse(t["score_value"]), "attempts": json.loads(t["attempts"] or "[]")}
                        for t in trials],
         }
@@ -137,7 +129,6 @@ class Dashboard:
             "attempts": siblings,
             "outcome_file": _read_json(folder / "outcome.json") if folder else None,
             "transcript": _read_json(folder / "transcript.json") if folder else None,
-            # events.jsonl is live while the attempt runs; the table only catches up at the end of each turn
             "events": events if events is not None else db_events,
             "files": sorted(({"name": f.name, "bytes": f.stat().st_size} for f in folder.iterdir() if f.is_file()),
                             key=lambda f: f["name"]) if folder else [],
@@ -162,7 +153,7 @@ class Dashboard:
                 (time.time() - WORKER_ALIVE_S,))]
 
     def _folder(self, artifacts_dir: str | None) -> Path | None:
-        """The attempt's folder, only if it really is inside runs/ (a DB row is not trusted to point elsewhere)."""
+        """The attempt's folder, only if it really is inside runs/ (DB rows aren't trusted)."""
         if not artifacts_dir:
             return None
         folder = Path(artifacts_dir).resolve()
@@ -170,7 +161,7 @@ class Dashboard:
 
 
 class Handler(BaseHTTPRequestHandler):
-    dashboard: Dashboard  # set on the subclass make_server builds
+    dashboard: Dashboard
 
     def do_GET(self) -> None:
         if not self._host_ok():
@@ -197,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _host_ok(self) -> bool:
-        # a web page elsewhere could point its own hostname at 127.0.0.1 (DNS rebinding); only answer to our names
+        # DNS rebinding: answer only to our own host names
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         return host in ("127.0.0.1", "localhost")
 
@@ -220,11 +211,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format: str, *args) -> None:
-        pass  # the UI polls every 2 s; a line per request would bury everything else
+        pass  # the UI polls every 2 s; a log line per request would bury the rest
 
 
 def make_server(db_path: Path, port: int = 8000) -> ThreadingHTTPServer:
-    """Bound to 127.0.0.1 only: traces can hold task data that shouldn't reach the network. Port 0 = any free port."""
+    """Bound to 127.0.0.1 only: traces can hold task data. Port 0 = any free port."""
     handler = type("DashboardHandler", (Handler,), {"dashboard": Dashboard(db_path)})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 
@@ -236,7 +227,7 @@ def _parse(value: str | None):
 def _read_json(path: Path):
     try:
         return json.loads(path.read_text())
-    except (OSError, ValueError):  # not written yet, or being replaced
+    except (OSError, ValueError):
         return None
 
 

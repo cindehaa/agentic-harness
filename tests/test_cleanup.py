@@ -1,6 +1,3 @@
-"""`harness cleanup` against real Docker. Its label and image prefix are swapped for test-only ones, so the test can
-never remove another run's (or another test's) containers, volumes or cached images."""
-
 import subprocess
 from pathlib import Path
 
@@ -27,7 +24,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(docker_module, "LABEL", LABEL)
     monkeypatch.setattr(docker_module, "IMAGE_PREFIX", PREFIX)
     yield Store(tmp_path / "harness.db")
-    for kind in ("container", "volume"):  # whatever a failing test left
+    for kind in ("container", "volume"):
         names = _listed(kind)
         if names:
             subprocess.run(["docker", kind, "rm", "-f", *names], capture_output=True)
@@ -55,8 +52,8 @@ def test_cleanup_keeps_only_the_worlds_of_live_attempts(store):
     store.claim_setup("w", 120)
     store.finish_setup("r1", "w")
     live = str(store.claim_trial("w", 120).attempt_id)
-    kept, _, _ = _world(live), _world("999999"), _world(None)  # the other two: as if their worker died
-    kept.attach_grader("alpine:latest").start()  # a live attempt's sidecar is kept with it
+    kept, _, _ = _world(live), _world("999999"), _world(None)
+    kept.attach_grader("alpine:latest").start()
     orphan = subprocess.run(["docker", "volume", "create", "--label", LABEL], capture_output=True, text=True).stdout.strip()
 
     out = harness("cleanup")
@@ -84,14 +81,14 @@ def test_cleanup_images_removes_only_images_no_unfinished_trial_needs(store, mon
     monkeypatch.setitem(BENCHMARKS, OneImage.name, OneImage)
     for tag in ("needed", "old-a", "old-b"):
         build_image(f"FROM alpine:latest\nRUN echo {tag} > /tag\n", tmp_path, f"{PREFIX}:{tag}")
-    store.create_run("r1", OneImage.name, "mini-swe-agent", "m", {}, {"limits": {}}, ["bash-001"])  # pending: needs it
+    store.create_run("r1", OneImage.name, "mini-swe-agent", "m", {}, {"limits": {}}, ["bash-001"])
     try:
         out = harness("cleanup", "--images")
         assert "Removed 2 image(s), " in out and f"{PREFIX}:old-a" in out and f"{PREFIX}:old-b" in out
         images = subprocess.run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}", PREFIX],
                                 capture_output=True, text=True).stdout.split()
         assert images == [f"{PREFIX}:needed"]
-        assert "harness-acp-" not in out  # only the test prefix was touched
+        assert "harness-acp-" not in out
     finally:
         subprocess.run(["docker", "image", "rm", "-f", f"{PREFIX}:needed", f"{PREFIX}:old-a", f"{PREFIX}:old-b"],
                        capture_output=True)

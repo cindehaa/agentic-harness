@@ -1,5 +1,3 @@
-"""The SQLite store: claims, leases, setup, results, events (no Docker), plus redaction."""
-
 import json
 import threading
 import time
@@ -39,14 +37,14 @@ def test_setup_is_claimed_once_and_trials_wait_for_it(store, tmp_path):
     other = Store(tmp_path / "harness.db")
     assert store.claim_setup("w1", 120)["id"] == "run-1"
     assert other.claim_setup("w2", 120) is None
-    assert store.claim_trial("w1", 120) is None  # setup isn't done yet
+    assert store.claim_trial("w1", 120) is None
     store.finish_setup("run-1", "w1")
     assert store.claim_trial("w1", 120).task_id == "t1"
 
 
 def test_expired_setup_lease_is_reclaimed_and_the_lost_worker_is_ignored(store):
     submit(store, ready=False)
-    store.claim_setup("w1", lease_s=-1)  # w1 "died" while building
+    store.claim_setup("w1", lease_s=-1)
     assert store.claim_setup("w2", 120)["id"] == "run-1"
     assert not store.renew_setup_lease("run-1", "w1", 120)
     with pytest.raises(LostClaim):
@@ -71,7 +69,7 @@ def test_concurrent_claims_take_each_trial_exactly_once(store, tmp_path):
     claimed: list[str] = []
 
     def worker(name):
-        own = Store(tmp_path / "harness.db")  # one connection per thread
+        own = Store(tmp_path / "harness.db")
         while claim := own.claim_trial(name, 120):
             claimed.append(claim.task_id)
         own.close()
@@ -81,7 +79,7 @@ def test_concurrent_claims_take_each_trial_exactly_once(store, tmp_path):
         t.start()
     for t in threads:
         t.join()
-    assert sorted(claimed) == sorted(task_ids)  # nothing claimed twice, nothing missed
+    assert sorted(claimed) == sorted(task_ids)
 
 
 def test_max_running_caps_claims_across_workers(store, tmp_path):
@@ -99,24 +97,24 @@ def test_max_running_caps_claims_across_workers(store, tmp_path):
         t.start()
     for t in threads:
         t.join()
-    assert len(claims) == 3  # eight workers racing, three running
+    assert len(claims) == 3
     assert store.claim_trial("w9", 120, max_running=3) is None
     name, claim = claims[0]
-    store.finish_attempt(claim, name, GRADED)  # one ends: its place is free
+    store.finish_attempt(claim, name, GRADED)
     assert store.claim_trial("w9", 120, max_running=3) is not None
     assert store.claim_trial("w9", 120, max_running=3) is None
 
 
 def test_a_running_trial_whose_lease_expired_frees_its_place(store):
     submit(store, task_ids=("t1", "t2"))
-    store.claim_trial("dead", lease_s=-1)  # its worker is gone
+    store.claim_trial("dead", lease_s=-1)
     assert store.claim_trial("w", 120, max_running=1).task_id == "t2"
     assert store.claim_trial("w", 120, max_running=1) is None
 
 
 def test_expired_lease_is_reclaimed_and_the_lost_worker_is_ignored(store):
     submit(store, task_ids=["t1"])
-    stale = store.claim_trial("w1", lease_s=-1)  # already expired: w1 "died"
+    stale = store.claim_trial("w1", lease_s=-1)
     assert [t["id"] for t in store.reclaim_expired(max_attempts=3, backoff_s=0)] == [stale.trial_id]
     assert store.trials("run-1")[0]["state"] == "pending"
 
@@ -125,7 +123,6 @@ def test_expired_lease_is_reclaimed_and_the_lost_worker_is_ignored(store):
     assert fresh.artifacts_dir.parts[-3:] == ("run-1", "t1", f"attempt-{fresh.attempt_id}")
     assert fresh.artifacts_dir != stale.artifacts_dir
 
-    # w1 comes back to life: none of its writes land
     assert not store.renew_lease(stale, "w1", 120)
     with pytest.raises(LostClaim):
         store.finish_attempt(stale, "w1", GRADED)
@@ -137,13 +134,13 @@ def test_expired_lease_is_reclaimed_and_the_lost_worker_is_ignored(store):
 
 def test_lost_workers_count_as_attempts_until_the_trial_ends_infra_error(store):
     submit(store, task_ids=["t1"])
-    for _ in range(3):  # e.g. a task that crashes its worker every time
+    for _ in range(3):
         store.claim_trial("w1", lease_s=-1)
         store.reclaim_expired(max_attempts=3, backoff_s=0)
     t = store.trials("run-1")[0]
     assert (t["state"], t["outcome"], t["attempt_count"]) == ("done", "infra_error", 3)
     assert store.run("run-1")["status"] == "done"
-    assert store.claim_trial("w1", 120) is None  # done is final
+    assert store.claim_trial("w1", 120) is None
 
 
 def test_retry_waits_for_its_backoff(store):
@@ -195,14 +192,14 @@ def test_secret_values_from_env_file(tmp_path):
     env.write_text("ANTHROPIC_API_KEY='sk-ant-12345678'\nMSWEA_MODEL_NAME=anthropic/claude\nMY_TOKEN=short\n"
                    "# DB_PASSWORD=commented-out\nexport DB_PASSWORD=hunter2hunter2\n")
     secrets = secret_values(env)
-    assert secrets == ("sk-ant-12345678", "hunter2hunter2")  # longest first
+    assert secrets == ("sk-ant-12345678", "hunter2hunter2")
     assert redact("key sk-ant-12345678 and hunter2hunter2, model anthropic/claude", secrets) == "key *** and ***, model anthropic/claude"
 
 
 def test_secret_named_variables_in_the_environment_are_redacted(monkeypatch):
-    monkeypatch.setenv("SHELL_ONLY_API_TOKEN", "tok-from-the-shell-123")  # exported in the shell, not in .env
-    monkeypatch.setenv("SHORT_KEY", "abc")  # too short: would also replace ordinary words
-    monkeypatch.setenv("HARNESS_TEST_GREETING", "not-a-secret-value")  # not a secret name
+    monkeypatch.setenv("SHELL_ONLY_API_TOKEN", "tok-from-the-shell-123")
+    monkeypatch.setenv("SHORT_KEY", "abc")
+    monkeypatch.setenv("HARNESS_TEST_GREETING", "not-a-secret-value")
     assert environ_secrets({"A_PASSWORD": "pw-123456", "PLAIN": "pw-123456x"}) == {"pw-123456"}
     assert redact("tok-from-the-shell-123 abc not-a-secret-value") == "*** abc not-a-secret-value"
 
@@ -220,8 +217,8 @@ def test_recorded_spend_is_never_erased_by_an_outcome_without_it(store):
 
     submit(store, task_ids=("t1",))
     claim = store.claim_trial("w", 120)
-    store.record_spend(claim.attempt_id, AgentStats(None, 0.05, 4, 900, 60))  # at a turn's end
-    store.finish_attempt(claim, "w", Outcome("infra_error", error="worker interrupted"))  # carries no stats
+    store.record_spend(claim.attempt_id, AgentStats(None, 0.05, 4, 900, 60))
+    store.finish_attempt(claim, "w", Outcome("infra_error", error="worker interrupted"))
     a = store.attempts("run-1")[0]
     assert (a["cost_usd"], a["model_calls"], a["input_tokens"], a["output_tokens"]) == (0.05, 4, 900, 60)
 
@@ -240,7 +237,7 @@ def test_a_spent_budget_stops_claiming_and_skips_the_waiting_trials(store):
     trials = store.trials("run-b")
     assert [(t["state"], t["outcome"], t["attempt_count"]) for t in trials] == [
         ("done", "graded", 1), ("done", "skipped_budget", 0), ("done", "skipped_budget", 0)]
-    assert len(store.attempts("run-b")) == 1  # a skipped trial never started: no attempt
+    assert len(store.attempts("run-b")) == 1
     assert store.run("run-b")["status"] == "done"
 
 
@@ -255,11 +252,11 @@ def test_trials_in_flight_finish_when_live_spend_reaches_the_budget(store):
 
     budgeted(store)
     first, second = store.claim_trial("w1", 120), store.claim_trial("w2", 120)
-    store.record_spend(first.attempt_id, AgentStats(None, 0.06))  # at a turn's end, before either attempt is done
+    store.record_spend(first.attempt_id, AgentStats(None, 0.06))
     assert store.trials("run-b")[2]["outcome"] == "skipped_budget"
     assert store.claim_trial("w3", 120) is None
     store.finish_attempt(first, "w1", Outcome("graded", Score(True), 1.0, cost_usd=0.06))
-    assert store.run("run-b")["status"] == "running"  # the second is still in flight
+    assert store.run("run-b")["status"] == "running"
     store.finish_attempt(second, "w2", Outcome("graded", Score(False), 0.0, cost_usd=0.02))
     assert [t["outcome"] for t in store.trials("run-b")] == ["graded", "graded", "skipped_budget"]
     assert store.run("run-b")["status"] == "done"

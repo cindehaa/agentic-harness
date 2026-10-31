@@ -1,6 +1,3 @@
-"""Each test module's containers and volumes carry a label of their own instead of the harness's (agentic-harness=1),
-so its leftover checks and cleanups see only its own: never a running worker's, nor another test run's."""
-
 import uuid
 
 import pytest

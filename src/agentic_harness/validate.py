@@ -1,6 +1,3 @@
-"""`harness validate`: is an adapter wired correctly? Two fake agents go through the normal trial runner: doing
-nothing must fail every task, the reference solution must pass it. No model, no API key."""
-
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -19,16 +16,15 @@ from agentic_harness.worker import prepare_images
 class Check:
     task_id: str
     kind: Literal["null", "oracle"]
-    ok: bool | None  # None: not run (the task has no reference solution)
+    ok: bool | None
     detail: str
-    source: str | None = None  # oracle: who wrote the reference solution
+    source: str | None = None
 
 
 def validate(benchmark: Benchmark, tasks: list[Task], out_dir: Path, concurrency: int = 4,
              limits: Limits = Limits()) -> list[Check]:
-    """Both checks for every task (artifacts under out_dir/<task>/<null|oracle>/), in task order."""
     benchmark.setup(tasks)
-    prepare_images(benchmark, NullAgent(), tasks)  # the graders' images, as a worker would
+    prepare_images(benchmark, NullAgent(), tasks)
     jobs = [(t, "null") for t in tasks] + [(t, "oracle") for t in tasks]
     with ThreadPoolExecutor(concurrency) as pool:
         checks = list(pool.map(lambda job: _check(benchmark, *job, out_dir / job[0].id / job[1], limits), jobs))
@@ -41,7 +37,7 @@ def _check(benchmark: Benchmark, task: Task, kind: str, attempt_dir: Path, limit
         outcome = run_trial(benchmark, NullAgent(), task, limits, attempt_dir, DockerEnvironment)
         if outcome.status != "graded":
             return Check(task.id, kind, False, _not_graded(outcome))
-        if not _first_message(attempt_dir):  # run_agent sent nothing an agent could act on
+        if not _first_message(attempt_dir):
             return Check(task.id, kind, False, "run_agent sent no (or an empty) first message")
         if outcome.score_float != 0:
             return Check(task.id, kind, False, f"doing nothing scored {outcome.score_float}: {_why(outcome)}")
@@ -60,14 +56,13 @@ def _check(benchmark: Benchmark, task: Task, kind: str, attempt_dir: Path, limit
 
 
 def _first_message(attempt_dir: Path) -> bool:
-    """The benchmark's first message has something in it: non-blank text, or a file or data."""
     transcript = json.loads((attempt_dir / "transcript.json").read_text())
     return bool(transcript) and any(c["text"].strip() if "text" in c else True for c in transcript[0]["content"])
 
 
 def _not_graded(outcome: Outcome) -> str:
     lines = (outcome.error or "").strip().splitlines()
-    return f"{outcome.status}: {lines[-1] if lines else ''}"  # a traceback's last line says what went wrong
+    return f"{outcome.status}: {lines[-1] if lines else ''}"
 
 
 def _why(outcome: Outcome) -> str:

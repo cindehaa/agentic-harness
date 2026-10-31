@@ -1,8 +1,3 @@
-"""The database: runs, trials (which are also the queue), attempts, events.
-
-Plain sqlite3 with handwritten SQL. One Store = one connection; every thread opens its own Store.
-"""
-
 import json
 import sqlite3
 import time
@@ -13,7 +8,7 @@ from pathlib import Path
 from agentic_harness.agents.base import AgentStats
 from agentic_harness.types import Outcome
 
-SCHEMA_VERSION = 5  # bump on any schema change; an old harness.db is then refused, not migrated
+SCHEMA_VERSION = 5  # bump on any schema change; an old harness.db is then refused
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -91,33 +86,31 @@ CREATE TABLE IF NOT EXISTS workers (  -- one row per running `harness worker` pr
 
 
 class SchemaMismatch(Exception):
-    """harness.db was made by a harness with another schema."""
+    ...
 
 
 class LostClaim(Exception):
-    """This worker no longer holds the trial or setup (its lease expired and another worker reclaimed it)."""
+    ...
 
 
 @dataclass(frozen=True)
 class Claim:
-    """A trial held by one worker, and the attempt it is making (created with the claim)."""
-
     trial_id: int
     run_id: str
     task_id: str
     attempt_id: int
-    n: int  # 1, 2, 3: which attempt at this trial
-    artifacts_dir: Path  # runs/<run_id>/<task_id>/attempt-<attempt_id>/: never shared by two attempts
+    n: int
+    artifacts_dir: Path
 
 
 class Store:
     def __init__(self, path: Path) -> None:
-        self.runs_dir = path.parent  # attempt folders live next to the DB
+        self.runs_dir = path.parent
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, isolation_level=None)  # autocommit; transactions are explicit (_transaction)
         self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA busy_timeout=30000")  # a writer waits up to 30 s for the lock instead of failing
-        self.db.execute("PRAGMA journal_mode=WAL")  # readers (status) never wait for the writer
+        self.db.execute("PRAGMA busy_timeout=30000")
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         self.db.execute("INSERT INTO schema_version SELECT ? WHERE NOT EXISTS (SELECT 1 FROM schema_version)", (SCHEMA_VERSION,))
         version = self.db.execute("SELECT version FROM schema_version").fetchone()[0]
@@ -142,8 +135,6 @@ class Store:
         rows = self.db.execute(sql, params).fetchall()  # fetch everything, so the statement is finished before COMMIT
         return rows[0] if rows else None
 
-    # --- submitting ---
-
     def create_run(self, run_id: str, benchmark: str, agent: str, model: str | None, versions: dict, config: dict,
                    task_ids: list[str], max_cost_usd: float | None = None) -> None:
         with self._transaction():
@@ -156,10 +147,7 @@ class Store:
                 "INSERT INTO trials (run_id, task_id, state) VALUES (?, ?, 'pending')", [(run_id, t) for t in task_ids]
             )
 
-    # --- run setup (once per run, by the worker that claims it) ---
-
     def claim_setup(self, worker: str, lease_s: float, run_id: str | None = None) -> sqlite3.Row | None:
-        """The oldest run waiting for setup (unclaimed, or its setup worker's lease expired), now claimed by `worker`."""
         now = time.time()
         with self._transaction():
             return self._one(
@@ -173,7 +161,6 @@ class Store:
             )
 
     def renew_setup_lease(self, run_id: str, worker: str, lease_s: float) -> bool:
-        """Extend the setup claim; False if this worker no longer holds it."""
         cursor = self.db.execute(
             "UPDATE runs SET setup_lease_until = ? WHERE id = ? AND setup_claimed_by = ? AND status = 'pending'",
             (time.time() + lease_s, run_id, worker),
@@ -181,7 +168,6 @@ class Store:
         return cursor.rowcount == 1
 
     def release_setup(self, run_id: str, worker: str) -> None:
-        """Give up a setup this worker holds (it was stopped): the next worker to look claims it at once."""
         self.db.execute(
             "UPDATE runs SET setup_claimed_by = NULL, setup_lease_until = NULL"
             " WHERE id = ? AND setup_claimed_by = ? AND status = 'pending'",
@@ -189,8 +175,6 @@ class Store:
         )
 
     def finish_setup(self, run_id: str, worker: str, error: str | None = None) -> None:
-        """Setup worked: the run's trials become claimable. Setup failed: the run fails and every trial ends infra_error.
-        Raises LostClaim (and writes nothing) if `worker` no longer holds the setup."""
         with self._transaction():
             now = time.time()
             cursor = self.db.execute(
@@ -201,7 +185,7 @@ class Store:
             if cursor.rowcount == 0:
                 raise LostClaim(f"setup of {run_id}")
             if error is not None:
-                self.db.execute(  # one attempt row per trial, so the error is where every other error is
+                self.db.execute(
                     "INSERT INTO attempts (trial_id, n, outcome, error) SELECT id, 1, 'infra_error', ? FROM trials WHERE run_id = ?",
                     (f"setup failed: {error}", run_id),
                 )
@@ -210,9 +194,6 @@ class Store:
                 )
 
     def fail_run(self, run_id: str, error: str) -> bool:
-        """The run can't run at all (unknown agent or benchmark, failed pre-flight check): it fails, and every trial
-        not done ends infra_error: a waiting one with an attempt row holding the error, one in flight with its open
-        attempt closed (the worker running it loses its claim). False if the run had already ended."""
         with self._transaction():
             now = time.time()
             cursor = self.db.execute(
@@ -238,13 +219,8 @@ class Store:
             )
         return True
 
-    # --- the queue ---
-
     def claim_trial(self, worker: str, lease_s: float, run_id: str | None = None,
                     max_running: int | None = None) -> Claim | None:
-        """Take the next pending trial of a run whose setup is done, for lease_s, and start its next attempt.
-        With max_running: only while fewer trials than that are running, across every worker (a running trial whose
-        lease expired doesn't count: its worker is gone). None if nothing is claimable."""
         now = time.time()
         with self._transaction():  # the count and the claim in one write transaction: two workers can't both pass
             trial = self._one(
@@ -262,7 +238,7 @@ class Store:
             )
             if trial is None:
                 return None
-            attempt_id = self.db.execute(  # claimable from the later of: setup done, the retry backoff over
+            attempt_id = self.db.execute(
                 "INSERT INTO attempts (trial_id, n, queued_at, started_at)"
                 " SELECT ?, ?, MAX(COALESCE(setup_finished_at, created_at), ?), ? FROM runs WHERE id = ?",
                 (trial["id"], trial["attempt_count"], trial["available_at"], now, trial["run_id"]),
@@ -272,7 +248,6 @@ class Store:
         return Claim(trial["id"], trial["run_id"], trial["task_id"], attempt_id, trial["attempt_count"], artifacts_dir)
 
     def renew_lease(self, claim: Claim, worker: str, lease_s: float) -> bool:
-        """Extend the claim; False if this worker no longer holds it."""
         cursor = self.db.execute(
             "UPDATE trials SET lease_until = ? WHERE id = ? AND claimed_by = ? AND state = 'running' AND attempt_count = ?",
             (time.time() + lease_s, claim.trial_id, worker, claim.n),
@@ -280,9 +255,6 @@ class Store:
         return cursor.rowcount == 1
 
     def reclaim_expired(self, max_attempts: int, backoff_s: float) -> list[sqlite3.Row]:
-        """Trials whose worker stopped renewing its lease (killed, hung): close the open attempt as infra_error
-        ("worker lost"; it counts toward max_attempts), then re-queue the trial after a backoff, or end it
-        infra_error once it has had max_attempts (so a trial that kills its worker can't loop forever)."""
         now = time.time()
         with self._transaction():
             expired = self.db.execute(
@@ -299,9 +271,7 @@ class Store:
         return expired
 
     def finish_attempt(self, claim: Claim, worker: str, outcome: Outcome, retry_at: float | None = None) -> None:
-        """The commit point of an attempt (its files are already written): record its outcome, load the rest of its
-        events, and end the trial with it, or (retry_at given) re-queue the trial, claimable from retry_at.
-        Raises LostClaim (and writes nothing) if `worker` no longer holds this attempt's claim."""
+        """The attempt's commit point; raises LostClaim (writing nothing) if not ours."""
         with self._transaction():
             owned = self._one(
                 "SELECT 1 FROM trials WHERE id = ? AND claimed_by = ? AND state = 'running' AND attempt_count = ?",
@@ -324,9 +294,7 @@ class Store:
             self._end_or_requeue(claim.trial_id, claim.run_id, outcome, retry_at)
 
     def record_spend(self, attempt_id: int, stats: AgentStats) -> None:
-        """What the attempt's agent has spent so far; if that uses up its run's budget, the run's waiting trials end
-        skipped_budget. Not fenced: an attempt row belongs to one attempt, and money a worker spent before losing its
-        claim was still spent."""
+        """Not fenced: money a worker spent before losing its claim was still spent."""
         with self._transaction():
             self._record_spend(attempt_id, stats.cost_usd, stats.model_calls, stats.input_tokens, stats.output_tokens)
             run_id = self._one("SELECT t.run_id FROM attempts a JOIN trials t ON t.id = a.trial_id WHERE a.id = ?",
@@ -334,7 +302,7 @@ class Store:
             self._apply_budget(run_id)
 
     def _record_spend(self, attempt_id: int, cost_usd: float, model_calls: int, input_tokens: int, output_tokens: int) -> None:
-        # MAX: spend only grows, so an outcome without stats (e.g. "worker interrupted") never erases what was recorded
+        # MAX: spend only grows; an outcome without stats never erases it
         self.db.execute(
             "UPDATE attempts SET cost_usd = MAX(COALESCE(cost_usd, 0), ?), model_calls = MAX(COALESCE(model_calls, 0), ?),"
             " input_tokens = MAX(COALESCE(input_tokens, 0), ?), output_tokens = MAX(COALESCE(output_tokens, 0), ?)"
@@ -349,7 +317,7 @@ class Store:
                 (retry_at, trial_id),
             )
         else:
-            self.db.execute(  # done is final: the claim query only takes pending trials
+            self.db.execute(
                 "UPDATE trials SET state = 'done', outcome = ?, score_value = ?, score_float = ?, lease_until = NULL"
                 " WHERE id = ?",
                 (outcome.status, _json(outcome.score and outcome.score.value), outcome.score_float, trial_id),
@@ -357,8 +325,6 @@ class Store:
         self._apply_budget(run_id)
 
     def _apply_budget(self, run_id: str) -> None:
-        """If the run has spent its budget: every trial still waiting ends skipped_budget (no attempt: it never
-        started; trials in flight finish within their own limits). Then the run is done once every trial is."""
         self.db.execute(
             "UPDATE trials SET state = 'done', outcome = 'skipped_budget' WHERE run_id = ? AND state = 'pending'"
             " AND (SELECT max_cost_usd FROM runs WHERE id = ?) <= (SELECT COALESCE(SUM(a.cost_usd), 0) FROM attempts a"
@@ -372,7 +338,6 @@ class Store:
         )
 
     def load_events(self, attempt_id: int, events_file: Path) -> None:
-        """Copy the attempt's events.jsonl into the events table (lines already loaded are skipped)."""
         with self._transaction():
             self._load_events(attempt_id, events_file)
 
@@ -385,14 +350,11 @@ class Store:
             [(attempt_id, e["seq"], e["turn"], e["kind"], json.dumps(e["payload"]), e["ts"]) for e in events],
         )
 
-    # --- workers ---
-
     def worker_started(self, worker: str) -> None:
         now = time.time()
         self.db.execute("INSERT OR REPLACE INTO workers (id, started_at, heartbeat_at) VALUES (?, ?, ?)", (worker, now, now))
 
     def worker_heartbeat(self, worker: str) -> bool:
-        """Always True: a worker that lost its row (e.g. pruned) simply adds it back."""
         self.db.execute(
             "INSERT INTO workers (id, started_at, heartbeat_at) VALUES (?, ?, ?)"
             " ON CONFLICT (id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at",
@@ -404,17 +366,12 @@ class Store:
         self.db.execute("DELETE FROM workers WHERE id = ?", (worker,))
 
     def live_workers(self, since: float) -> int:
-        """Workers whose last heartbeat is at or after `since`."""
         return self._one("SELECT COUNT(*) FROM workers WHERE heartbeat_at >= ?", (since,))[0]
-
-    # --- reading back (status, results) ---
 
     def run(self, run_id: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM runs WHERE id = ?", (run_id,))
 
     def runs(self, finished_since: float | None = None) -> list[sqlite3.Row]:
-        """Runs with their trial counts and spend so far: all of them, or (finished_since given) the active ones plus
-        those finished since."""
         return self.db.execute(
             """SELECT r.*, COUNT(t.id) AS total, COALESCE(SUM(t.state = 'done'), 0) AS done,
                       COALESCE(SUM(t.outcome = 'skipped_budget'), 0) AS skipped,
@@ -427,8 +384,6 @@ class Store:
         ).fetchall()
 
     def trials(self, run_id: str) -> list[sqlite3.Row]:
-        """The run's trials, each with its spend and times summed over its attempts, and when its attempt in flight
-        (if any) started."""
         return self.db.execute(
             """SELECT t.*, COALESCE(SUM(a.cost_usd), 0) AS cost_usd, COALESCE(SUM(a.duration_s), 0) AS duration_s,
                       COALESCE(SUM(a.input_tokens), 0) AS input_tokens, COALESCE(SUM(a.output_tokens), 0) AS output_tokens,
@@ -448,19 +403,16 @@ class Store:
         ).fetchall()
 
     def accuracy(self, run_id: str) -> tuple[float | None, int]:
-        """Mean score_float over graded trials only, and how many there are."""
         row = self._one("SELECT AVG(score_float), COUNT(*) FROM trials WHERE run_id = ? AND outcome = 'graded'", (run_id,))
         return row[0], row[1]
 
     def unfinished_runs(self, run_id: str | None = None) -> list[sqlite3.Row]:
-        """Runs (or this run) still waiting for setup or running."""
         return self.db.execute(
             "SELECT * FROM runs WHERE status IN ('pending', 'running') AND (? IS NULL OR id = ?) ORDER BY created_at",
             (run_id, run_id),
         ).fetchall()
 
     def live_attempts(self) -> set[str]:
-        """Ids (as text, like the ATTEMPT_LABEL on their worlds) of attempts a worker is running and still renewing."""
         rows = self.db.execute(
             "SELECT a.id FROM attempts a JOIN trials t ON t.id = a.trial_id"
             " WHERE t.state = 'running' AND t.lease_until >= ? AND a.n = t.attempt_count AND a.outcome IS NULL",
@@ -469,14 +421,12 @@ class Store:
         return {str(r[0]) for r in rows}
 
     def waiting_trials(self) -> int:
-        """Trials a worker still has to finish: not done, in runs that are not over (pending setup or running)."""
         return self._one(
             "SELECT COUNT(*) FROM trials t JOIN runs r ON r.id = t.run_id"
             " WHERE t.state != 'done' AND r.status IN ('pending', 'running')"
         )[0]
 
     def unfinished(self, run_id: str | None = None) -> bool:
-        """Is any run (or this one) still waiting for setup or running?"""
         return self._one(
             "SELECT 1 FROM runs WHERE status IN ('pending', 'running') AND (? IS NULL OR id = ?) LIMIT 1", (run_id, run_id)
         ) is not None

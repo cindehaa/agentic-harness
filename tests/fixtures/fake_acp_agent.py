@@ -1,13 +1,4 @@
-"""A scripted ACP agent for tests (stdlib only, so it runs on the host or in any python image). What it does with a
-prompt depends on the prompt's first word:
-  work     a tool call (asks permission first), its result, cost $0.01 so far, then "done <turn> <rest of prompt>"
-  hang     nothing until session/cancel, then stopReason cancelled; "hang hard" ignores the cancel too
-  spend    reports $5 spent, then waits for session/cancel
-  refuse   stopReason refusal
-  fail     a JSON-RPC error whose message is the rest of the prompt
-  crash    exits at once
-  files    asks the client for a file (fs/read_text_file) and replies with the error it got
-It also echoes what session/new got (cwd, MCP servers) as the reply to a prompt "setup"."""
+"""A scripted ACP agent for tests: the prompt's first word picks what it does."""
 
 import json
 import sys
@@ -76,7 +67,7 @@ def prompt(id_: int, params: dict) -> None:
         cancelled.clear()
         cancelled.wait()
         if rest == "hard":
-            threading.Event().wait()  # never answers
+            threading.Event().wait()
         result["stopReason"] = "cancelled"
     elif command == "refuse":
         result["stopReason"] = "refusal"
@@ -97,7 +88,7 @@ def main() -> None:
     for line in sys.stdin:
         message = json.loads(line)
         method, id_ = message.get("method"), message.get("id")
-        if method is None:  # a reply to one of our requests
+        if method is None:
             with arrived:
                 replies[id_] = message
                 arrived.notify_all()

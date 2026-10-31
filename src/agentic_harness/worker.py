@@ -1,9 +1,3 @@
-"""Workers: take work from the queue (the trials table) and do it.
-
-One worker = one thread with its own DB connection, running one trial (one container) at a time. Threads, not
-processes: a trial spends its time waiting on `docker` and on model calls, so the GIL costs nothing.
-"""
-
 import json
 import logging
 import os
@@ -25,26 +19,23 @@ from agentic_harness.runner import run_trial
 from agentic_harness.store import Claim, LostClaim, Store
 from agentic_harness.types import LimitOverrides, Limits, Outcome, Task
 
-LEASE_S = 120  # a claim lapses this long after its last renewal
+LEASE_S = 120
 RENEW_EVERY_S = 30
-MAX_ATTEMPTS = 3  # attempts per trial, counting lost workers; only a retryable infra_error is retried
-RETRY_BACKOFF_S = 5  # a retry waits this times the attempt number
-IDLE_SLEEP_S = 2  # how long a worker with nothing to do waits before looking again
-STOP_GRACE_S = 30  # after Ctrl-C: how long to wait for the trial threads to notice their worlds are gone
-ENVIRONMENT = DockerEnvironment  # the EnvironmentFactory every trial runs in; the one place the worker picks a backend
+MAX_ATTEMPTS = 3
+RETRY_BACKOFF_S = 5
+IDLE_SLEEP_S = 2
+STOP_GRACE_S = 30
+ENVIRONMENT = DockerEnvironment
 
 log = logging.getLogger("harness.worker")
 
 
 class Stop:
-    """Ctrl-C (SIGINT) or SIGTERM: stop claiming, end the trials in flight and hand them back to the queue. A second
-    signal forces the exit (KeyboardInterrupt); leases then lapse and another worker reclaims the trials as usual."""
-
     def __init__(self) -> None:
         self.requested = threading.Event()
         self._lock = threading.Lock()
-        self._attempts: dict[int, tuple[Claim, str, list[Environment]]] = {}  # attempt id -> claim, worker, its worlds
-        self._setups: dict[str, str] = {}  # run id -> worker running its setup
+        self._attempts: dict[int, tuple[Claim, str, list[Environment]]] = {}
+        self._setups: dict[str, str] = {}
 
     def handle(self, signum: int, frame) -> None:
         if self.requested.is_set():
@@ -72,16 +63,12 @@ class Stop:
                 self._setups[run_id] = worker
 
     def stop_worlds(self) -> None:
-        """Stop every world in flight (with its sidecars and volume). The trial threads' next command then fails."""
         with self._lock:
             worlds = [env for _, _, envs in self._attempts.values() for env in envs]
         for env in worlds:
             env.stop()
 
     def hand_back(self, store: Store) -> None:
-        """Close each attempt in flight as a retryable infra_error and re-queue its trial at once (another worker takes
-        it; it still counts as an attempt), and release each setup this worker held. A trial thread that finishes
-        later finds it no longer holds its claim, and its result is discarded."""
         with self._lock:
             attempts, setups = list(self._attempts.values()), dict(self._setups)
         for claim, worker, _ in attempts:
@@ -96,14 +83,11 @@ def _interrupted(store: Store, claim: Claim, worker: str) -> None:
                              retry_at=time.time())
         log.warning("%s attempt %s: worker interrupted; back in the queue", claim.task_id, claim.n)
     except LostClaim:
-        pass  # already handed back, finished or reclaimed
+        pass
 
 
 def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_id: str | None = None,
          max_running: int | None = None) -> bool:
-    """Run `concurrency` workers until stopped (Ctrl-C, SIGTERM) or, with exit_when_idle, until no run is left
-    unfinished. With run_id, work only on that run (what `harness run --wait` does). With max_running, claim a trial
-    only while fewer than that run across all workers. True if it was stopped."""
     prefix = f"{socket.gethostname()}-{os.getpid()}"
     stop = Stop()
     checks = Preflight()
@@ -112,14 +96,14 @@ def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_
         for i in range(concurrency)
     ]
     with closing(Store(db_path)) as store:
-        store.worker_started(prefix)  # lets `harness status` warn when no worker is running
+        store.worker_started(prefix)
     handlers = _on_signals(stop.handle)
     try:
         with _heartbeat(db_path, lambda s: s.worker_heartbeat(prefix)):
             for t in threads:
                 t.start()
             while any(t.is_alive() for t in threads) and not stop.requested.is_set():
-                time.sleep(0.2)  # not one long join: a signal handler runs only once the main thread is back in Python
+                time.sleep(0.2)  # not one long join: a signal handler runs only when the main thread is in Python
             if stop.requested.is_set():
                 _stop_gracefully(db_path, stop, threads)
     finally:
@@ -130,8 +114,7 @@ def work(db_path: Path, concurrency: int = 1, exit_when_idle: bool = False, run_
 
 
 def _on_signals(handler) -> dict:
-    """Install `handler` (a function, or the dict this returned before) for SIGINT and SIGTERM; returns the old ones.
-    Python only allows it in the main thread: elsewhere (e.g. a test running work() in a thread) nothing changes."""
+    """Python allows this only in the main thread: elsewhere nothing changes."""
     if threading.current_thread() is not threading.main_thread():
         return {}
     old = {}
@@ -152,10 +135,6 @@ def _stop_gracefully(db_path: Path, stop: Stop, threads: list[threading.Thread])
 
 
 class Preflight:
-    """Each run is checked once per worker process, before any of its work is claimed: its benchmark is known and
-    its agent + model can run here at all. A run that can't fails on its own, once, loudly (not as an infra_error
-    in every trial), and the other runs keep flowing."""
-
     def __init__(self) -> None:
         self._checked: set[str] = set()
         self._lock = threading.Lock()  # held through the check: no thread claims a run's work while it is checked
@@ -171,12 +150,11 @@ class Preflight:
 
 
 def preflight_error(run: sqlite3.Row) -> str | None:
-    """Why this run can't run here, or None."""
     if run["benchmark"] not in BENCHMARKS:
         return f"unknown benchmark {run['benchmark']!r}"
     try:
         resolve_agent(run["agent"])(run["model"]).preflight()
-    except (ValueError, ImportError, PreflightError) as e:  # ValueError: an agent name not in the registry
+    except (ValueError, ImportError, PreflightError) as e:
         return f"pre-flight check failed ({run['agent']}, {run['model']}): {e}"
     return None
 
@@ -191,14 +169,13 @@ def _loop(db_path: Path, worker: str, exit_when_idle: bool, run_id: str | None, 
                 continue
             if exit_when_idle and not store.unfinished(run_id):
                 return
-        except Exception:  # a harness bug: keep the worker alive; a claim it held lapses and is reclaimed
+        except Exception:  # a harness bug: keep the worker alive; its claim lapses and is reclaimed
             log.exception("%s: unexpected error", worker)
         stop.requested.wait(IDLE_SLEEP_S)
 
 
 def _work_once(store: Store, db_path: Path, worker: str, run_id: str | None, stop: Stop,
                max_running: int | None = None) -> bool:
-    """Do one piece of work: a run's setup, or one attempt at a trial. False if there was nothing to do."""
     for t in store.reclaim_expired(MAX_ATTEMPTS, RETRY_BACKOFF_S):
         log.warning("trial %s: worker lost (lease expired); attempt %s closed as infra_error", t["id"], t["attempt_count"])
     if run := store.claim_setup(worker, LEASE_S, run_id):
@@ -219,7 +196,6 @@ def _work_once(store: Store, db_path: Path, worker: str, run_id: str | None, sto
 
 
 def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row, stop: Stop) -> None:
-    """Benchmark.setup() for the run's tasks. If it raises, the run fails with the traceback saved in setup.log."""
     task_ids = {t["task_id"] for t in store.trials(run["id"])}
     log.info("run %s: setting up %s", run["id"], run["benchmark"])
     error = None
@@ -232,9 +208,9 @@ def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row, stop: Sto
         except Exception as e:
             log_file = store.runs_dir / run["id"] / "setup.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
-            log_file.write_text(redact(traceback.format_exc()))  # a DockerError from a build carries the build log
+            log_file.write_text(redact(traceback.format_exc()))
             error = redact(f"{type(e).__name__}: {str(e)[:300]} (full log: {log_file})")
-    if stop.requested.is_set():  # Ctrl-C also reaches `docker build`: a build it broke is no reason to fail the run
+    if stop.requested.is_set():  # Ctrl-C also reaches `docker build`: a build it broke doesn't fail the run
         store.release_setup(run["id"], worker)
         return
     try:
@@ -246,8 +222,6 @@ def _setup(store: Store, db_path: Path, worker: str, run: sqlite3.Row, stop: Sto
 
 
 def prepare_images(benchmark: Benchmark, agent: Agent, tasks: list[Task]) -> None:
-    """Every image a trial will start, made local now, so no trial stalls on a first pull or build: graders, MCP
-    servers (pulled unless setup() built them) and the agent's own derived images (e.g. Claude Code's)."""
     for image in sorted({benchmark.grader_image(t) for t in tasks} | {s.image for t in tasks for s in benchmark.mcp_servers(t)}):
         ensure_image(image)
     for t in tasks:
@@ -255,7 +229,6 @@ def prepare_images(benchmark: Benchmark, agent: Agent, tasks: list[Task]) -> Non
 
 
 def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop) -> None:
-    """One attempt at a trial; then, in one transaction, its outcome and the trial's next state (done, or re-queued)."""
     run = store.run(claim.run_id)
     benchmark = BENCHMARKS[run["benchmark"]]()
     agent = resolve_agent(run["agent"])(run["model"])
@@ -263,17 +236,17 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
     config = json.loads(run["config"])
     defaults, flags = Limits(**config["limits"]), LimitOverrides(**config.get("limit_flags", {}))
 
-    def turn_ended(stats: AgentStats) -> None:  # live spend and trace; a failure here only delays them to the attempt's end
+    def turn_ended(stats: AgentStats) -> None:
         try:
             store.record_spend(claim.attempt_id, stats)
             store.load_events(claim.attempt_id, claim.artifacts_dir / "events.jsonl")
         except sqlite3.Error as e:
             log.warning("%s attempt %s: recording the turn failed (%s); retried at the end", claim.task_id, claim.n, e)
 
-    def environment(image: str, lifetime_s: int, limits: Limits, workdir: str) -> Environment:  # ENVIRONMENT, known to Stop
+    def environment(image: str, lifetime_s: int, limits: Limits, workdir: str) -> Environment:
         if stop.requested.is_set():
             raise EnvironmentLost("worker interrupted")
-        env = ENVIRONMENT(image, lifetime_s, limits, workdir, labels={ATTEMPT_LABEL: str(claim.attempt_id)})  # for `harness cleanup`
+        env = ENVIRONMENT(image, lifetime_s, limits, workdir, labels={ATTEMPT_LABEL: str(claim.attempt_id)})
         stop.track_world(claim, env)
         return env
 
@@ -281,14 +254,14 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
     with _heartbeat(db_path, lambda s: s.renew_lease(claim, worker, LEASE_S)):
         outcome = run_trial(benchmark, agent, task, defaults, claim.artifacts_dir, environment, on_turn_end=turn_ended,
                             flags=flags)
-    # first, and whatever happens next (interrupted, claim lost): money spent counts toward the run's budget
+    # first: whatever happens next, money spent counts toward the budget
     store.record_spend(claim.attempt_id, AgentStats(None, outcome.cost_usd, outcome.model_calls, outcome.input_tokens,
                                                     outcome.output_tokens))
     if stop.requested.is_set():  # Ctrl-C also reaches our `docker exec`s: whatever this attempt ended as, it's not its own
         _interrupted(store, claim, worker)
         return
     retry = outcome.status == "infra_error" and outcome.retryable and claim.n < MAX_ATTEMPTS
-    if outcome.status == "infra_error" and not outcome.retryable:  # auth, bad request, a bug: fail fast, loudly
+    if outcome.status == "infra_error" and not outcome.retryable:
         log.error("%s attempt %s: infra_error, not retried: %s", claim.task_id, claim.n, (outcome.error or "").strip().rsplit("\n", 1)[-1])
     try:
         store.finish_attempt(claim, worker, outcome, retry_at=time.time() + RETRY_BACKOFF_S * claim.n if retry else None)
@@ -300,7 +273,6 @@ def _attempt(store: Store, db_path: Path, worker: str, claim: Claim, stop: Stop)
 
 @contextmanager
 def _heartbeat(db_path: Path, renew: Callable[[Store], bool]):
-    """While the body runs, renew a lease every RENEW_EVERY_S from a background thread (with its own connection)."""
     stop = threading.Event()
 
     def beat() -> None:
@@ -312,7 +284,7 @@ def _heartbeat(db_path: Path, renew: Callable[[Store], bool]):
                     log.warning("lease lost to another worker; this attempt's result will be discarded")
                     break
                 wait = RENEW_EVERY_S
-            except sqlite3.OperationalError as e:  # e.g. "database is locked" past busy_timeout: retry soon
+            except sqlite3.OperationalError as e:
                 log.warning("lease renewal failed (%s); retrying", e)
                 wait = 1
         store.close()

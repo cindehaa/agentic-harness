@@ -1,6 +1,3 @@
-"""run_trial's rules against a fake Environment: no Docker, no model. The runner only knows the Environment port,
-so any backend (here an in-memory fake) can stand in for Docker."""
-
 import json
 import time
 from collections.abc import Callable
@@ -18,8 +15,6 @@ TASK = Task("fake", "t1", "fake:image")
 
 
 class FakeEnvironment(Environment):
-    """A world that is a dict of files. `state_now` is what state() reports; `lose_on_exec` makes exec raise."""
-
     def __init__(self, image: str, lifetime_s: int, limits: Limits, workdir: str = "/workspace") -> None:
         super().__init__(image)
         self.lifetime_s, self.limits, self.workdir = lifetime_s, limits, workdir
@@ -28,7 +23,7 @@ class FakeEnvironment(Environment):
         self.lose_on_exec = False
         self.started = self.stopped = self.killed = False
         self.attached: list[FakeEnvironment] = []
-        self.timeouts: list[float | None] = []  # each exec's timeout
+        self.timeouts: list[float | None] = []
 
     def start(self):
         if self.image == "missing:image":
@@ -44,14 +39,14 @@ class FakeEnvironment(Environment):
         local.write_bytes(b"tar of " + self.files["answer.txt"])
         return False
     def write_file(self, path, content): self.files[path] = content.encode() if isinstance(content, str) else content
-    def read_file(self, path): return self.files.get(path, b"")  # missing: empty
+    def read_file(self, path): return self.files.get(path, b"")
     def upload(self, local, remote): ...
 
     def attach(self, sidecar):
         attached = FakeEnvironment(sidecar.image, self.lifetime_s, self.limits)
         attached.sidecar = sidecar
         if sidecar.shares_world:
-            attached.files = self.files  # the shared workspace
+            attached.files = self.files
         self.attached.append(attached)
         return attached
     def download(self, remote, local): ...
@@ -64,16 +59,12 @@ class FakeEnvironment(Environment):
 
 
 class Factory:
-    """An EnvironmentFactory that remembers the one environment it made."""
-
     def __call__(self, image: str, lifetime_s: int, limits: Limits, workdir: str) -> FakeEnvironment:
         self.env = FakeEnvironment(image, lifetime_s, limits, workdir)
         return self.env
 
 
 class OneMessage(Benchmark[Task]):
-    """Sends one message; passes if the agent wrote "ok" to answer.txt."""
-
     name = "one-message"
 
     def tasks(self): return [TASK]
@@ -105,12 +96,10 @@ def write_ok(env: Environment) -> None:
 
 
 def fake(env: Environment) -> FakeEnvironment:
-    return env.env  # the agent is handed a RecordingEnvironment; the fake is behind it
+    return env.env
 
 
 def die(reason: EndReason | None = None) -> Callable[[Environment], None]:
-    """The world ends during the agent's turn for `reason`; None: it vanishes (state() is None)."""
-
     def act(env: Environment) -> None:
         fake(env).state_now = EnvironmentState(running=False, end_reason=reason) if reason else None
 
@@ -132,15 +121,15 @@ def test_runner_uses_the_injected_factory_and_always_stops(tmp_path):
 def test_grading_runs_in_an_attached_grader_that_is_stopped(tmp_path):
     outcome, env = run(write_ok, tmp_path)
     [grader] = env.attached
-    assert outcome.score.value is True  # the grader saw the trial's workspace
-    assert grader.image == "fake:image" and grader.started and grader.stopped  # default grader_image: the task's
+    assert outcome.score.value is True
+    assert grader.image == "fake:image" and grader.started and grader.stopped
     assert (grader.lifetime_s, grader.limits) == (env.lifetime_s, env.limits)
 
 
 def test_main_process_killed_during_turn_is_graded_fail(tmp_path):
     outcome, env = run(die(EndReason.KILLED), tmp_path)
     assert (outcome.status, outcome.score.value, outcome.score.explanation) == ("graded", False, "container died during agent turn")
-    assert not env.killed  # nothing graded: the world is gone
+    assert not env.killed
 
 
 def test_vanished_container_is_infra_error(tmp_path):
@@ -158,7 +147,6 @@ def test_environment_lost_while_still_running_is_infra_error(tmp_path):
 
 
 def test_keep_alive_ending_normally_is_infra_error(tmp_path):
-    # the keep-alive's lifetime ran out, the harness sized it too short; not the agent's doing
     outcome, _ = run(die(EndReason.EXPIRED), tmp_path)
     assert (outcome.status, outcome.error) == ("infra_error", "container lifetime expired")
 
@@ -172,7 +160,7 @@ def test_out_of_memory_under_our_limit_is_graded_fail(tmp_path):
     outcome, _ = run(die(EndReason.RESOURCE_LIMIT), tmp_path)
     assert (outcome.status, outcome.score.value) == ("graded", False)
     assert outcome.score.explanation == "container exceeded its resource limits during agent turn"
-    assert outcome.score.metadata == {"end_reason": "resource_limit"}  # JSON, for the attempts row
+    assert outcome.score.metadata == {"end_reason": "resource_limit"}
 
 
 def test_world_that_ended_for_an_unknown_reason_is_infra_error(tmp_path):
@@ -196,7 +184,7 @@ def raises(error: Exception) -> Callable[[Environment], None]:
     (TransientError("provider overloaded"), True),
     (ConnectionError("network down"), True),
     (EnvironmentLost("backend unreachable"), True),
-    (PermissionError("403 from the provider"), False),  # e.g. auth: another attempt fails the same way
+    (PermissionError("403 from the provider"), False),
     (KeyError("a bug in an adapter"), False),
 ])
 def test_which_infra_errors_are_retryable(tmp_path, error, retryable):
@@ -230,7 +218,7 @@ def test_agent_commands_are_traced_by_turn_and_redacted(tmp_path, monkeypatch):
 
 
 def test_variables_the_agent_forwards_are_redacted(tmp_path, monkeypatch):
-    monkeypatch.setenv("HARNESS_TEST_HANDED_IN", "handed-in-value-42")  # not a secret-looking name
+    monkeypatch.setenv("HARNESS_TEST_HANDED_IN", "handed-in-value-42")
     monkeypatch.setattr("agentic_harness.redact._forwarded", set())
 
     class Forwarding(ScriptedAgent):
@@ -280,7 +268,7 @@ def test_agent_lacking_a_capability_is_unsupported_before_anything_starts(tmp_pa
     outcome = run_trial(NeedsFilesAndMcp(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, factory)
     assert outcome.status == "unsupported"
     assert outcome.error == "scripted can't do what this task needs: content: file, multi_turn, mcp"
-    assert not hasattr(factory, "env")  # no world was started
+    assert not hasattr(factory, "env")
     assert json.loads((tmp_path / "outcome.json").read_text())["status"] == "unsupported"
 
 
@@ -308,7 +296,7 @@ def test_the_world_starts_from_the_image_the_agent_prepares(tmp_path):
     factory = Factory()
     run_trial(OneMessage(), InWorldAgent(write_ok), TASK, Limits(), tmp_path, factory)
     assert factory.env.image == "fake:image-with-agent"
-    assert factory.env.attached[0].image == "fake:image"  # the grader still starts from the task's own image
+    assert factory.env.attached[0].image == "fake:image"
 
 
 def test_events_the_agent_recorded_itself_are_traced_even_when_it_raises(tmp_path):
@@ -337,12 +325,7 @@ def test_the_world_starts_in_the_tasks_workdir(tmp_path):
     assert factory.env.workdir == "/workspace"
 
 
-# --- limits: harness defaults < benchmark-declared < explicit run flags
-
-
 class DeclaresLimits(OneMessage):
-    """Declares its own trial and grade timeouts; its grader runs one command."""
-
     def limits(self, task):
         return LimitOverrides(trial_timeout_s=900, grade_timeout_s=180)
 
@@ -365,7 +348,7 @@ def test_a_trial_runs_under_its_effective_limits_and_records_them(tmp_path):
     outcome = run_trial(DeclaresLimits(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, factory,
                         flags=LimitOverrides(grade_timeout_s=30))
     assert outcome.status == "graded" and factory.env.limits.trial_timeout_s == 900
-    assert factory.env.lifetime_s == 3 * 900 + 30 + 600  # outlives the agent's time and the grading
+    assert factory.env.lifetime_s == 3 * 900 + 30 + 600
     assert outcome.limits["trial_timeout_s"] == {"value": 900, "source": "benchmark"}
     assert outcome.limits["grade_timeout_s"] == {"value": 30, "source": "flag"}
     assert outcome.limits["max_steps"] == {"value": 50, "source": "default"}
@@ -377,7 +360,7 @@ def test_grading_commands_end_by_the_grade_timeout(tmp_path):
     run_trial(DeclaresLimits(), ScriptedAgent(write_ok), TASK, Limits(), tmp_path, factory)
     [grader] = factory.env.attached
     no_timeout, five = grader.timeouts
-    assert 170 < no_timeout <= 180 and five == 5  # no timeout given: the rest of the grading time
+    assert 170 < no_timeout <= 180 and five == 5
 
 
 def test_grading_past_the_grade_timeout_is_a_grader_error(tmp_path):

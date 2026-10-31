@@ -1,5 +1,3 @@
-"""Agents: what a benchmark talks to."""
-
 import importlib
 import os
 from collections.abc import Callable
@@ -10,16 +8,13 @@ from agentic_harness.agents.base import (
     MODEL_ENV, Agent, AgentCapabilities, AgentLimitation, AgentSession, AgentStats, PreflightError, TransientError, Unsupported,
 )
 
-# Agents with code of their own: name -> "module:Class", imported only when used, so `harness status` never loads
-# litellm. Every other agent speaks ACP and is data: agents/acp_agents.toml, or a definition file of its own.
+# imported only when used, so `harness status` never loads litellm
 AGENTS: dict[str, str] = {
     "mini-swe-agent": "agentic_harness.agents.mini_swe_agent:MiniSweAgent",
 }
 
 
 def resolve_agent(name_or_path: str) -> Callable[[str], Agent]:
-    """What makes the agent from a model: `mini-swe-agent` or a path like `agents/mini-swe-agent` (the last path part
-    is the name), a built-in ACP agent (`claude-code`), or a private ACP agent's definition file (`path/to/agent.toml`)."""
     from agentic_harness.agents.acp import AcpAgent, built_in_definitions, load_definition
 
     if name_or_path.endswith(".toml"):
@@ -38,8 +33,6 @@ def resolve_agent(name_or_path: str) -> Callable[[str], Agent]:
 
 
 def resolve_model(model: str | None) -> str | None:
-    """The run's model: `model` (--model), else HARNESS_MODEL; None if neither is set. Agents never read their own
-    settings for it (mini's MSWEA_MODEL_NAME is only for the `mini` CLI)."""
     return model or os.environ.get(MODEL_ENV) or None
 
 

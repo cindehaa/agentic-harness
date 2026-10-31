@@ -1,5 +1,3 @@
-"""CLI for the agentic harness system."""
-
 import hashlib
 import json
 import logging
@@ -33,7 +31,7 @@ _DEFAULT = "  [default: the benchmark's own, else %s]"
 @click.group()
 def cli():
     """Agentic Harness"""
-    load_dotenv(REPO_ROOT / ".env")  # API keys and default models; variables already set in the shell win
+    load_dotenv(REPO_ROOT / ".env")  # variables already set in the shell win
 
 
 @cli.command()
@@ -61,7 +59,7 @@ def cli():
 @click.option("--concurrency", default=1, show_default=True, help="With --wait: trials run at the same time")
 @click.option("--max-running", type=click.IntRange(min=1), default=None, envvar=MAX_RUNNING_ENV, show_envvar=True,
               help="With --wait: cap on trials running at once across ALL workers")
-# Per-trial limits: unset (None) unless given, so a benchmark's own value stands unless the user overrides it
+# limits unset unless given, so a benchmark's own values stand
 @click.option("--trial-timeout", type=float, default=None, help=f"Seconds per trial{_DEFAULT % Limits().trial_timeout_s}")
 @click.option("--grade-timeout", type=float, default=None, help=f"Seconds to grade a trial{_DEFAULT % Limits().grade_timeout_s}")
 @click.option("--cost-limit", type=float, default=None, help=f"Model spend per trial, USD{_DEFAULT % Limits().cost_usd}")
@@ -74,7 +72,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
         max_running: int | None, trial_timeout: float | None, grade_timeout: float | None, cost_limit: float | None,
         max_run_cost: float | None, max_steps: int | None, memory: str | None, cpus: float | None):
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
-    for option in ("concurrency", "max_running"):  # HARNESS_MAX_RUNNING set for the workers is no mistake: only flags
+    for option in ("concurrency", "max_running"):  # only flags: HARNESS_MAX_RUNNING from the environment is fine
         if not wait and click.get_current_context().get_parameter_source(option) is ParameterSource.COMMANDLINE:
             flag = "--" + option.replace("_", "-")
             raise click.UsageError(f"{flag} applies only with --wait; without it, workers run the trials: "
@@ -89,7 +87,7 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
     _log_to_stderr()
     if worker_module.work(DB_PATH, concurrency, exit_when_idle=True, run_id=run_id, max_running=max_running):
         click.echo(f"Interrupted: run {run_id} stays queued; `harness worker` finishes it", err=True)
-        raise SystemExit(130)  # the shell's code for "stopped by Ctrl-C"
+        raise SystemExit(130)
     click.echo()
     click.get_current_context().invoke(results, run_id=run_id, format="table")
     click.echo()
@@ -97,7 +95,6 @@ def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wai
 
 
 def _benchmark_and_agent(benchmark: str, agent: str, model: str | None) -> tuple[Benchmark, Agent]:
-    """The benchmark and a pre-flight-checked agent, the model resolved now (stored in runs.model)."""
     if benchmark not in BENCHMARKS:
         raise click.BadParameter(f"unknown benchmark {benchmark!r}; known: {', '.join(BENCHMARKS)}", param_hint="--benchmark")
     try:
@@ -116,14 +113,12 @@ def _benchmark_and_agent(benchmark: str, agent: str, model: str | None) -> tuple
 
 
 def _submit(bench: Benchmark, the_agent: Agent, tasks: list[Task], flags: LimitOverrides, max_run_cost: float | None) -> str:
-    """Queue a run (one trial per task); its id. Each trial's limits are resolved when it runs: the defaults stored
-    here, then what the benchmark declares for its task, then `flags` (the limits given explicitly)."""
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     versions = {
         "harness": _git_sha(REPO_ROOT),
         "agent": the_agent.version(),
         "dataset": _dataset_hash(bench),
-        "benchmark": bench.version(),  # content hash of its files, also in its image tags
+        "benchmark": bench.version(),
         "model": the_agent.model,
     }
     store = _store()
@@ -136,8 +131,6 @@ def _submit(bench: Benchmark, the_agent: Agent, tasks: list[Task], flags: LimitO
 
 
 def _non_standard(bench: Benchmark, tasks: list[Task], flags: LimitOverrides) -> list[str]:
-    """The limits whose flag replaces another value the benchmark declares for one of the run's tasks: its scores are
-    then not comparable with the benchmark's standard setup."""
     declared = [bench.limits(t).given() for t in tasks]
     return sorted({name for name, value in flags.given().items() for d in declared if name in d and d[name] != value})
 
@@ -246,8 +239,6 @@ def _verdict(check) -> str:
 
 
 SKILL = REPO_ROOT / ".claude" / "skills" / "add-benchmark" / "SKILL.md"
-# What the drafting agent may do without asking: read anything, edit files in this repo (acceptEdits stays inside the
-# working directory), and run only validate, the tests and read-only docker/listing commands. No git, no web.
 ADAPT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash(.venv/bin/harness validate:*)",
                "Bash(.venv/bin/python -m pytest:*)", "Bash(docker image inspect:*)", "Bash(docker images:*)", "Bash(ls:*)"]
 
@@ -264,7 +255,7 @@ def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None
     """Draft an adapter for BENCHMARK_DIR with Claude Code (headless, following the add-benchmark skill), then run
     `harness validate` on it. The draft needs human review before its scores are trusted."""
     name = name or benchmark_dir.resolve().name
-    folder = benchmark_dir.resolve().relative_to(REPO_ROOT)  # inside this repo: the agent may edit only here
+    folder = benchmark_dir.resolve().relative_to(REPO_ROOT)
     prompt = (f"{SKILL.read_text()}\n\n---\n\nAdd an adapter for the benchmark in `{folder}`, registered as "
               f"`{name}`. Adapt only {n_tasks} simple task(s) (few dependencies, quick to build and grade); "
               f"name them in the adapter. Follow the skill above exactly, and iterate until "
@@ -278,7 +269,7 @@ def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None
     if drafted.returncode != 0:
         raise click.ClickException(f"Claude Code exited {drafted.returncode}")
     click.echo(f"\nValidating {name}...")
-    # a new process: this one imported the benchmark registry before the adapter existed
+    # a new process: this one imported the registry before the adapter existed
     checked = subprocess.run([str(REPO_ROOT / ".venv" / "bin" / "harness"), "validate", "--benchmark", name], cwd=REPO_ROOT)
     click.echo(f"\nDraft {'PASSES' if checked.returncode == 0 else 'FAILS'} validate. Review the diff (git diff, "
                f"git status) before trusting its scores: a drafted adapter needs human review.")
@@ -293,7 +284,7 @@ def adapt(benchmark_dir: Path, n_tasks: int, name: str | None, model: str | None
 def worker(concurrency: int, exit_when_idle: bool, max_running: int | None):
     """Take trials from the queue and run them, until Ctrl-C (or idle, with --exit-when-idle). Ctrl-C stops the trials
     in flight and puts them back in the queue; a second Ctrl-C exits at once."""
-    _store().close()  # fail early on a database from another schema version
+    _store().close()
     _log_to_stderr()
     cap = f", at most {max_running} running across all workers" if max_running else ""
     click.echo(f"Worker started: {concurrency} at a time{cap}, database {DB_PATH}", err=True)
@@ -326,14 +317,13 @@ def _names(names: list[str]) -> str:
 
 
 def _needed_images(store: Store) -> set[str]:
-    """Every image a trial not yet done still starts: its task's, its grader's, its MCP servers' and its agent's own."""
     needed = set()
     for run in store.unfinished_runs():
         bench, agent = BENCHMARKS[run["benchmark"]](), resolve_agent(run["agent"])(run["model"])
         waiting = {t["task_id"] for t in store.trials(run["id"]) if t["state"] != "done"}
         try:
             tasks = bench.tasks()
-        except BenchmarkUnavailable:  # its trials can't start anyway, so no image of theirs is worth keeping
+        except BenchmarkUnavailable:
             continue
         for task in (t for t in tasks if t.id in waiting):
             needed |= {task.image, bench.grader_image(task), agent.image_for(task.image)}
@@ -354,7 +344,6 @@ class _EchoHandler(logging.Handler):
 
 
 def _log_to_stderr() -> None:
-    """Show the workers' progress lines ("harness.*" loggers) on stderr."""
     logger = logging.getLogger("harness")
     if not logger.handlers:
         handler = _EchoHandler()
@@ -383,7 +372,6 @@ def _git_sha(path: Path) -> str | None:
 
 
 def _dataset_hash(bench: Benchmark) -> str:
-    """Every task's fields (statements, images, ...): changes whenever the benchmark's data does."""
     tasks = json.dumps([asdict(t) for t in bench.tasks()], sort_keys=True, default=str)
     return hashlib.sha256(tasks.encode()).hexdigest()[:16]
 
@@ -481,7 +469,7 @@ def results(run_id: str, format: str):
                    + ("n/a" if m["trials_per_min"] is None else f"{m['trials_per_min']:.1f}") + " trials/min")
 
 
-EXCLUDED = ("grader_error", "infra_error", "unsupported", "skipped_budget")  # left out of accuracy, always reported
+EXCLUDED = ("grader_error", "infra_error", "unsupported", "skipped_budget")
 
 
 def _usd(value: float | None) -> str:
@@ -497,12 +485,10 @@ def _secs(value: float | None) -> str:
 
 
 def _elapsed(run) -> str:
-    """Since submission: until it finished, or until now."""
     return _secs((run["finished_at"] or time.time()) - run["created_at"])
 
 
 def _trial_time(trial) -> str:
-    """Its finished attempts' time, plus the one in flight so far."""
     running = time.time() - trial["running_since"] if trial["running_since"] else 0
     return _secs(trial["duration_s"] + running)
 
@@ -523,8 +509,6 @@ def _progress(run, done: int, total: int, skipped: int = 0) -> str:
 
 
 def _no_worker(store: Store) -> bool:
-    """No worker has sent a heartbeat within a lease (it renews every 30 s); a running trial's lease then lapses too,
-    so it counts as pending."""
     return store.live_workers(time.time() - worker_module.LEASE_S) == 0
 
 

@@ -1,5 +1,3 @@
-"""The world a task runs in: somewhere to run commands and move files."""
-
 import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -10,7 +8,7 @@ from typing import Self
 
 from agentic_harness.types import Limits
 
-DEFAULT_TIMEOUT = 60.0  # seconds per exec when the caller doesn't say; stops one hung command eating the whole budget
+DEFAULT_TIMEOUT = 60.0
 
 
 @dataclass(frozen=True)
@@ -19,51 +17,39 @@ class ExecResult:
     stdout: str
     stderr: str
     timed_out: bool = False
-    truncated: bool = False  # stdout or stderr was cut to the environment's output cap
+    truncated: bool = False
 
 
 class EnvironmentLost(RuntimeError):
-    """The world itself is gone or unreachable (not a command failing inside it) -> infra_error, retried.
-    Each backend raises it (or a subclass, e.g. DockerError) only when that is verified, never for anything the
-    agent can cause."""
+    """The world itself is gone (verified, never agent-caused) -> infra_error, retried."""
 
 
 class EndReason(Enum):
-    """Why a world ended, in the runner's terms. Each backend translates its own evidence (Docker: exit code, OOM)."""
-
-    EXPIRED = "expired"  # its lifetime ran out: ours to size -> infra_error, retried
-    RESOURCE_LIMIT = "resource_limit"  # it exceeded limits WE set (memory, pids, ...) -> graded fail
-    KILLED = "killed"  # something inside ended it -> graded fail
-    UNKNOWN = "unknown"  # the backend can't tell -> infra_error
+    EXPIRED = "expired"
+    RESOURCE_LIMIT = "resource_limit"
+    KILLED = "killed"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
 class EnvironmentState:
-    """Whether the world is still up, and if not, why it ended."""
-
     running: bool
-    end_reason: EndReason | None = None  # set once it has ended
+    end_reason: EndReason | None = None
 
 
 @dataclass(frozen=True)
 class Sidecar:
-    """A second world attached to a trial's world. It always shares the trial's network, so `localhost` is the same
-    in both (a service one listens on, the other reaches)."""
-
     image: str
-    command: tuple[str, ...] = ()  # its long-running process, e.g. a server; empty: none (it is exec'd into)
-    port: int | None = None  # with a command: start() returns once something listens here
-    # Also the trial's workspace and processes (a grader inspecting the world). False for a service the agent uses:
-    # sharing processes would let the agent reach into it (e.g. through /proc/<pid>/root).
+    command: tuple[str, ...] = ()
+    port: int | None = None
+    # False for services the agent uses: shared PIDs would expose them
     shares_world: bool = True
 
 
 class Environment(ABC):
-    """One isolated world (e.g. one Docker container). Use as a context manager so it is always stopped."""
-
     def __init__(self, image: str, workdir: str = "/workspace") -> None:
         self.image = image
-        self.workdir = workdir  # where commands (and agents) start; relative paths resolve here
+        self.workdir = workdir
 
     @abstractmethod
     def start(self) -> None: ...
@@ -74,15 +60,11 @@ class Environment(ABC):
     @abstractmethod
     def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None,
              env: dict[str, str] | None = None, user: str | None = None) -> ExecResult:
-        """Run a command: a string through `sh -c` (agents), a list directly (graders, the harness).
-        `timeout` is in seconds; None means no timeout. `env` adds variables for this command only (e.g. an agent's
-        API key: never written into the image); `user` runs it as that user (default: the image's, root here)."""
+        """Run a command: a string via `sh -c`, a list directly; timeout None = no limit."""
 
     def start_process(self, argv: list[str], env: dict[str, str] | None = None,
                       user: str | None = None) -> subprocess.Popen:
-        """Start a long-running process in the world (in its workdir) whose stdin, stdout and stderr are pipes on the
-        host: an agent the harness talks to over a protocol (ACP). Killing the returned process ends only our side;
-        kill_agent_processes() ends the one in the world. `env` and `user` as for exec()."""
+        """Start a long-running process in the world with its stdio piped to the host."""
         raise NotImplementedError(f"{type(self).__name__} can't run a process the harness talks to")
 
     @abstractmethod
@@ -95,16 +77,14 @@ class Environment(ABC):
 
     @abstractmethod
     def save_workspace(self, local: Path, max_bytes: int) -> bool:
-        """Write the working directory to `local` as a tar file, never unpacked on the host (a symlink in it can't
-        reach a host path). Stops at `max_bytes`; True if cut short. OSError if it can't be read."""
+        """Write the workdir to `local` as a tar, never unpacked on the host; True if cut short."""
 
     @abstractmethod
     def attach(self, sidecar: Sidecar) -> "Environment":
-        """A second world attached to this one, with the same limits. Not started yet: use it as a context manager
-        (or start() it). It is stopped with this world at the latest."""
+        """A second world attached to this one, not started yet; stopped with this one."""
 
     def attach_grader(self, image: str) -> "Environment":
-        """A grader: sees this world's workspace, network (e.g. a service on localhost) and processes."""
+        """A grader: sees this world's workspace, network and processes."""
         return self.attach(Sidecar(image))
 
     @abstractmethod
@@ -130,6 +110,4 @@ class Environment(ABC):
         self.stop()
 
 
-# How the runner gets a world for a trial, without knowing the backend:
-# (image, lifetime_s, limits, workdir) -> Environment. DockerEnvironment's constructor is one.
 EnvironmentFactory = Callable[[str, int, Limits, str], Environment]

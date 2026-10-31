@@ -1,6 +1,3 @@
-"""harness validate against real Docker: a correct adapter passes both checks, and each kind of miswiring is caught
-(skipped if Docker isn't running)."""
-
 import subprocess
 
 import pytest
@@ -28,7 +25,7 @@ def checks(bench, tmp_path):
 def test_correct_adapter_passes_both_checks(tmp_path):
     result = checks(BashOperations(), tmp_path)
     assert (result["null"].ok, result["oracle"].ok, result["oracle"].source) == (True, True, "harness-written")
-    assert (tmp_path / "bash-001" / "oracle" / "events.jsonl").exists()  # the oracle's commands are traced like any agent's
+    assert (tmp_path / "bash-001" / "oracle" / "events.jsonl").exists()
 
 
 class PassesEverything(BashOperations):

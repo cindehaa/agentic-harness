@@ -1,5 +1,3 @@
-"""DockerEnvironment against a real Docker daemon (skipped if Docker isn't running)."""
-
 import json
 import subprocess
 import tarfile
@@ -89,7 +87,7 @@ def test_upload_and_download_folder(env, tmp_path):
     (src / "sub").mkdir(parents=True)
     (src / "sub" / "f.txt").write_text("data")
     env.upload(src, "/workspace/up")
-    env.upload(src, "/workspace/up")  # again, onto the existing folder: replaces, doesn't nest
+    env.upload(src, "/workspace/up")
     assert env.read_file("/workspace/up/sub/f.txt") == b"data"
     env.download("/workspace/up", tmp_path / "out" / "back")
     assert (tmp_path / "out" / "back" / "sub" / "f.txt").read_text() == "data"
@@ -98,7 +96,7 @@ def test_upload_and_download_folder(env, tmp_path):
 
 def test_stop_twice_is_safe():
     env = DockerEnvironment(IMAGE)
-    env.stop()  # before start
+    env.stop()
     env.start()
     env.stop()
     env.stop()
@@ -119,7 +117,6 @@ def test_exec_when_container_is_gone():
 
 
 def test_exec_with_missing_cwd_is_a_normal_failure(env):
-    # the agent can delete its own cwd, so this must not become an (excluded) infra error
     result = env.exec("true", cwd="/no/such/dir")
     assert result.exit_code != 0
     assert "/no/such/dir" in result.stdout + result.stderr
@@ -200,17 +197,17 @@ def test_state_of_running_container(env):
 
 def test_state_after_main_process_dies():
     with DockerEnvironment(IMAGE) as env:
-        env.exec("kill 1")  # the init forwards SIGTERM to the sleep; the container exits but is kept (no --rm)
+        env.exec("kill 1")
         time.sleep(1)
         state = env.state()
-    assert state == EnvironmentState(running=False, end_reason=EndReason.KILLED)  # exit code non-zero
+    assert state == EnvironmentState(running=False, end_reason=EndReason.KILLED)
 
 
 @pytest.mark.parametrize("status, exit_code, oom_killed, reason", [
-    ("exited", 0, False, EndReason.EXPIRED),  # the keep-alive sleep ran its course
-    ("exited", 143, False, EndReason.KILLED),  # e.g. `kill 1`: the init forwards the signal to the sleep
-    ("exited", 137, True, EndReason.RESOURCE_LIMIT),  # over our --memory
-    ("dead", 0, False, EndReason.UNKNOWN),  # Docker failed to stop or remove it
+    ("exited", 0, False, EndReason.EXPIRED),
+    ("exited", 143, False, EndReason.KILLED),
+    ("exited", 137, True, EndReason.RESOURCE_LIMIT),
+    ("dead", 0, False, EndReason.UNKNOWN),
 ])
 def test_docker_evidence_becomes_an_end_reason(status, exit_code, oom_killed, reason):
     assert _end_reason({"Status": status, "ExitCode": exit_code, "OOMKilled": oom_killed}) is reason
@@ -232,7 +229,6 @@ def test_kill_agent_processes_keeps_container_alive():
 
 
 def test_kill_agent_processes_outlasts_a_fork_loop():
-    # One pass over /proc misses children forked after its listing; the loop below forks hundreds a second
     with DockerEnvironment(IMAGE, limits=Limits(pids_limit=4096)) as env:
         env.exec("(while :; do sleep 0.5 & done) > /dev/null 2>&1 &")
         time.sleep(1)
@@ -242,14 +238,14 @@ def test_kill_agent_processes_outlasts_a_fork_loop():
 
 
 def test_docker_error_is_the_backend_neutral_environment_lost():
-    assert issubclass(DockerError, EnvironmentLost)  # the runner only knows EnvironmentLost
+    assert issubclass(DockerError, EnvironmentLost)
 
 
 def test_state_after_lifetime_expires_is_exit_code_0():
     with DockerEnvironment(IMAGE, lifetime_s=1) as env:
         while env.state().running:
             time.sleep(0.2)
-        assert env.state().end_reason is EndReason.EXPIRED  # the sleep exited 0: not "killed"
+        assert env.state().end_reason is EndReason.EXPIRED
 
 
 def test_resource_limits_are_applied():
@@ -265,7 +261,7 @@ def test_save_workspace_is_a_tar_that_keeps_symlinks_as_links(env, tmp_path):
     with tarfile.open(tmp_path / "w.tar") as tar:
         members = {m.name.removeprefix("./"): m for m in tar.getmembers()}
         assert tar.extractfile(members["a.txt"]).read() == b"hi\n"
-        assert members["link"].issym() and members["link"].linkname == "/etc/passwd"  # never followed
+        assert members["link"].issym() and members["link"].linkname == "/etc/passwd"
 
 
 def test_save_workspace_stops_at_the_cap(env, tmp_path):
@@ -275,7 +271,7 @@ def test_save_workspace_stops_at_the_cap(env, tmp_path):
 
 
 def test_deleting_the_workspace_leaves_its_mount_point(env, tmp_path):
-    env.exec("rm -rf /workspace")  # empties the volume; the mount point itself can't be removed
+    env.exec("rm -rf /workspace")
     assert env.save_workspace(tmp_path / "w.tar", 10_000_000) is False
     with tarfile.open(tmp_path / "w.tar") as tar:
         assert [m.name for m in tar.getmembers()] == ["."]
@@ -303,15 +299,13 @@ def test_workspace_is_a_volume_that_keeps_the_image_files_and_is_removed_on_stop
         with DockerEnvironment(tag) as env:
             volume = env.volume
             assert volume in _volumes()
-            assert env.read_file("f.txt") == b"baked\n"  # Docker copies the image's files into a new volume
+            assert env.read_file("f.txt") == b"baked\n"
         assert volume not in _volumes()
     finally:
         subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
 
 
 def test_another_workdir_keeps_the_image_files_there_and_is_the_grader_and_workspace_tar_root(tmp_path):
-    """A task's own workdir (e.g. Terminal-Bench's /app, where its image ships files): the volume is mounted there and
-    starts with those files; commands start there; the grader sees it at the same path; workspace.tar is taken from it."""
     tag = "harness-test-workdir"
     dockerfile = b"FROM alpine:latest\nRUN mkdir -p /app/sub && echo from-image > /app/sub/f.txt\nWORKDIR /app\n"
     subprocess.run(["docker", "build", "-t", tag, "-"], input=dockerfile, capture_output=True, check=True)
@@ -334,15 +328,15 @@ def test_another_workdir_keeps_the_image_files_there_and_is_the_grader_and_works
 def test_attached_grader_sees_the_workspace_a_live_service_and_the_processes():
     with DockerEnvironment(IMAGE) as env:
         env.write_file("answer.txt", "42")
-        env.exec("mkdir /trial-only && (while true; do echo up | nc -l -p 8080; done) > /dev/null 2>&1 &")  # a live service
+        env.exec("mkdir /trial-only && (while true; do echo up | nc -l -p 8080; done) > /dev/null 2>&1 &")
         with env.attach_grader(IMAGE) as grader:
             assert grader.read_file("/workspace/answer.txt") == b"42"
-            assert grader.exec("nc -w 2 localhost 8080 < /dev/null").stdout == "up\n"  # the trial's network
-            assert "nc -l -p 8080" in grader.exec("ps").stdout  # the trial's processes
-            grader.write_file("/workspace/from-grader.txt", "x")  # shared both ways
-            assert grader.exec("test -e /trial-only").exit_code != 0  # only the workspace is shared, not the filesystem
+            assert grader.exec("nc -w 2 localhost 8080 < /dev/null").stdout == "up\n"
+            assert "nc -l -p 8080" in grader.exec("ps").stdout
+            grader.write_file("/workspace/from-grader.txt", "x")
+            assert grader.exec("test -e /trial-only").exit_code != 0
         assert env.read_file("from-grader.txt") == b"x"
-        assert env.state().running  # stopping the grader leaves the trial up
+        assert env.state().running
 
 
 def test_attached_grader_has_the_trial_limits():
@@ -357,7 +351,7 @@ def test_stopping_the_trial_removes_its_grader_and_volume():
     env = DockerEnvironment(IMAGE)
     env.start()
     grader = env.attach_grader(IMAGE)
-    grader.start()  # never stopped on its own, e.g. the runner crashed mid-grade
+    grader.start()
     ids, volume = (env.container_id, grader.container_id), env.volume
     env.stop()
     assert all(_listed(i) == "" for i in ids) and volume not in _volumes()
@@ -381,7 +375,7 @@ def test_exec_env_reaches_the_command_but_never_the_docker_command_line(env, mon
     r = env.exec(["sh", "-c", 'echo "$HARNESS_TEST_SECRET"'], env={"HARNESS_TEST_SECRET": "s3cret-value"})
     assert r.stdout == "s3cret-value\n"
     assert "HARNESS_TEST_SECRET" in seen[0] and not any("s3cret-value" in a for a in seen[0])
-    assert env.exec(["sh", "-c", 'echo "x$HARNESS_TEST_SECRET"']).stdout == "x\n"  # for that command only
+    assert env.exec(["sh", "-c", 'echo "x$HARNESS_TEST_SECRET"']).stdout == "x\n"
 
 
 def test_exec_as_another_user(env):
@@ -395,7 +389,7 @@ def test_a_volume_still_in_use_is_retried_then_reported(monkeypatch, caplog):
     env.start()
     volume = env.volume
     user = subprocess.run(["docker", "run", "-d", "--label", docker_module.LABEL, "-v", f"{volume}:/x", IMAGE, "sleep", "60"],
-                          capture_output=True, text=True, check=True).stdout.strip()  # not ours: stop() can't remove it
+                          capture_output=True, text=True, check=True).stdout.strip()
     try:
         env.stop()
         assert f"leftover volume {volume}" in caplog.text and volume in _volumes()

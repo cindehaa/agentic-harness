@@ -1,5 +1,3 @@
-"""The dashboard server: its JSON endpoints against a temp database with fake runs (no Docker, no model calls)."""
-
 import json
 import threading
 import time
@@ -15,7 +13,6 @@ from agentic_harness.types import Outcome, Score
 
 def finish(store: Store, outcome: Outcome, retry_at: float | None = None, events: list[dict] = (),
            run_id: str = "run-done") -> int:
-    """Claim the next trial and end its attempt with `outcome`, leaving the attempt's files as a worker would."""
     claim = store.claim_trial("w1", 120, run_id)
     claim.artifacts_dir.mkdir(parents=True)
     (claim.artifacts_dir / "transcript.json").write_text(json.dumps(
@@ -51,7 +48,7 @@ def db(tmp_path):
     store.create_run("run-budget", "bench", "agent", "model-c", {}, {}, ["t1", "t2"], max_cost_usd=0.1)
     store.claim_setup("w1", 120, "run-budget")
     store.finish_setup("run-budget", "w1")
-    finish(store, Outcome("graded", Score(True), 1.0, cost_usd=0.2), run_id="run-budget")  # over budget: t2 never starts
+    finish(store, Outcome("graded", Score(True), 1.0, cost_usd=0.2), run_id="run-budget")
     store.worker_started("host-1")
     store.close()
     return path

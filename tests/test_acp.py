@@ -1,7 +1,3 @@
-"""ACP agents: the session against a scripted fake agent (tests/fixtures/fake_acp_agent.py), run on the host and,
-once, inside a real container over `docker exec -i`; the definitions and their images' recipe.
-Live tests (RUN_LIVE=1 and an API key): Claude Code through its ACP adapter on bash-001, the MCP fixture, two turns."""
-
 import json
 import os
 import subprocess
@@ -29,8 +25,6 @@ DEFINITION = AcpDefinition(
 
 
 class HostWorld(Environment):
-    """The fake agent as a host process: start_process runs it, whatever the command; remembers what it was given."""
-
     def __init__(self, *args: str) -> None:
         super().__init__("fake:image", "/work")
         self.args = args
@@ -66,12 +60,9 @@ def say(session, words: str) -> str:
     return session.send(Message("user", (Text(words),))).content[0].text
 
 
-# --- the session
-
-
 def test_a_method_we_dont_offer_gets_method_not_found(tmp_path, monkeypatch):
     _, session = start(tmp_path, monkeypatch)
-    assert json.loads(say(session, "files"))["code"] == -32601  # JSON-RPC: method not found
+    assert json.loads(say(session, "files"))["code"] == -32601
 
 
 def test_setup_passes_the_worlds_workdir_the_mcp_servers_and_the_agents_variables(tmp_path, monkeypatch):
@@ -89,7 +80,7 @@ def test_limits_the_agent_keeps_itself_go_in_session_new_meta(tmp_path, monkeypa
     monkeypatch.setenv("FAKE_API_KEY", "sk-fake-123456789")
     session = agent.start(HostWorld(), tmp_path, Limits(max_steps=7))
     assert json.loads(say(session, "setup"))["_meta"] == {"fake": {"options": {"maxTurns": 7}}}
-    assert agent.unenforced_limits() == {"command_timeout_s"}  # the harness can't see the agent's own commands
+    assert agent.unenforced_limits() == {"command_timeout_s"}
 
 
 def test_without_limits_meta_the_step_limit_is_not_enforced_and_nothing_is_sent(tmp_path, monkeypatch):
@@ -116,27 +107,27 @@ def test_a_turn_is_traced_and_replies_with_its_last_message(tmp_path, monkeypatc
     assert [k for k, _ in events] == ["session", "agent_text", "permission", "tool_call", "tool_result"]
     payloads = dict(events[1:])
     assert payloads["agent_text"] == {"text": "Let me look."}
-    assert payloads["permission"] == {"tool_call": "t1", "granted": "allow_once"}  # never "always" (it may be saved in the workspace)
+    assert payloads["permission"] == {"tool_call": "t1", "granted": "allow_once"}
     assert payloads["tool_call"] == {"id": "t1", "name": "ls", "title": "ls", "kind": "execute", "input": {"command": "ls"}}
     assert payloads["tool_result"]["content"] == "a.txt (permission: once)" and not payloads["tool_result"]["is_error"]
     assert session.new_events() == []
     lines = (tmp_path / "acp.jsonl").read_text().splitlines()
-    assert json.loads(lines[0])["message"]["method"] == "initialize"  # the raw protocol log
+    assert json.loads(lines[0])["message"]["method"] == "initialize"
 
 
 def test_turns_continue_one_session_and_stats_add_up(tmp_path, monkeypatch):
     _, session = start(tmp_path, monkeypatch)
     say(session, "work")
-    assert say(session, "work again") == "done 2 again"  # the agent's own turn count: the same process and session
+    assert say(session, "work again") == "done 2 again"
     stats = session.stats()
-    assert stats.cost_usd == pytest.approx(0.02)  # usage_update's cost is the session's total
-    assert (stats.input_tokens, stats.output_tokens, stats.exit_status) == (300, 40, "end_turn")  # cached counted as input
+    assert stats.cost_usd == pytest.approx(0.02)
+    assert (stats.input_tokens, stats.output_tokens, stats.exit_status) == (300, 40, "end_turn")
 
 
 def test_deadline_cancels_the_turn(tmp_path, monkeypatch):
     world, session = start(tmp_path, monkeypatch, limits=Limits(trial_timeout_s=3))
     assert say(session, "hang") == ""
-    assert session.stats().exit_status == "TimeLimit" and not world.killed  # it ended its turn when cancelled
+    assert session.stats().exit_status == "TimeLimit" and not world.killed
 
 
 def test_an_agent_ignoring_the_cancel_is_killed(tmp_path, monkeypatch):
@@ -146,7 +137,7 @@ def test_an_agent_ignoring_the_cancel_is_killed(tmp_path, monkeypatch):
     world, session = start(tmp_path, monkeypatch, limits=Limits(trial_timeout_s=2))
     assert say(session, "hang hard") == ""
     assert world.killed and session.stats().exit_status == "TimeLimit"
-    assert say(session, "work") == "" and session.stats().exit_status == "TimeLimit"  # no turn after the deadline
+    assert say(session, "work") == "" and session.stats().exit_status == "TimeLimit"
 
 
 def test_spending_past_the_budget_cancels_the_turn(tmp_path, monkeypatch):
@@ -163,10 +154,10 @@ def test_refusal_is_an_agent_limitation(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("message, error", [
-    ("API Error 529 overloaded_error", TransientError),  # infra_error, retried
+    ("API Error 529 overloaded_error", TransientError),
     ("rate_limit exceeded", TransientError),
-    ("prompt is too long: 250000 tokens", AgentLimitation),  # graded as it is
-    ("invalid x-api-key", AcpAgentError),  # infra_error, not retried
+    ("prompt is too long: 250000 tokens", AgentLimitation),
+    ("invalid x-api-key", AcpAgentError),
 ])
 def test_errors_are_classified_by_their_message(tmp_path, monkeypatch, message, error):
     _, session = start(tmp_path, monkeypatch)
@@ -177,7 +168,7 @@ def test_errors_are_classified_by_their_message(tmp_path, monkeypatch, message, 
 def test_an_agent_failing_the_prompt_at_its_step_limit_ends_the_turn_like_one(tmp_path, monkeypatch):
     _, session = start(tmp_path, monkeypatch)
     assert say(session, "fail Internal error: Reached maximum number of turns (7)") == ""
-    assert session.exit_status == "LimitsExceeded"  # graded like mini at its step limit, not an agent error
+    assert session.exit_status == "LimitsExceeded"
 
 
 def test_an_agent_that_dies_is_an_agent_error_unless_the_world_died(tmp_path, monkeypatch):
@@ -192,7 +183,7 @@ def test_an_agent_that_dies_is_an_agent_error_unless_the_world_died(tmp_path, mo
 
 def test_an_exception_in_our_handler_fails_the_turn_as_retryable(tmp_path, monkeypatch):
     _, session = start(tmp_path, monkeypatch)
-    monkeypatch.setattr(session, "_tool", lambda u: 1 / 0)  # the library would only log it
+    monkeypatch.setattr(session, "_tool", lambda u: 1 / 0)
     with pytest.raises(TransientError, match="ZeroDivisionError"):
         say(session, "work")
 
@@ -203,16 +194,13 @@ def test_non_text_content_is_unsupported(tmp_path, monkeypatch):
         session.send(Message("user", (File("/workspace/a.png", "image/png"),)))
 
 
-# --- definitions
-
-
 def test_claude_code_is_a_built_in_acp_agent():
     agent = resolve_agent("claude-code")("anthropic/claude-haiku-5-5")
     assert isinstance(agent, AcpAgent) and agent.name == "claude-code"
     assert agent.native_model() == "claude-haiku-5-5" and agent.model == "anthropic/claude-haiku-5-5"
     assert agent.capabilities.multi_turn and agent.capabilities.mcp and agent.capabilities.content_types == {"text"}
     assert agent.forward_env == ("ANTHROPIC_API_KEY",)
-    assert agent.definition.limits_meta == {"max_steps": "claudeCode.options.maxTurns"}  # Claude Code's own max turns
+    assert agent.definition.limits_meta == {"max_steps": "claudeCode.options.maxTurns"}
     assert "claude-code" in built_in_definitions()
 
 
@@ -221,9 +209,9 @@ def test_a_private_agent_is_a_definition_file(tmp_path):
     path.write_text('version = "2"\ncommand = ["/opt/s/run", "--acp"]\ninstall_dir = "/opt/s"\n'
                     'install.any = { from = "registry.example/secret-agent:2" }\n')
     agent = resolve_agent(str(path))("openai/gpt-x")
-    assert agent.name == str(path) and agent.definition == load_definition(path)  # a worker finds it again by name
+    assert agent.name == str(path) and agent.definition == load_definition(path)
     assert agent.native_model() == "openai/gpt-x" and agent.capabilities.multi_turn and not agent.capabilities.mcp
-    assert "COPY" not in dockerfile(agent.definition, "task:1")  # the vendor's install, copied out of its image
+    assert "COPY" not in dockerfile(agent.definition, "task:1")
     assert "--mount=from=acp-any,source=/opt/s,target=/mnt/any" in dockerfile(agent.definition, "task:1")
 
 
@@ -252,9 +240,6 @@ def test_preflight_needs_the_agents_model_family_and_variables(monkeypatch):
         AcpAgent(DEFINITION, "anthropic/claude-haiku-5-5").preflight()
 
 
-# --- over docker exec -i, in a real world
-
-
 @pytest.mark.skipif(subprocess.run(["docker", "info"], capture_output=True).returncode != 0, reason="Docker is not running")
 def test_the_agent_runs_inside_the_world_over_docker_exec(tmp_path, monkeypatch):
     from agentic_harness.environments import DockerEnvironment, ensure_image
@@ -268,14 +253,11 @@ def test_the_agent_runs_inside_the_world_over_docker_exec(tmp_path, monkeypatch)
         session = AcpAgent(definition, "m").start(world, tmp_path, Limits())
         assert say(session, "work") == "done 1 "
         assert json.loads(say(session, "setup"))["cwd"] == "/workspace"
-        world.kill_agent_processes()  # what the runner does before grading: the agent is gone
+        world.kill_agent_processes()
         time.sleep(0.5)
         assert session.proc.poll() is not None
     out = subprocess.run(["docker", "ps", "-aq", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True).stdout
     assert out == ""
-
-
-# --- live: Claude Code through its ACP adapter
 
 
 def _live_trial(bench, task, tmp_path):

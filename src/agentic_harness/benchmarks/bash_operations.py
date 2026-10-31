@@ -1,6 +1,3 @@
-"""Adapter for benchmarks/bash-operations. It only moves things: the benchmark's own setup.py builds the world,
-its own evaluate.py judges, and the agent hears only the dataset's problem_statement."""
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +12,6 @@ from agentic_harness.types import Message, OriginalResult, ReferenceSolution, Sc
 ROOT = REPO_ROOT / "benchmarks" / "bash-operations"
 GRADER_IMAGE = "python:3.11-slim"  # evaluate.py needs python; the agent's world (alpine) has none, and never gets it
 
-# The benchmark ships no solutions: ours, written from each problem statement and its verification spec
 SOLUTIONS = {
     "bash-001": "echo 'Hello World' > hello.txt",
     "bash-002": "mkdir test_dir && touch test_dir/file1.txt test_dir/file2.txt test_dir/file3.txt",
@@ -27,12 +23,11 @@ SOLUTIONS = {
 
 @dataclass(frozen=True)
 class BashTask(Task):
-    problem_statement: str  # the benchmark's own wording, sent to the agent verbatim
-    base_image: str  # the image the benchmark specifies, e.g. "alpine:latest"
+    problem_statement: str
+    base_image: str
 
 
-# Stage 1 runs the benchmark's own setup.py (needs python); stage 2 is the benchmark's base image
-# with only setup's output copied in, so the agent's world never gains python.
+# two stages: setup.py needs python, the agent's world never gets it
 DOCKERFILE = """\
 FROM python:3.11-slim AS setup
 COPY . /bench
@@ -63,8 +58,6 @@ class BashOperations(Benchmark[BashTask]):
         return content_hash(ROOT, DOCKERFILE)
 
     def setup(self, tasks: list[BashTask]) -> None:
-        # Pulled now, explicitly and time-bounded: the grader's image (so grading needs no network) and every image
-        # the builds start from (the setup stage is python too)
         for image in sorted({GRADER_IMAGE, *(t.base_image for t in tasks)}):
             ensure_image(image)
         for t in tasks:
@@ -81,13 +74,11 @@ class BashOperations(Benchmark[BashTask]):
         return GRADER_IMAGE
 
     def grade(self, task: BashTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
-        grader.upload(ROOT, "/grader")  # the benchmark's own evaluate.py + dataset.json, only in the grader
+        grader.upload(ROOT, "/grader")
         r = grader.exec(["python", "/grader/evaluate.py", "--workspace-dir", "/workspace", "--task", task.id])
         return _score(r.stdout, r.stderr)
 
     def original_workflow(self, task: BashTask, agent_name: str, model: str, out_dir: Path) -> OriginalResult:
-        """examples/run_bash_example.sh in Docker: setup.py, the agent on the dataset's image (alpine) with the
-        workspace bind-mounted, evaluate.py. The scripts run in python:3.11-slim, not on the host's python."""
         workspace = out_dir / "workspace"
         workspace.mkdir(parents=True)
         scripts = {ROOT: "/bench:ro", workspace: "/workspace"}
@@ -101,7 +92,7 @@ class BashOperations(Benchmark[BashTask]):
 
 
 def _score(stdout: str, stderr: str) -> Score:
-    """evaluate.py's verdict. It exits 1 on a failed task, so judge by its JSON, not its exit code."""
+    """evaluate.py exits 1 on a failed task: judge by its JSON, not its exit code."""
     try:
         result = json.loads(stdout)
         passed = result["passed"]

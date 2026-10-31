@@ -1,5 +1,3 @@
-"""Environments: where a task runs. Docker is the only backend."""
-
 from agentic_harness.environments.base import (
     EndReason, Environment, EnvironmentFactory, EnvironmentLost, EnvironmentState, ExecResult, Sidecar,
 )

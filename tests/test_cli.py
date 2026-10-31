@@ -1,5 +1,3 @@
-"""`harness status` and `harness results` read back a database built directly with the Store (no Docker)."""
-
 import json
 import time
 from dataclasses import asdict
@@ -68,12 +66,12 @@ def test_status_says_when_the_budget_stopped_a_run(store):
 def test_status_says_when_no_worker_is_running(store):
     store.create_run("run-b", "python-tasks", "mini-swe-agent", "haiku", {}, {"limits": {}}, ["p1"])
     assert "no worker running" not in harness("status")
-    store.db.execute("UPDATE workers SET heartbeat_at = 0")  # its last heartbeat is long past: it died
-    warning = "2 pending — no worker running; start one with `harness worker`"  # t4 and p1
+    store.db.execute("UPDATE workers SET heartbeat_at = 0")
+    warning = "2 pending — no worker running; start one with `harness worker`"
     assert harness("status").splitlines()[-1] == warning
     assert harness("status", "--run_id", "run-a").splitlines()[-1] == warning
     store.db.execute("UPDATE trials SET state = 'done'")
-    assert "no worker running" not in harness("status")  # nothing left to do: no warning
+    assert "no worker running" not in harness("status")
 
 
 def test_status_hides_runs_finished_over_an_hour_ago_unless_all(store):
@@ -93,7 +91,7 @@ def test_status_of_one_run_shows_its_trials(store):
 
 
 def test_status_counts_a_running_trials_time_so_far(store):
-    store.claim_trial("w", 120)  # t4
+    store.claim_trial("w", 120)
     store.db.execute("UPDATE attempts SET started_at = ? WHERE outcome IS NULL", (time.time() - 30,))
     row = harness("status", "--run_id", "run-a").splitlines()[-1].split()
     assert row[:2] == ["t4", "running"] and 30 <= float(row[-1].rstrip("s")) < 40
@@ -109,8 +107,6 @@ def test_results_summary_always_shows_every_excluded_count(store):
 
 
 def finished_with_known_times(store) -> None:
-    """t4 run too, then fixed timestamps: setup 100-110; attempt i claimed at 110 + i, its world up 1 s later, its
-    agent 2 s, its grading 1 s; done 1 s after (t3's infra_error never got to grading)."""
     store.finish_attempt(store.claim_trial("w", 120), "w", OUTCOMES["t2"])
     store.db.execute("UPDATE runs SET created_at = 90, setup_started_at = 100, setup_finished_at = 110, status = 'done',"
                      " finished_at = 999")
@@ -125,7 +121,6 @@ def test_results_summary_breaks_the_time_down(store):
     out = harness("results", "--run_id", "run-a")
     assert "Tokens: 10,000 in · 100 out · 10 model calls" in out
     assert "Time per trial (avg): env start 1.0s · agent 2.0s · grading 1.0s" in out
-    # wall: first claim (111) to last outcome (119); queue wait: 1 + 2 + 3 + 4 s
     assert "Run: setup 10.0s · wall 8.0s (first trial start to last end) · queue wait 10.0s total · 30.0 trials/min" in out
 
 
@@ -154,7 +149,7 @@ def test_results_json_has_everything(store):
                 "total_queue_wait_s", "setup_s", "wall_s", "trials_per_min", "max_cost_usd"):
         assert key in report
     assert {"agent_start_at", "grade_end_at", "queued_at", "input_tokens"} <= set(t1["attempts"][0])
-    assert t1["attempts"][0]["limits"] == {"trial_timeout_s": {"value": 900, "source": "benchmark"}}  # effective + source
+    assert t1["attempts"][0]["limits"] == {"trial_timeout_s": {"value": 900, "source": "benchmark"}}
 
 
 def test_unknown_run_is_an_error(store):
@@ -166,7 +161,7 @@ class FakeAgent(Agent):
     name = "fake"
 
     def start(self, env, artifacts_dir, limits, mcp_servers=()):
-        raise NotImplementedError  # never run here
+        raise NotImplementedError
 
 
 class NoKeyAgent(FakeAgent):
@@ -191,12 +186,12 @@ def test_run_resolves_the_model_at_submit_and_stores_the_limits(store, agents):
     result = submit("--agent", "fake", "--trial-timeout", "30", "--cost-limit", "0.5", "--max-steps", "7", "--memory", "1g", "--cpus", "2")
     assert result.exit_code == 0, result.output
     run = store.run(result.output.split()[2].rstrip(":"))
-    assert run["model"] == "fake/model-1"  # from HARNESS_MODEL, now fixed for the run
+    assert run["model"] == "fake/model-1"
     assert json.loads(run["versions"])["benchmark"] == BashOperations().version()
     config = json.loads(run["config"])
-    assert config["limits"] == asdict(Limits())  # the harness defaults, under the benchmark's and the flags
+    assert config["limits"] == asdict(Limits())
     assert config["limit_flags"] == {"trial_timeout_s": 30, "cost_usd": 0.5, "max_steps": 7, "memory": "1g", "cpus": 2}
-    assert config["non_standard_limits"] == []  # bash-operations declares no limits of its own
+    assert config["non_standard_limits"] == []
 
 
 def test_only_flags_given_are_recorded(store, agents):
@@ -206,7 +201,7 @@ def test_only_flags_given_are_recorded(store, agents):
 
 def test_a_flag_over_a_benchmark_declared_limit_marks_the_run_non_standard(store, agents, monkeypatch):
     monkeypatch.setattr(BashOperations, "limits", lambda self, task: LimitOverrides(trial_timeout_s=900, grade_timeout_s=60))
-    same = submit("--agent", "fake", "--grade-timeout", "60", "--cost-limit", "0.5")  # same value / not declared
+    same = submit("--agent", "fake", "--grade-timeout", "60", "--cost-limit", "0.5")
     assert json.loads(store.run(same.output.split()[2].rstrip(":"))["config"])["non_standard_limits"] == []
     other = submit("--agent", "fake", "--trial-timeout", "30", "--grade-timeout", "10")
     run_id = other.output.split()[2].rstrip(":")
@@ -225,9 +220,9 @@ def test_model_flag_wins_over_harness_model(store, agents):
 
 
 def test_run_without_a_model_fails_clearly(store, agents, monkeypatch):
-    monkeypatch.setattr(cli_module, "load_dotenv", lambda *_: None)  # the repo's .env sets HARNESS_MODEL
+    monkeypatch.setattr(cli_module, "load_dotenv", lambda *_: None)
     monkeypatch.delenv("HARNESS_MODEL")
-    monkeypatch.setenv("MSWEA_MODEL_NAME", "fake/mini-cli-model")  # mini's CLI setting: never the harness's default
+    monkeypatch.setenv("MSWEA_MODEL_NAME", "fake/mini-cli-model")
     result = submit("--agent", "fake")
     assert result.exit_code != 0 and "no model: pass --model or set HARNESS_MODEL in .env" in result.output
 
@@ -254,6 +249,6 @@ def test_concurrency_without_wait_is_a_usage_error(store):
                                       "--benchmark", "bash-operations", "--concurrency", "4"])
     assert result.exit_code == 2 and "--concurrency applies only with --wait" in result.output
     assert "harness worker --concurrency N" in result.output
-    assert [r["id"] for r in store.runs()] == ["run-a"]  # nothing submitted
+    assert [r["id"] for r in store.runs()] == ["run-a"]
     result = CliRunner().invoke(cli, ["run", "--agent", "mini-swe-agent", "--benchmark", "bash-operations", "--max-running", "2"])
     assert result.exit_code == 2 and "--max-running applies only with --wait" in result.output

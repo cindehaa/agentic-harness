@@ -1,5 +1,3 @@
-"""harness parity: the statistics, the original side's bookkeeping, and (live, RUN_LIVE=1) one original-workflow run."""
-
 import os
 import subprocess
 import time
@@ -13,10 +11,10 @@ from agentic_harness.environments import docker as docker_module
 
 
 def test_summarize_mean_sem_and_range():
-    s = summarize([{"a": 1.0, "b": 0.0}, {"a": 1.0, "b": 1.0}, {"a": 1.0, "b": None}])  # None: left out, not a 0
+    s = summarize([{"a": 1.0, "b": 0.0}, {"a": 1.0, "b": 1.0}, {"a": 1.0, "b": None}])
     assert s["run_accuracies"] == [0.5, 1.0, 1.0]
     assert s["mean"] == pytest.approx(2.5 / 3) and s["range"] == [0.5, 1.0]
-    assert s["sem"] == pytest.approx(0.288675 / 3 ** 0.5)  # sample stdev / sqrt(n)
+    assert s["sem"] == pytest.approx(0.288675 / 3 ** 0.5)
 
 
 def test_one_run_has_no_sem_and_no_runs_no_mean():
@@ -35,9 +33,6 @@ def test_overlap():
 
 
 class Canned(BashOperations):
-    """Original runs without Docker or a model: bash-001 passes, bash-002 fails, bash-003's infrastructure breaks
-    (sooner in later runs, so the threads finish out of order)."""
-
     def original_workflow(self, task, agent_name, model, out_dir):
         if task.id == "bash-003":
             time.sleep(0.05 * (12 - int(out_dir.parent.name.removeprefix("run-"))))
@@ -51,7 +46,7 @@ def test_original_side_scores_costs_and_errors(tmp_path):
     scores, cost, errors = original_side(bench, tasks, "mini-swe-agent", "m", 11, tmp_path, concurrency=11)
     assert scores == [{"bash-001": 1.0, "bash-002": 0.0, "bash-003": None}] * 11
     assert cost == pytest.approx(0.22)
-    assert errors == [f"run {i} bash-003: RuntimeError: setup.py failed" for i in range(1, 12)]  # run order, not text order
+    assert errors == [f"run {i} bash-003: RuntimeError: setup.py failed" for i in range(1, 12)]
 
 
 def test_no_original_workflow_for_other_agents(tmp_path):

@@ -1,6 +1,3 @@
-"""TerminalBench adapter against real Docker: reference solutions pass, doing nothing fails. Needs the opt-in
-terminal-bench submodule and Docker; without them those tests skip, and only the parser and missing-data tests run."""
-
 import subprocess
 
 import pytest
@@ -17,7 +14,7 @@ from agentic_harness.types import Message, Text
 from agentic_harness.environments import docker as docker_module
 
 bench = TerminalBench()
-needs_world = pytest.mark.skipif(  # evaluated once, at collection; reads no task file
+needs_world = pytest.mark.skipif(
     not ROOT.is_dir() or subprocess.run(["docker", "info"], capture_output=True).returncode != 0,
     reason="needs the terminal-bench submodule (make init-extra-benchmarks BENCH=benchmarks/terminal-bench) and Docker",
 )
@@ -31,7 +28,6 @@ def tasks():
 
 
 def grade(task, env):
-    """What the runner does: grade in a grader attached to the trial's world."""
     with env.attach_grader(bench.grader_image(task)) as grader:
         return bench.grade(task, grader, env, ())
 
@@ -44,8 +40,6 @@ def apply_reference(task, env):
 
 
 class RecordingSession(AgentSession):
-    """A fake agent that remembers what it was sent."""
-
     def __init__(self) -> None:
         self.sent: list[Message] = []
 
@@ -71,7 +65,7 @@ def test_task_yaml_timeouts_are_the_trial_and_grade_timeouts():
         declared = bench.limits(t)
         assert declared.trial_timeout_s == float(meta["max_agent_timeout_sec"])
         assert declared.grade_timeout_s == float(meta["max_test_timeout_sec"])
-        assert set(declared.given()) == {"trial_timeout_s", "grade_timeout_s"}  # task.yaml declares no memory or CPUs
+        assert set(declared.given()) == {"trial_timeout_s", "grade_timeout_s"}
 
 
 def test_task_yaml_without_timeouts_gets_terminal_benchs_defaults(tmp_path, monkeypatch):
@@ -120,8 +114,6 @@ def test_reference_solutions_are_the_benchmarks_own(tasks):
 @needs_world
 @pytest.mark.parametrize("task_id", TASK_IDS)
 def test_images_work_in_the_assumed_workdir(task_id, tasks):
-    """Tasks declare WORKDIR as their workdir, and solutions and tests run from it: a task whose image sets another
-    one must not slip in."""
     workdir = subprocess.run(["docker", "image", "inspect", "-f", "{{.Config.WorkingDir}}", tasks[task_id].image],
                              capture_output=True, text=True, check=True).stdout.strip()
     assert workdir == WORKDIR == tasks[task_id].workdir
@@ -133,7 +125,7 @@ def test_tests_enter_the_world_only_at_grade_time(tasks):
     with DockerEnvironment(task.image, workdir=task.workdir) as env:
         assert env.exec("test -e /tests").exit_code != 0
         assert env.exec("ls /app").stdout.strip() == ""
-        assert env.exec("pwd").stdout.strip() == "/app"  # where the agent starts, as in Terminal-Bench
+        assert env.exec("pwd").stdout.strip() == "/app"
 
 
 def test_parser_reads_pytest_summary():
@@ -160,4 +152,4 @@ def test_missing_submodule_is_a_clear_error(monkeypatch, tmp_path):
     for command in (["run", "--agent", "mini-swe-agent", "--model", "anthropic/claude-haiku-5-5"], ["validate"]):
         result = CliRunner().invoke(cli, [*command, "--benchmark", "terminal-bench"], env={"ANTHROPIC_API_KEY": "sk-test-0000"})
         assert result.exit_code == 1 and "make init-extra-benchmarks BENCH=benchmarks/terminal-bench" in result.output, result.output
-        assert result.exception is None or isinstance(result.exception, SystemExit)  # no traceback
+        assert result.exception is None or isinstance(result.exception, SystemExit)

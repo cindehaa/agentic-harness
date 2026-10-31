@@ -1,8 +1,3 @@
-"""What the harness records while an agent works: the agent-neutral trace in events.jsonl.
-
-The benchmark is handed a RecordingSession (messages), the agent a RecordingEnvironment (commands); both write to
-one EventLog, so the trace reads the same whatever the agent is."""
-
 import json
 import time
 from collections.abc import Callable
@@ -14,21 +9,18 @@ from agentic_harness.environments.base import DEFAULT_TIMEOUT, Environment, Envi
 from agentic_harness.redact import redact
 from agentic_harness.types import Message
 
-OUTPUT_CAP = 10_000  # characters of each output stream kept in a command event (the agent's own log has the rest)
+OUTPUT_CAP = 10_000
 
 
 class TurnLimit(Exception):
-    """The benchmark tried to send more than limits.max_turns messages."""
+    ...
 
 
 class EventLog:
-    """events.jsonl: one redacted JSON line per event, appended (and flushed, by closing) as it happens, so a crash
-    loses nothing already recorded."""
-
     def __init__(self, path: Path) -> None:
         self.path = path
         self.seq = 0
-        self.turn = 0  # set by the session; commands are filed under the turn they ran in
+        self.turn = 0
 
     def write(self, kind: str, payload: dict) -> None:
         event = {"seq": self.seq, "turn": self.turn, "kind": kind, "payload": payload, "ts": time.time()}
@@ -38,10 +30,6 @@ class EventLog:
 
 
 class RecordingSession(AgentSession):
-    """What the benchmark is handed: forwards to the agent's session, records both sides, and caps the turns.
-    `on_turn_end(stats)` runs after every turn, also one the agent crashed in (the worker then loads events.jsonl into
-    the events table and records the spend so far)."""
-
     def __init__(self, inner: AgentSession, max_turns: int, log: EventLog, on_turn_end: Callable[[AgentStats], None]) -> None:
         self.inner = inner
         self.max_turns = max_turns
@@ -49,7 +37,7 @@ class RecordingSession(AgentSession):
         self.on_turn_end = on_turn_end
         self.turns = 0
         self.transcript: list[Message] = []
-        self.limitation: str | None = None  # set by the runner when the agent raised AgentLimitation
+        self.limitation: str | None = None
 
     def send(self, message: Message) -> Message:
         if self.turns >= self.max_turns:
@@ -60,11 +48,11 @@ class RecordingSession(AgentSession):
         try:
             try:
                 reply = self.inner.send(message)
-            finally:  # also when the agent raised: what it did is still traced
+            finally:
                 for kind, payload in self.inner.new_events():
                     self.log.write(kind, payload)
             self._record("message_received", reply)
-        finally:  # also when the agent raised: what it spent is still counted
+        finally:
             self.on_turn_end(self.inner.stats())
         return reply
 
@@ -77,9 +65,6 @@ class RecordingSession(AgentSession):
 
 
 class RecordingEnvironment(Environment):
-    """What the agent is handed: the trial's Environment, with every exec written to the log as a "command" event
-    (command, env names, user, exit code, output capped at OUTPUT_CAP, duration, turn). Everything else is passed straight through."""
-
     def __init__(self, env: Environment, log: EventLog) -> None:
         super().__init__(env.image, env.workdir)
         self.env = env
@@ -88,11 +73,11 @@ class RecordingEnvironment(Environment):
     def exec(self, cmd: str | list[str], timeout: float | None = DEFAULT_TIMEOUT, cwd: str | None = None,
              env: dict[str, str] | None = None, user: str | None = None) -> ExecResult:
         began = time.monotonic()
-        # variable names only: their values may be credentials not in .env, which redaction wouldn't know
+        # names only: values may be credentials that redaction doesn't know
         event = {"command": cmd, "cwd": cwd, "env": {name: "***" for name in env or {}}, "user": user}
         try:
             r = self.env.exec(cmd, timeout=timeout, cwd=cwd, env=env, user=user)
-        except Exception as e:  # e.g. EnvironmentLost: still in the trace
+        except Exception as e:
             self.log.write("command", event | {"error": f"{type(e).__name__}: {e}", "duration_s": _since(began)})
             raise
         self.log.write("command", event | {

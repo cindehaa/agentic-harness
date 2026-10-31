@@ -1,6 +1,3 @@
-"""MiniSweAgent: the env wrapper and multi-turn continuation against a fake env and mini's scripted model,
-plus one live test against a real model and container (only with RUN_LIVE=1 and an API key)."""
-
 import json
 import os
 import subprocess
@@ -25,8 +22,6 @@ UNAME = "Linux\n6.10.14-linuxkit\n#1 SMP\naarch64\n"
 
 
 class FakeEnv(Environment):
-    """Answers uname, echoes `echo X` commands, and remembers every exec call."""
-
     def __init__(self) -> None:
         super().__init__("fake:image")
         self.calls: list[tuple] = []
@@ -70,7 +65,7 @@ def test_execute_merges_streams_and_uses_default_cwd_and_timeout():
     env, cenv = wrapper()
     out = cenv.execute({"command": "echo hi"})
     assert out == {"output": "hi\n", "returncode": 0, "exception_info": ""}
-    assert env.calls[-1] == ("exec 2>&1\necho hi", 60, None)  # None = the env's workdir
+    assert env.calls[-1] == ("exec 2>&1\necho hi", 60, None)
     cenv.execute({"command": "echo hi"}, cwd="/tmp", timeout=5)
     assert env.calls[-1] == ("exec 2>&1\necho hi", 5, "/tmp")
 
@@ -79,10 +74,10 @@ def test_every_command_gets_minis_own_environment_variables(tmp_path):
     env = FakeEnv()
     session = MiniSweAgent("anthropic/claude-haiku-5-5").start(env, tmp_path, Limits())
     expected = {k: str(v) for k, v in get_config_from_spec("mini.yaml")["environment"]["env"].items()}
-    assert expected["PAGER"] == "cat"  # what mini's own Docker mode sets
+    assert expected["PAGER"] == "cat"
     session.agent.env.execute({"command": "echo hi"})
     assert env.envs[-1] == expected
-    _, bare = wrapper()  # none configured: none added
+    _, bare = wrapper()
     bare.execute({"command": "echo hi"})
     assert bare.env.envs[-1] is None
 
@@ -99,15 +94,12 @@ def test_command_after_deadline_raises_time_limit_without_running():
     calls_before = len(env.calls)
     with pytest.raises(TimeLimit) as info:
         cenv.execute({"command": "echo hi"})
-    assert isinstance(info.value, LimitsExceeded)  # so mini's loop ends cleanly
+    assert isinstance(info.value, LimitsExceeded)
     assert info.value.messages[0]["extra"]["exit_status"] == "TimeLimit"
     assert len(env.calls) == calls_before
 
 
 class RecordingModel(LitellmModel):
-    """mini's own litellm model (its retry loop included) whose API call is replaced: records each call's timeout and
-    answers with what `answer` says (raise or return)."""
-
     def __init__(self, answer=lambda: "ok") -> None:
         super().__init__(model_name="anthropic/claude-haiku-5-5", model_kwargs={"timeout": MODEL_TIMEOUT_S})
         self.timeouts: list[float] = []
@@ -133,25 +125,23 @@ def test_no_model_call_past_the_deadline_and_no_retry_of_it():
     cap_model_calls(model, deadline=time.monotonic() - 1)
     began = time.monotonic()
     with pytest.raises(TimeLimit):
-        model.query([{"role": "user", "content": "hi"}])  # through mini's retry loop
-    assert model.timeouts == [] and time.monotonic() - began < 1  # mini waits >= 4 s before a retry
+        model.query([{"role": "user", "content": "hi"}])
+    assert model.timeouts == [] and time.monotonic() - began < 1
 
 
 def test_a_retry_after_the_deadline_stops_with_time_limit(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr("tenacity.nap.time.sleep", lambda s: clock.__setitem__(0, clock[0] + s))  # mini's backoff
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda s: clock.__setitem__(0, clock[0] + s))
 
     def slow_failure():
-        clock[0] += 30  # the call took 30 s, then the provider failed
+        clock[0] += 30
         raise InternalServerError("overloaded", llm_provider="anthropic", model="fake")
 
     model = RecordingModel(slow_failure)
     cap_model_calls(model, deadline=50)
     with pytest.raises(TimeLimit):
         model.query([{"role": "user", "content": "hi"}])
-    # 50 s left for the first call; after it (30 s) and mini's backoff (4 s) the retry got the 16 s left; after that
-    # retry and another backoff none were left, so no third call
     assert model.timeouts == [50, 16]
 
 
@@ -166,7 +156,7 @@ def test_a_session_past_its_deadline_ends_with_time_limit_without_calling_the_mo
 def _bash(call_id: str, command: str) -> dict:
     tool_call = {"id": call_id, "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": command})}}
     output = make_toolcall_output(None, [tool_call], [{"command": command, "tool_call_id": call_id}])
-    output["extra"]["response"] = {"usage": {"prompt_tokens": 100, "completion_tokens": 7}}  # what litellm reports
+    output["extra"]["response"] = {"usage": {"prompt_tokens": 100, "completion_tokens": 7}}
     return output
 
 
@@ -181,10 +171,9 @@ def test_second_send_continues_the_same_history(tmp_path):
     submit = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
     env, session = scripted_session([_bash("1", "echo a"), _bash("2", submit), _bash("3", "echo b"), _bash("4", submit)], tmp_path)
     assert session.send(Message("user", (Text("first"),))) == Message("agent", (Text(""),))
-    assert session.stats() == AgentStats("Submitted", 2.0, 2, 200, 14)  # the scripted model charges $1 a call
+    assert session.stats() == AgentStats("Submitted", 2.0, 2, 200, 14)
     session.send(Message("user", (Text("second"),)))
     roles = [m["role"] for m in session.agent.messages]
-    # the submit's tool call got its result, then the new user message, then the agent went on
     assert roles == ["system", "user", "assistant", "tool", "assistant", "tool", "user", "assistant", "tool", "assistant", "exit"]
     assert session.agent.messages[6]["content"] == "second"
     assert session.stats() == AgentStats("Submitted", 4.0, 4, 400, 28)
@@ -198,8 +187,6 @@ def test_non_text_content_is_unsupported(tmp_path):
 
 
 class FailingModel(DeterministicToolcallModel):
-    """A model whose every call raises `error` (no live API call)."""
-
     def __init__(self, error: Exception) -> None:
         super().__init__(outputs=[])
         self.error = error
@@ -223,13 +210,13 @@ def test_context_window_exceeded_is_an_agent_limitation(tmp_path):
 
 def test_auth_error_is_not_an_agent_limitation(tmp_path):
     session = failing_session(AuthenticationError("bad key", llm_provider="anthropic", model="fake"), tmp_path)
-    with pytest.raises(AuthenticationError):  # the runner turns it into infra_error
+    with pytest.raises(AuthenticationError):
         session.send(Message("user", (Text("go"),)))
 
 
 def test_overloaded_provider_is_transient(tmp_path):
     session = failing_session(InternalServerError("Overloaded", llm_provider="anthropic", model="fake"), tmp_path)
-    with pytest.raises(TransientError):  # the runner makes it a retryable infra_error
+    with pytest.raises(TransientError):
         session.send(Message("user", (Text("go"),)))
 
 
@@ -251,7 +238,7 @@ def test_resolve_agent_by_name_or_path():
 
 
 def test_cli_store_and_benchmarks_do_not_import_litellm():
-    # a fresh interpreter: this test process has already imported mini (and litellm) above
+    # a fresh interpreter: this process has already imported mini (and litellm)
     code = "import sys, agentic_harness.cli, agentic_harness.store, agentic_harness.benchmarks; print('litellm' in sys.modules)"
     assert subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip() == "False"
 

@@ -1,5 +1,3 @@
-"""run_trial end to end on bash-operations with scripted fake agents (real Docker, no model)."""
-
 import json
 import subprocess
 import tarfile
@@ -30,8 +28,6 @@ def image():
 
 
 class ScriptedAgent(Agent):
-    """A fake agent: on each message it runs `act(env)`, then replies "done"."""
-
     name = "scripted"
 
     def __init__(self, act: Callable[[Environment], None]) -> None:
@@ -55,7 +51,7 @@ class ScriptedAgent(Agent):
 
 
 def kill_container(env) -> None:
-    env.exec("kill 1")  # the init forwards SIGTERM to the main sleep; the container exits
+    env.exec("kill 1")
     while env.state().running:  # wait until Docker has noticed, so the runner sees it as the agent's doing
         time.sleep(0.1)
 
@@ -91,7 +87,7 @@ def test_oracle_agent_is_graded_true(tmp_path):
         (0, "message_sent", 1), (1, "command", 1), (2, "message_received", 1), (3, "workspace_saved", 1)]
     command = events[1]["payload"]
     assert (command["command"], command["exit_code"], command["truncated"]) == ("echo 'Hello World' > hello.txt", 0, False)
-    with tarfile.open(tmp_path / "workspace.tar") as tar:  # the agent's end state, saved before grading
+    with tarfile.open(tmp_path / "workspace.tar") as tar:
         assert b"Hello World" in tar.extractfile("./hello.txt").read()
 
 
@@ -108,11 +104,10 @@ def test_agent_that_kills_the_container_is_graded_false(tmp_path):
 
 @pytest.mark.parametrize("docker_notices_late", [False, True])
 def test_agent_that_kills_the_container_without_waiting_is_graded_false(tmp_path, monkeypatch, docker_notices_late):
-    # the race: Docker may notice the exit only after the post-turn check, i.e. during the pre-grade kill or grading
     if docker_notices_late:
         real_state, checks = DockerEnvironment.state, []
 
-        def state(self):  # the first check after the turn still sees it running
+        def state(self):
             checks.append(1)
             return replace(real_state(self), running=True) if len(checks) == 1 else real_state(self)
 
@@ -139,21 +134,21 @@ def test_provider_auth_error_is_infra_error_with_traceback(tmp_path):
     outcome = run_trial(bench, ScriptedAgent(act), TASK, Limits(), tmp_path, DockerEnvironment)
     assert outcome.status == "infra_error"
     assert "Traceback" in outcome.error and "AuthenticationError" in outcome.error
-    assert not outcome.retryable  # another attempt would fail the same way
+    assert not outcome.retryable
 
 
-@pytest.mark.parametrize("value", [{"passed": True}, object()])  # no float conversion; not JSON
+@pytest.mark.parametrize("value", [{"passed": True}, object()])
 def test_unusable_score_value_is_grader_error(tmp_path, value):
     outcome = run_trial(FixedGrader(value), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, DockerEnvironment)
     assert outcome.status == "grader_error" and "unusable score value" in outcome.error
 
 
 def test_events_are_appended_as_they_happen_and_everything_is_redacted(tmp_path, monkeypatch):
-    monkeypatch.setattr("agentic_harness.redact._secrets", lambda: ("Hello World",))  # pretend it's a secret
+    monkeypatch.setattr("agentic_harness.redact._secrets", lambda: ("Hello World",))
     turns_ended = []
     outcome = run_trial(FixedGrader(True), ScriptedAgent(lambda env: None), TASK, Limits(), tmp_path, DockerEnvironment,
                         on_turn_end=lambda stats: turns_ended.append(stats.cost_usd))
-    assert outcome.status == "graded" and turns_ended == [0.01]  # each turn reports the spend so far
+    assert outcome.status == "graded" and turns_ended == [0.01]
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [(e["seq"], e["kind"], e["turn"]) for e in events] == [
         (0, "message_sent", 1), (1, "message_received", 1), (2, "workspace_saved", 1)]
@@ -195,7 +190,6 @@ def _labelled(*cmd: str) -> str:
 
 
 def test_leftover_agent_process_is_killed_before_grading(tmp_path):
-    # a background writer would overwrite hello.txt after the agent "finished"; it must be dead before grading
     act = lambda env: env.exec(
         "(sleep 1; while true; do echo wrong > hello.txt; sleep 0.1; done) > /dev/null 2>&1 & echo 'Hello World' > hello.txt"
     )
@@ -227,8 +221,6 @@ def test_no_leftover_containers_or_volumes():
 
 
 class SpendThenFail(Agent):
-    """Spends (two model calls, $0.03) and then fails the way `fail` says."""
-
     name = "spend-then-fail"
 
     def __init__(self, fail: Exception) -> None:
@@ -248,15 +240,15 @@ class SpendThenFail(Agent):
 
 
 @pytest.mark.parametrize("fail, status", [
-    (TransientError("provider down"), "infra_error"),  # an error
-    (AgentLimitation("context window exceeded"), "graded"),  # the agent's own end, graded as it is
+    (TransientError("provider down"), "infra_error"),
+    (AgentLimitation("context window exceeded"), "graded"),
     (TimeoutError("model call timed out"), "infra_error"),
 ])
 def test_spend_is_recorded_whatever_the_outcome(tmp_path, fail, status):
     spent = []
     outcome = run_trial(bench, SpendThenFail(fail), TASK, Limits(), tmp_path, DockerEnvironment,
                         on_turn_end=lambda stats: spent.append(stats.cost_usd))
-    assert outcome.status == status and spent == [0.03]  # reported at the turn's end even though it raised
+    assert outcome.status == status and spent == [0.03]
     assert (outcome.cost_usd, outcome.model_calls, outcome.input_tokens, outcome.output_tokens) == (0.03, 2, 1500, 80)
     assert json.loads((tmp_path / "outcome.json").read_text())["cost_usd"] == 0.03
 

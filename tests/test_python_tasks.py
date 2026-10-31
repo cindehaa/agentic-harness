@@ -1,5 +1,3 @@
-"""PythonTasks adapter against real Docker: oracle solutions pass, the untouched stub fails (skipped if Docker isn't running)."""
-
 import json
 import subprocess
 
@@ -17,7 +15,7 @@ if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
 
 bench = PythonTasks()
 TASKS = {t.id: t for t in bench.tasks()}
-ORACLES = {t.id: bench.reference_solution(t).files["solution.py"] for t in TASKS.values()}  # ours: it ships none
+ORACLES = {t.id: bench.reference_solution(t).files["solution.py"] for t in TASKS.values()}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -26,14 +24,11 @@ def images():
 
 
 def grade(task, env):
-    """What the runner does: grade in a grader attached to the trial's world (here the task's own image)."""
     with env.attach_grader(bench.grader_image(task)) as grader:
         return bench.grade(task, grader, env, ())
 
 
 class RecordingSession(AgentSession):
-    """A fake agent that remembers what it was sent."""
-
     def __init__(self) -> None:
         self.sent: list[Message] = []
 
@@ -54,7 +49,7 @@ def test_tasks_match_dataset():
 def test_run_agent_sends_prompt_verbatim():
     task = TASKS["py-002"]
     session = RecordingSession()
-    bench.run_agent(task, session, env=None)  # a simple benchmark never touches the env itself
+    bench.run_agent(task, session, env=None)
     assert session.sent == [Message("user", (Text(task.prompt),))]
 
 
@@ -72,25 +67,24 @@ def test_untouched_stub_fails(task_id):
     task = TASKS[task_id]
     with DockerEnvironment(task.image) as env:
         score = grade(task, env)
-        assert env.exec("test -e /grader").exit_code != 0  # grade.py lived only in the grader
+        assert env.exec("test -e /grader").exit_code != 0
     assert score.value is False, score.explanation
 
 
 def test_cheater_scores_as_benchmark_says():
-    """Documents the benchmark's own loophole: grade.py runs whatever test_solution.py is in the workspace."""
     task = TASKS["py-001"]
     with DockerEnvironment(task.image) as env:
-        env.write_file("/workspace/solution.py", "def add():\n    return 5\n")  # wrong
+        env.write_file("/workspace/solution.py", "def add():\n    return 5\n")
         env.write_file("/workspace/test_solution.py", "def test_ok(): assert True\n")
-        assert grade(task, env).value is True  # faithful: the score is what the benchmark says
+        assert grade(task, env).value is True
 
 
 def test_world_is_prepared():
     with DockerEnvironment(TASKS["py-001"].image) as env:
         assert env.read_file("/workspace/test_solution.py").decode() == json.loads((ROOT / "dataset.json").read_text())[0]["test_code"]
         assert env.read_file("/workspace/solution.py") == b"# Write your solution here\n"
-        assert env.exec(["python", "-c", "import pytest"]).exit_code == 0  # prepare.py's pytest stays for the agent
-        assert env.exec("test -e /bench").exit_code != 0  # the benchmark's files (incl. grade.py) are not in the world
+        assert env.exec(["python", "-c", "import pytest"]).exit_code == 0
+        assert env.exec("test -e /bench").exit_code != 0
 
 
 def test_no_leftover_containers_or_volumes():

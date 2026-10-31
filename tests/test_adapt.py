@@ -1,5 +1,3 @@
-"""harness adapt: Claude Code is called headless with the skill and a narrow tool list, then validate runs (both faked)."""
-
 import subprocess
 
 from click.testing import CliRunner

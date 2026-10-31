@@ -1,19 +1,14 @@
-"""A run's cost and time numbers, computed from its rows (what `harness results` prints)."""
-
 import sqlite3
 import time
 from statistics import mean
 
 
 def run_metrics(run: sqlite3.Row, trials: list[sqlite3.Row], attempts: list[sqlite3.Row]) -> dict:
-    """Spend, tokens and the time breakdown. Times are seconds; a value that can't be computed yet is None.
-    Averages are over the attempts that reached that phase."""
-    started = [t for t in trials if t["attempt_count"] > 0]  # skipped_budget trials never started
+    started = [t for t in trials if t["attempt_count"] > 0]
     passed = sum(t["outcome"] == "graded" and t["score_float"] is not None and t["score_float"] >= 1 for t in trials)
     cost = sum(a["cost_usd"] or 0 for a in attempts)
     first = min((a["started_at"] for a in attempts if a["started_at"]), default=None)
     last = max((a["finished_at"] for a in attempts if a["finished_at"]), default=None)
-    # while trials still run, the wall clock is still going
     wall = None if first is None else (last if run["finished_at"] and last else time.time()) - first
     finished = sum(t["state"] == "done" and t["attempt_count"] > 0 for t in trials)
     return {
@@ -21,7 +16,7 @@ def run_metrics(run: sqlite3.Row, trials: list[sqlite3.Row], attempts: list[sqli
         "max_cost_usd": run["max_cost_usd"],
         "cost_per_task_usd": cost / len(started) if started else None,
         "cost_per_passing_task_usd": cost / passed if passed else None,
-        "passed": passed,  # graded with full marks (score_float >= 1)
+        "passed": passed,
         "input_tokens": sum(a["input_tokens"] or 0 for a in attempts),
         "output_tokens": sum(a["output_tokens"] or 0 for a in attempts),
         "model_calls": sum(a["model_calls"] or 0 for a in attempts),

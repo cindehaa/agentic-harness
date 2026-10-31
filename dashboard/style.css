@@ -55,7 +55,6 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 
 .app { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
 
-/* top bar */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--surface);
@@ -67,12 +66,10 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 .dot.live { background: var(--pass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pass) 22%, transparent); }
 .dot.off { background: var(--fail); }
 
-/* two panes */
 .main { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; min-height: 0; }
 .runs { border-right: 1px solid var(--border); overflow-y: auto; padding: 8px; }
 .detail { overflow-y: auto; padding: 24px 32px 48px; min-width: 0; }
 
-/* runs list */
 .run-row { display: block; padding: 10px 12px; border-radius: 8px; margin-bottom: 2px; }
 .run-row:hover { background: var(--hover); }
 .run-row[aria-current="true"] { background: var(--surface); box-shadow: inset 0 0 0 1px var(--border); }
@@ -82,7 +79,6 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 .run-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12.5px; }
 .run-model { color: var(--muted); font-weight: 400; }
 
-/* progress bar */
 .bar { display: flex; height: 5px; margin: 8px 0 6px; border-radius: 3px; overflow: hidden; background: var(--border); }
 .bar > span { height: 100%; }
 .seg-pass { background: var(--pass); }
@@ -94,7 +90,6 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 .seg-running { background: var(--accent); opacity: 0.55; animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
-/* run header */
 h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .subtle { color: var(--muted); }
 .faint { color: var(--faint); }
@@ -106,7 +101,6 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .excluded { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
 .notice { margin-top: 14px; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--amber) 12%, transparent); font-size: 13px; }
 
-/* pills */
 .pill {
   display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px 1px 7px; border-radius: 999px;
   font-size: 12px; white-space: nowrap; color: var(--text);
@@ -125,7 +119,6 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .k-pending { --c: var(--faint); background: transparent; color: var(--muted); }
 .k-graded { --c: var(--text); }
 
-/* trial table */
 table { width: 100%; border-collapse: collapse; margin-top: 26px; }
 th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
 td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
@@ -135,12 +128,10 @@ tbody tr.clickable:hover { background: var(--hover); }
 tbody tr[aria-selected="true"] { background: var(--hover); }
 tbody tr:focus-visible { outline-offset: -2px; }
 
-/* empty state */
 .empty { display: grid; place-items: center; height: 100%; text-align: center; }
 .empty h2 { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
 .empty code { display: inline-block; padding: 8px 12px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); }
 
-/* attempt drawer */
 .backdrop { position: fixed; inset: 44px 0 0 0; background: rgba(0, 0, 0, 0.18); }
 .drawer {
   position: fixed; top: 44px; right: 0; bottom: 0; width: min(860px, 64vw);
@@ -175,7 +166,6 @@ h3 { font-size: 13.5px; font-weight: 600; margin: 26px 0 10px; }
 .msg-role { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
 .msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* trace timeline */
 .trace { border-left: 1px solid var(--border); margin-left: 4px; }
 .turn { color: var(--muted); font-size: 12.5px; margin: 10px 0 4px 12px; }
 .ev { position: relative; padding-left: 14px; }

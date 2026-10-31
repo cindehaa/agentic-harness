@@ -1,6 +1,3 @@
-"""Adapter for benchmarks/python-tasks. It only moves things: the benchmark's own prepare.py builds the world,
-its own grade.py judges, and the agent hears only the dataset's prompt."""
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +11,6 @@ from agentic_harness.types import Message, OriginalResult, ReferenceSolution, Sc
 
 ROOT = REPO_ROOT / "benchmarks" / "python-tasks"
 
-# The benchmark ships no solutions: ours, a solution.py written from each prompt and its test_code
 SOLUTIONS = {
     "py-001": "def add():\n    return 2 + 2\n",
     "py-002": "def fibonacci(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
@@ -24,11 +20,11 @@ SOLUTIONS = {
 
 @dataclass(frozen=True)
 class PythonTask(Task):
-    prompt: str  # the benchmark's own wording, sent to the agent verbatim
-    base_image: str  # the image the benchmark specifies, e.g. "python:3.11-slim"
+    prompt: str
+    base_image: str
 
 
-# One stage, so prepare.py's pytest stays available to the agent; /bench (incl. grade.py) is removed after.
+# one stage, so prepare.py's pytest stays available to the agent
 DOCKERFILE = """\
 FROM {base_image}
 COPY . /bench
@@ -56,7 +52,7 @@ class PythonTasks(Benchmark[PythonTask]):
         return content_hash(ROOT, DOCKERFILE)
 
     def setup(self, tasks: list[PythonTask]) -> None:
-        for image in sorted({t.base_image for t in tasks}):  # pulled explicitly and time-bounded, not inside a build
+        for image in sorted({t.base_image for t in tasks}):
             ensure_image(image)
         for t in tasks:
             build_image(DOCKERFILE.format(task_id=t.id, base_image=t.base_image), context=ROOT, tag=t.image)
@@ -69,14 +65,12 @@ class PythonTasks(Benchmark[PythonTask]):
         return ReferenceSolution("harness-written", files={"solution.py": code}) if code else None
 
     def grade(self, task: PythonTask, grader: Environment, env: Environment, transcript: Transcript) -> Score:
-        grader.upload(ROOT, "/grader")  # the benchmark's own grade.py + dataset.json, only in the grader
-        # no timeout given: the rest of the grade timeout (default 120 s); grade.py stops pytest at 30 s itself
+        grader.upload(ROOT, "/grader")
+        # no timeout: the rest of the grade timeout
         r = grader.exec(["python", "/grader/grade.py", task.id, "--workspace", "/workspace"], timeout=None)
         return _score(r.stdout, r.stderr)
 
     def original_workflow(self, task: PythonTask, agent_name: str, model: str, out_dir: Path) -> OriginalResult:
-        """examples/run_python_example.sh in Docker: prepare.py (incl. its pip install), the agent and grade.py all in
-        one container of the dataset's image, the workspace bind-mounted; the scripts are copied in only to run."""
         workspace = out_dir / "workspace"
         workspace.mkdir(parents=True)
         with OriginalAgentWorld(agent_name, model, task.base_image, {workspace: "/workspace"}, "/workspace", out_dir) as world:
@@ -91,7 +85,6 @@ class PythonTasks(Benchmark[PythonTask]):
 
 
 def _score(stdout: str, stderr: str) -> Score:
-    """grade.py's verdict. It always exits 0, so judge only by its JSON."""
     try:
         result = json.loads(stdout)
         passed = result["passed"]

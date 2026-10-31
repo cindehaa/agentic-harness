@@ -1,11 +1,7 @@
-// The dashboard UI: React 18 + htm, no build step. Reads the JSON API served by agentic_harness/dashboard.py.
 const { useState, useEffect, useRef } = React;
 const html = htm.bind(React.createElement);
 const POLL_MS = 2000;
 
-// ---------- data ----------
-
-// ms = null fetches once (a finished attempt doesn't change)
 function usePoll(url, ms = POLL_MS) {
   const [state, setState] = useState({ data: null, error: null, url: null });
   useEffect(() => {
@@ -38,11 +34,9 @@ function useHash() {
     addEventListener("hashchange", onChange);
     return () => removeEventListener("hashchange", onChange);
   }, []);
-  const [, , runId, , attemptId] = hash.split("/"); // #/runs/<run>/attempts/<attempt>
+  const [, , runId, , attemptId] = hash.split("/");
   return { runId: runId && decodeURIComponent(runId), attemptId: attemptId && Number(attemptId) };
 }
-
-// ---------- formatting ----------
 
 const pct = (x) => (x == null ? "–" : `${Number((x * 100).toFixed(1))}%`);
 const cost = (x) => (!x ? "$0" : x < 0.01 ? `$${x.toFixed(4)}` : `$${x.toFixed(2)}`);
@@ -64,7 +58,6 @@ function ago(ts) {
 
 const tokens = (n) => (!n ? "0" : n < 1000 ? String(n) : n < 1e6 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1e6).toFixed(2)}M`);
 const span = (start, end) => (start != null && end != null ? end - start : null);
-// "$0.42" or, with a run budget, "$0.42 of $5"
 const spend = (r) => (r.max_cost_usd != null ? `${cost(r.cost_usd)} of ${cost(r.max_cost_usd)}` : cost(r.cost_usd));
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
@@ -74,14 +67,10 @@ function shellJoin(cmd) {
   return cmd.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
 }
 
-// the list is narrow: "anthropic/claude-haiku-5-5" -> "claude-haiku-5-5" (the full name is in the run header)
 const shortModel = (m) => (m || "").split("/").pop();
 
 const scoreText = (v) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
 
-// ---------- outcomes ----------
-
-// pass/fail split graded trials; a partial score counts as fail here (the score column shows the number)
 function trialKind(t) {
   if (t.state === "running") return "running";
   if (t.state !== "done") return "pending";
@@ -118,8 +107,6 @@ function progressText(run) {
 
 const isActive = (run) => run.status === "pending" || run.status === "running";
 
-// ---------- top bar ----------
-
 function TopBar({ workers, offline }) {
   const n = workers ? workers.length : 0;
   return html`
@@ -132,8 +119,6 @@ function TopBar({ workers, offline }) {
       </div>
     </header>`;
 }
-
-// ---------- runs list ----------
 
 function RunsList({ runs, selected }) {
   return html`
@@ -152,8 +137,6 @@ function RunsList({ runs, selected }) {
         </a>`)}
     </nav>`;
 }
-
-// ---------- run detail ----------
 
 function Stat({ value, label }) {
   return html`<div><div class="stat-value">${value}</div><div class="stat-label">${label}</div></div>`;
@@ -218,7 +201,6 @@ function RunDetail({ runId, attemptId, noWorkers }) {
     </section>`;
 }
 
-// One quiet line (tokens, calls, cost per task) that opens into the time breakdown: the numbers `harness results` prints.
 function Breakdown({ m }) {
   const times = [
     ["env start", m.avg_env_start_s, "avg"], ["agent", m.avg_agent_s, "avg"], ["grading", m.avg_grading_s, "avg"],
@@ -237,8 +219,6 @@ function Breakdown({ m }) {
       </div>
     </details>`;
 }
-
-// ---------- attempt drawer ----------
 
 function Drawer({ runId, attemptId }) {
   const ref = useRef(null);
@@ -280,7 +260,7 @@ function Attempt({ a }) {
   const graded = a.outcome === "graded";
   const kind = !a.outcome ? "running" : graded ? (a.outcome_file && a.outcome_file.score_float >= 1 ? "pass" : "fail") : a.outcome;
   const explanation = a.score && a.score.explanation;
-  // transcript.json is written when the attempt ends; until then the trace's message events are the transcript
+  // transcript.json is written at the end; until then the trace's messages stand in
   const transcript = a.transcript ||
     (a.events || []).filter((e) => e.kind === "message_sent" || e.kind === "message_received").map((e) => e.payload);
   return html`
@@ -332,8 +312,6 @@ function MessageView({ m }) {
       <div class="msg-text">${text || html`<span class="faint">(empty)</span>`}</div>
     </div>`;
 }
-
-// ---------- trace timeline ----------
 
 function Trace({ events }) {
   const shown = events.filter((e) => e.kind !== "message_sent" && e.kind !== "message_received" && e.kind !== "tool_result");
@@ -407,8 +385,6 @@ function Event({ e, result, t0 }) {
       <${Output} text=${JSON.stringify(p, null, 2)} />
     </details>`;
 }
-
-// ---------- app ----------
 
 function Empty() {
   return html`

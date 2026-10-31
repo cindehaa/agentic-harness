@@ -1,5 +1,3 @@
-"""BashOperations adapter against real Docker: oracle solutions pass, doing nothing fails (skipped if Docker isn't running)."""
-
 import json
 import subprocess
 
@@ -17,7 +15,7 @@ if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
 
 bench = BashOperations()
 TASKS = {t.id: t for t in bench.tasks()}
-ORACLES = {t.id: bench.reference_solution(t).script for t in TASKS.values()}  # ours (harness-written): it ships none
+ORACLES = {t.id: bench.reference_solution(t).script for t in TASKS.values()}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -26,14 +24,11 @@ def images():
 
 
 def grade(task, env):
-    """What the runner does: grade in a grader attached to the trial's world."""
     with env.attach_grader(bench.grader_image(task)) as grader:
         return bench.grade(task, grader, env, ())
 
 
 class RecordingSession(AgentSession):
-    """A fake agent that remembers what it was sent."""
-
     def __init__(self) -> None:
         self.sent: list[Message] = []
 
@@ -54,7 +49,7 @@ def test_tasks_match_dataset():
 def test_run_agent_sends_problem_statement_verbatim():
     task = TASKS["bash-001"]
     session = RecordingSession()
-    bench.run_agent(task, session, env=None)  # a simple benchmark never touches the env itself
+    bench.run_agent(task, session, env=None)
     assert session.sent == [Message("user", (Text(task.problem_statement),))]
 
 
@@ -78,7 +73,7 @@ def test_doing_nothing_fails(task_id):
 def test_world_has_no_python_before_grading():
     with DockerEnvironment(TASKS["bash-001"].image) as env:
         assert env.exec("command -v python3 || command -v python").exit_code != 0
-        assert env.exec("ls -A /workspace").stdout == ""  # setup made no files for this task, but the folder exists
+        assert env.exec("ls -A /workspace").stdout == ""
 
 
 def test_world_gains_no_python_and_no_grader_files_from_grading():
@@ -87,7 +82,7 @@ def test_world_gains_no_python_and_no_grader_files_from_grading():
         env.exec(ORACLES["bash-001"])
         assert grade(task, env).value is True
         assert env.exec("command -v python3 || command -v python").exit_code != 0
-        assert env.exec("test -e /grader").exit_code != 0  # evaluate.py lived only in the grader
+        assert env.exec("test -e /grader").exit_code != 0
 
 
 def test_grading_needs_no_internet():
@@ -95,10 +90,10 @@ def test_grading_needs_no_internet():
     with DockerEnvironment(task.image) as env:
         env.exec(ORACLES["bash-001"])
         subprocess.run(["docker", "network", "disconnect", "bridge", env.container_id], capture_output=True, check=True)
-        with env.attach_grader(bench.grader_image(task)) as grader:  # shares the (now absent) network
+        with env.attach_grader(bench.grader_image(task)) as grader:
             offline = ["python", "-c", "import socket; socket.create_connection(('1.1.1.1', 53), timeout=2)"]
             assert grader.exec(offline).exit_code != 0
-            assert bench.grade(task, grader, env, ()).value is True  # nothing to install: the image has python
+            assert bench.grade(task, grader, env, ()).value is True
 
 
 def test_setup_files_are_baked_in():
