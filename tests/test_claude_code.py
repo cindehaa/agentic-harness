@@ -16,6 +16,7 @@ from agentic_harness.agents.claude_code import (
 )
 from agentic_harness.environments import Environment, ExecResult
 from agentic_harness.types import File, Limits, McpServer, Message, Text
+from agentic_harness.environments import docker as docker_module
 
 LIVE = pytest.mark.skipif(not (os.getenv("RUN_LIVE") == "1" and os.getenv("ANTHROPIC_API_KEY")), reason="needs RUN_LIVE=1 and an API key")
 
@@ -203,7 +204,7 @@ def test_non_text_content_is_unsupported(tmp_path, monkeypatch):
 
 
 def _no_leftovers() -> bool:
-    out = subprocess.run(["docker", "ps", "-aq", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+    out = subprocess.run(["docker", "ps", "-aq", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True).stdout
     return out == ""
 
 

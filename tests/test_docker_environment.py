@@ -29,7 +29,7 @@ def test_context_manager_starts_and_removes_container():
         container_id = env.container_id
         assert env.exec("true").exit_code == 0
     listed = subprocess.run(
-        ["docker", "ps", "-a", "-q", "--no-trunc", "--filter", "label=agentic-harness=1"],
+        ["docker", "ps", "-a", "-q", "--no-trunc", "--filter", f"label={docker_module.LABEL}"],
         capture_output=True, text=True,
     ).stdout
     assert container_id not in listed
@@ -284,7 +284,7 @@ def test_save_workspace_of_a_missing_folder_is_oserror(env, tmp_path):
 
 
 def _volumes() -> str:
-    return subprocess.run(["docker", "volume", "ls", "-q", "--filter", "label=agentic-harness=1"],
+    return subprocess.run(["docker", "volume", "ls", "-q", "--filter", f"label={docker_module.LABEL}"],
                           capture_output=True, text=True).stdout
 
 
@@ -365,7 +365,7 @@ def test_a_volume_still_in_use_is_retried_then_reported(monkeypatch, caplog):
     env = DockerEnvironment(IMAGE)
     env.start()
     volume = env.volume
-    user = subprocess.run(["docker", "run", "-d", "--label", "agentic-harness=1", "-v", f"{volume}:/x", IMAGE, "sleep", "60"],
+    user = subprocess.run(["docker", "run", "-d", "--label", docker_module.LABEL, "-v", f"{volume}:/x", IMAGE, "sleep", "60"],
                           capture_output=True, text=True, check=True).stdout.strip()  # not ours: stop() can't remove it
     try:
         env.stop()

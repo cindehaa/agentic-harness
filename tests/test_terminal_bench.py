@@ -14,6 +14,7 @@ from agentic_harness.benchmarks.terminal_bench import ROOT, TASK_IDS, WORKDIR, _
 from agentic_harness.cli import cli
 from agentic_harness.environments import DockerEnvironment
 from agentic_harness.types import Message, Text
+from agentic_harness.environments import docker as docker_module
 
 bench = TerminalBench()
 needs_world = pytest.mark.skipif(  # evaluated once, at collection; reads no task file
@@ -126,7 +127,7 @@ def test_missing_summary_is_a_grader_error():
 @needs_world
 def test_no_leftover_containers_or_volumes():
     for cmd in (["ps", "-a"], ["volume", "ls"]):
-        listed = subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+        listed = subprocess.run(["docker", *cmd, "-q", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True).stdout
         assert listed == ""
 
 

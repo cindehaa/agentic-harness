@@ -10,6 +10,7 @@ from agentic_harness.benchmarks import BashOperations
 from agentic_harness.benchmarks.bash_operations import ROOT
 from agentic_harness.environments import DockerEnvironment
 from agentic_harness.types import Message, Text
+from agentic_harness.environments import docker as docker_module
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -107,7 +108,7 @@ def test_setup_files_are_baked_in():
 
 def test_no_leftover_containers_or_volumes():
     for cmd in (["ps", "-a"], ["volume", "ls"]):
-        listed = subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+        listed = subprocess.run(["docker", *cmd, "-q", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True).stdout
         assert listed == ""
 
 

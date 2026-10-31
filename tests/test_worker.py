@@ -20,6 +20,7 @@ from agentic_harness.benchmarks import BENCHMARKS, BashOperations
 from agentic_harness.cli import cli
 from agentic_harness.store import LostClaim, Store
 from agentic_harness.types import Message, Outcome, Score, Text
+from agentic_harness.environments import docker as docker_module
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -288,7 +289,7 @@ def test_run_wait_runs_only_its_own_run(db):
 
 def test_no_leftover_containers():
     listed = subprocess.run(
-        ["docker", "ps", "-a", "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True
+        ["docker", "ps", "-a", "-q", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True
     ).stdout
     assert listed == ""
 
@@ -309,7 +310,7 @@ def test_a_worker_is_listed_while_it_runs_and_removed_after(db, monkeypatch):
 
 
 def _labelled(kind: str) -> list[str]:
-    return subprocess.run(["docker", kind, "ls", "-q", *(["-a"] if kind == "container" else []), "--filter", "label=agentic-harness=1"],
+    return subprocess.run(["docker", kind, "ls", "-q", *(["-a"] if kind == "container" else []), "--filter", f"label={docker_module.LABEL}"],
                           capture_output=True, text=True).stdout.split()
 
 

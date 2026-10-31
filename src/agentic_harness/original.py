@@ -9,7 +9,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from agentic_harness.environments.docker import LABEL
+from agentic_harness.environments import docker
 from agentic_harness.types import Limits
 
 SCRIPT_TIMEOUT_S = 600  # one benchmark script (setup, grading), incl. a pip install
@@ -21,7 +21,7 @@ def run_script(image: str, mounts: dict[Path, str], argv: list[str]) -> subproce
     """Run one of the benchmark's own scripts in a throwaway container, with host folders mounted (path -> where).
     Folders ending in `:ro` are read-only."""
     volumes = [a for local, remote in mounts.items() for a in ("-v", f"{local.resolve()}:{remote}")]
-    return subprocess.run(["docker", "run", "--rm", "--label", LABEL, *volumes, image, *argv],
+    return subprocess.run(["docker", "run", "--rm", "--label", docker.LABEL, *volumes, image, *argv],
                           capture_output=True, text=True, timeout=SCRIPT_TIMEOUT_S)
 
 
@@ -46,7 +46,7 @@ class OriginalAgentWorld:
         volumes = [a for local, remote in self.mounts.items() for a in ("-v", f"{local.resolve()}:{remote}")]
         self.env = DockerEnvironment(
             image=self.image, cwd=self.cwd, env=self.config.get("environment", {}).get("env", {}),
-            timeout=int(self.limits.command_timeout_s), run_args=["--rm", "--label", LABEL, *volumes],
+            timeout=int(self.limits.command_timeout_s), run_args=["--rm", "--label", docker.LABEL, *volumes],
             interpreter=["bash", "-lc"], logger=log,
         )
         # mini's default shell is bash; an image without it (alpine) gets sh, as mini's docs say to configure

@@ -13,6 +13,7 @@ from agentic_harness.benchmarks import Benchmark
 from agentic_harness.environments import DockerEnvironment, EnvironmentLost, Sidecar, build_image
 from agentic_harness.runner import run_trial
 from agentic_harness.types import Limits, McpServer, Message, Score, Task, Text
+from agentic_harness.environments import docker as docker_module
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -42,7 +43,7 @@ def images():
 
 
 def _labelled(*cmd: str) -> str:
-    return subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+    return subprocess.run(["docker", *cmd, "-q", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True).stdout
 
 
 def test_service_sidecar_is_reachable_from_the_world_shares_only_the_network_and_is_removed():

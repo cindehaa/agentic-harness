@@ -8,6 +8,7 @@ import pytest
 from agentic_harness.benchmarks import BashOperations
 from agentic_harness.parity import original_side, overlap, pass_rates, summarize
 from agentic_harness.types import OriginalResult, Score
+from agentic_harness.environments import docker as docker_module
 
 
 def test_summarize_mean_sem_and_range():
@@ -64,5 +65,5 @@ def test_live_original_workflow_bash_001(tmp_path):
     result = bench.original_workflow(task, "mini-swe-agent", os.environ["HARNESS_MODEL"], tmp_path)
     assert result.score.value is True and result.cost_usd > 0
     assert (tmp_path / "trajectory.json").exists()
-    left = subprocess.run(["docker", "ps", "-aq", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+    left = subprocess.run(["docker", "ps", "-aq", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True).stdout
     assert left == ""

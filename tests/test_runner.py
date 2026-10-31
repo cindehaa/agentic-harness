@@ -15,6 +15,7 @@ from agentic_harness.benchmarks import BashOperations, GraderError
 from agentic_harness.environments import DockerEnvironment, Environment
 from agentic_harness.runner import run_trial
 from agentic_harness.types import Limits, Message, Score, Text, score_to_float
+from agentic_harness.environments import docker as docker_module
 
 if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
     pytest.skip("Docker is not running", allow_module_level=True)
@@ -190,7 +191,7 @@ def test_grader_and_workspace_volume_are_removed_after_the_trial(tmp_path):
 
 
 def _labelled(*cmd: str) -> str:
-    return subprocess.run(["docker", *cmd, "-q", "--filter", "label=agentic-harness=1"], capture_output=True, text=True).stdout
+    return subprocess.run(["docker", *cmd, "-q", "--filter", f"label={docker_module.LABEL}"], capture_output=True, text=True).stdout
 
 
 def test_leftover_agent_process_is_killed_before_grading(tmp_path):
