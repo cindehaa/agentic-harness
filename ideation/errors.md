@@ -171,3 +171,11 @@ Retries, leases and queue-mode setup: Phase 4+5 (`database.md` #12–14).
   trial still pending (a retry waiting out its backoff included) ends
   `skipped_budget`. Trials in flight finish under their own per-trial limits,
   so a run can overshoot its budget by what they spend.
+- **`harness validate`** reuses `run_trial` unchanged, so every outcome above
+  applies; any status other than `graded` (incl. `infra_error`) fails that
+  check, with the error's last line in the report. Exit 1 on any failed check.
+- **`harness parity`, original side** (`Benchmark.original_workflow`): an
+  exception (setup script failed, Docker, the model provider) leaves that one
+  run of that task out of the side's accuracy and lists it in the report and
+  `parity.json` (`original_errors`), like `infra_error`. Not retried. Its
+  containers are removed synchronously in `OriginalAgentWorld.__exit__`.

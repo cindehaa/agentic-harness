@@ -1,7 +1,7 @@
 # Progress
 
-**Last updated:** 2026-10-29
-**Now:** cost + time tracking built (2026-10-29, `database.md` #20–23): agents report tokens, model calls and cost (also on error / timeout / interrupt; recorded at each turn's end), per-attempt phase timestamps, `harness run --max-run-cost` (waiting trials end `skipped_budget`), `status` live spend + elapsed, `results` cost per task / per passing task, tokens, time breakdown. Schema v4: an older `runs/harness.db` must be deleted. Awaiting Cindy's review. Before that: `harness dashboard` built (2026-10-29): a read-only local web view (`dashboard.py`, standard-library server on 127.0.0.1, SQLite opened `mode=ro`; `dashboard/` React + htm, no build step) of runs, trials, attempts and traces, polling every 2 s. Awaiting Cindy's review. Before that: Phase 6 hardening built (2026-10-29, `implementation-plan.md` → Phase 6): `harness results` summary by default with wall time and queue wait, graceful Ctrl-C / SIGTERM (trials handed back as "worker interrupted"), `harness cleanup [--all] [--images]`, explicit time-bounded image pre-pull at run setup, repeated pre-grade kill passes, retried volume removal, `status` no-worker warning. Schema v3 (`attempts.started_at` / `finished_at`): an older `runs/harness.db` must be deleted. Awaiting Cindy's review. Before that: action space + MCP + Claude Code built (2026-10-29, [`action-space.md`](action-space.md)): one `AgentCapabilities` check in the runner, MCP servers as network-only attached sidecars (`Benchmark.mcp_servers`, `Environment.attach(Sidecar)`), `exec(env=, user=)`, `ClaudeCode` adapter (in-world, cached derived image, `--mcp-config`, stream-json trace). Live on Haiku 5.5: bash-operations 0.80, python-tasks 1.00, MCP fixture pass. Awaiting Cindy's review. τ²-bench: designed, not built (out of scope). Before that: general grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
+**Last updated:** 2026-10-30
+**Now:** adapter checks built (2026-10-29/30, [`adapters.md`](adapters.md) → Built): `harness validate` (NullAgent must fail, OracleAgent applies `Benchmark.reference_solution` and must pass; harness-written vs benchmark-provided solutions), `harness parity` (baseline C: `Benchmark.original_workflow` = the benchmark's own scripts + mini's own `DockerEnvironment`; live bash-operations × mini 3 runs: 1.000 ± 0 both sides, ranges overlap, $0.015), `.claude/skills/add-benchmark/SKILL.md` + `harness adapt` (claude -p drafts, then validate). Proof: `TerminalBench` adapter (hello-world, log-summary, sqlite-db-truncate) drafted by `harness adapt`, hand-fixed, validate 3/3 + 3/3. Awaiting Cindy's review. Before that: cost + time tracking built (2026-10-29, `database.md` #20–23): agents report tokens, model calls and cost (also on error / timeout / interrupt; recorded at each turn's end), per-attempt phase timestamps, `harness run --max-run-cost` (waiting trials end `skipped_budget`), `status` live spend + elapsed, `results` cost per task / per passing task, tokens, time breakdown. Schema v4: an older `runs/harness.db` must be deleted. Awaiting Cindy's review. Before that: `harness dashboard` built (2026-10-29): a read-only local web view (`dashboard.py`, standard-library server on 127.0.0.1, SQLite opened `mode=ro`; `dashboard/` React + htm, no build step) of runs, trials, attempts and traces, polling every 2 s. Awaiting Cindy's review. Before that: Phase 6 hardening built (2026-10-29, `implementation-plan.md` → Phase 6): `harness results` summary by default with wall time and queue wait, graceful Ctrl-C / SIGTERM (trials handed back as "worker interrupted"), `harness cleanup [--all] [--images]`, explicit time-bounded image pre-pull at run setup, repeated pre-grade kill passes, retried volume removal, `status` no-worker warning. Schema v3 (`attempts.started_at` / `finished_at`): an older `runs/harness.db` must be deleted. Awaiting Cindy's review. Before that: action space + MCP + Claude Code built (2026-10-29, [`action-space.md`](action-space.md)): one `AgentCapabilities` check in the runner, MCP servers as network-only attached sidecars (`Benchmark.mcp_servers`, `Environment.attach(Sidecar)`), `exec(env=, user=)`, `ClaudeCode` adapter (in-world, cached derived image, `--mcp-config`, stream-json trace). Live on Haiku 5.5: bash-operations 0.80, python-tasks 1.00, MCP fixture pass. Awaiting Cindy's review. τ²-bench: designed, not built (out of scope). Before that: general grading via an attached grader sidecar built (2026-10-29, `environment-and-grading.md` #7): workspace volume per trial, `Environment.attach_grader`, `Benchmark.grader_image`, `grade(task, grader, env, transcript)`, no grade-time installs, grader files never in the world. Awaiting Cindy's review. Before that: architecture-audit refactor built (2026-10-29, [`audit-2026-10-29.md`](audit-2026-10-29.md)): Environment port + injected factory, retryable `infra_error` + pre-flight, resource limits, lifetime rule, lazy agent registry, command trace, CLI config, workers table, saved workspace. Awaiting Cindy's review. Before that: Phase 4+5 built (merged 2026-10-29: database + queue + workers + status/results; `database.md` #9–19): `store.py`, `worker.py`, `redact.py`, `harness run [--wait]` / `worker` / `status` / `results`; fake-agent tests green. Awaiting Cindy's line-by-line review.
 **Errors:** every failure point and its outcome: [`errors.md`](errors.md) (agent exceptions classified by cause; container-death race fixed, 2026-10-29).
 **Next:** `harness cancel` (Phase 6 leftover); Phase 7 extensions.
 
@@ -145,9 +145,10 @@ flowchart TB
     direction TB
     claude["ClaudeCode adapter"]
     validate["harness validate"]
-    nullor["Null / Oracle agents"]
-    skill["Add-benchmark skill"]
-    parity["harness parity (out of scope)"]
+    nullor["Null / Oracle agents + Benchmark.reference_solution"]
+    skill["Add-benchmark skill + harness adapt"]
+    parity["harness parity: baseline C (Benchmark.original_workflow, agent's own Docker mode)"]
+    tbench["TerminalBench adapter (3 tasks), drafted by harness adapt, hand-fixed, validates"]
   end
 
   subgraph P8["Phase 8: deliverables"]
@@ -195,6 +196,7 @@ flowchart TB
   oracle --> nullor
   validate --> skill
   validate -.-> parity
+  skill --> tbench
   P7 --> P8
   d_own -.-> envabc
   d_own -.-> agentabc
@@ -256,5 +258,6 @@ flowchart TB
   class x_caps,x_mcp,x_exec,x_cc,claude done
   class x_tau open
   class hcleanup,prepull,p6_stop,p6_res,p6_status,p6_kill,p6_vol,breakit,dash,cost done
-  class tasks,fb,cancel,validate,nullor,skill,parity todo
+  class tasks,fb,cancel todo
+  class validate,nullor,skill,parity,tbench done
 ```
