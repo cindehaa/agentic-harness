@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import click
+from click.core import ParameterSource
 from dotenv import load_dotenv
 
 from agentic_harness import parity as parity_module
@@ -65,6 +66,9 @@ def cli():
 def run(agent: str, benchmark: str, task_ids: str | None, model: str | None, wait: bool, concurrency: int,
         trial_timeout: float, cost_limit: float, max_run_cost: float | None, max_steps: int, memory: str, cpus: float):
     """Submit a run: one queued trial per task. Workers (`harness worker`) run them; --wait runs them here."""
+    if not wait and click.get_current_context().get_parameter_source("concurrency") is not ParameterSource.DEFAULT:
+        raise click.UsageError("--concurrency applies only with --wait; without it, workers run the trials: "
+                               "harness worker --concurrency N")
     bench, the_agent = _benchmark_and_agent(benchmark, agent, model)
     limits = Limits(trial_timeout_s=trial_timeout, cost_usd=cost_limit, max_steps=max_steps, memory=memory, cpus=cpus)
     run_id = _submit(bench, the_agent, _select(bench, task_ids), limits, max_run_cost)

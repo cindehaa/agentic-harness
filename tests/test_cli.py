@@ -223,3 +223,11 @@ def test_content_hash_follows_the_files_and_skips_caches(tmp_path):
     (tmp_path / "setup.py").write_text("v2")
     assert content_hash.__wrapped__(tmp_path, "FROM alpine") != first
     assert content_hash.__wrapped__(tmp_path, "FROM debian") != content_hash.__wrapped__(tmp_path, "FROM alpine")
+
+
+def test_concurrency_without_wait_is_a_usage_error(store):
+    result = CliRunner().invoke(cli, ["run", "--agent", "mini-swe-agent", "--model", "anthropic/claude-haiku-5-5",
+                                      "--benchmark", "bash-operations", "--concurrency", "4"])
+    assert result.exit_code == 2 and "--concurrency applies only with --wait" in result.output
+    assert "harness worker --concurrency N" in result.output
+    assert [r["id"] for r in store.runs()] == ["run-a"]  # nothing submitted
