@@ -34,7 +34,7 @@ def original_side(benchmark: Benchmark, tasks: list[Task], agent_name: str, mode
     scores: Scores = [{} for _ in range(runs)]
     for (i, task), (score, _) in zip(jobs, results):
         scores[i][task.id] = score
-    return scores, sum(cost for _, cost in results), errors
+    return scores, sum(cost for _, cost in results), sorted(errors)  # threads finish in any order
 
 
 def summarize(scores: Scores) -> dict:
